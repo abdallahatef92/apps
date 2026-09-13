@@ -29,23 +29,73 @@ So the app is built around three rules:
 
 ---
 
-## Getting started
+## Running it on your machine
+
+**You need Node.js 22.5 or newer** — `node --version` to check, https://nodejs.org to
+install. Nothing else: no database to install, no server to start, no account.
 
 ```bash
-npm install          # also rebuilds better-sqlite3 for Electron's ABI
-npm run dev          # launch the app
-npm test             # schema + full ingest pipeline checks
-npm run dist         # package an installer for the current platform
+git clone https://github.com/abdallahatef92/apps.git
+cd apps
+git checkout claude/wizardly-keller-a77b8z
+npm install
+npm run dev
 ```
 
-To try it against sample data before your own files are ready:
+`npm install` takes a few minutes: it downloads Electron (~100 MB) and rebuilds
+better-sqlite3 against Electron's ABI. `npm run dev` opens the app window.
+
+To try it against sample data before loading your own:
 
 ```bash
-npm run demo:seed -- ./demo.db     # writes a demo warehouse + the source xlsx files
-COST_DB_PATH=$PWD/demo.db npm run dev
+npm run demo:seed -- ./demo.db    # writes a demo warehouse and the source xlsx files
 ```
 
-The database otherwise lives in the OS user-data directory (Settings shows the path).
+then, pointing the app at that file instead of the default:
+
+```bash
+COST_DB_PATH="$PWD/demo.db" npm run dev          # macOS / Linux
+$env:COST_DB_PATH="$PWD\demo.db"; npm run dev    # Windows PowerShell
+```
+
+Otherwise the database is created automatically in your OS user-data directory the
+first time the app starts — Settings shows the exact path, and Settings › Back up now
+copies it wherever you like.
+
+### Building an installer
+
+```bash
+npm run dist
+```
+
+electron-builder produces a `.exe` installer on Windows, a `.dmg` on macOS or an
+`.AppImage` on Linux, into `release/`. Packaging has not been exercised in this
+environment, only the development run and the test suite — so treat the first
+`npm run dist` as something to verify rather than assume.
+
+### If `npm install` fails
+
+Almost always this is better-sqlite3 needing to compile because no prebuilt binary
+matched your platform.
+
+- **Windows** — install the "Desktop development with C++" workload from the
+  [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/),
+  then delete `node_modules` and run `npm install` again.
+- **macOS** — `xcode-select --install`.
+- **Linux** — `sudo apt install build-essential python3`.
+
+`Error: The module ... was compiled against a different Node.js version` from a plain
+`node` command is expected, not a fault: the app's copy of better-sqlite3 is built for
+Electron. Run such scripts through `node scripts/run-under-electron.mjs <script>`, which
+is what the npm scripts already do.
+
+### Checks
+
+```bash
+npm run typecheck   # both TypeScript projects
+npm test            # schema checks + the full ingest pipeline, no window needed
+npm run build       # production bundles
+```
 
 ---
 

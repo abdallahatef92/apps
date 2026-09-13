@@ -2,6 +2,9 @@
   "name": "cost-intelligence",
   "version": "0.1.0",
   "description": "Cost Intelligence \u2014 project cost control: actuals, budget, forecasting",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "main": "./out/main/index.js",
   "author": "Cost Control",
   "license": "UNLICENSED",
