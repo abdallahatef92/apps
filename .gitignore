@@ -1,0 +1,11 @@
+node_modules/
+out/
+dist/
+release/
+*.db
+*.db-wal
+*.db-shm
+.DS_Store
+*.log
+.vite/
+*.tsbuildinfo

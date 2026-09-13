@@ -1,0 +1,22 @@
+appId: com.costcontrol.cost-intelligence
+productName: Cost Intelligence
+directories:
+  buildResources: build
+  output: release
+files:
+  - out/**
+  - package.json
+asarUnpack:
+  - "**/*.node"
+win:
+  target: [nsis]
+  artifactName: ${productName}-${version}-setup.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+mac:
+  target: [dmg]
+linux:
+  target: [AppImage]
+  category: Office
