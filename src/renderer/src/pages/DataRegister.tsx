@@ -28,7 +28,10 @@ export function DataRegister() {
     catch (e) { setError((e as Error).message); } finally { setBusy(null); }
   };
 
-  const remove = async (id: number) => {
+  const remove = async (id: number, posted: boolean) => {
+    if (posted && !window.confirm(
+      `Delete batch #${id}?\n\nIts rows are removed from the warehouse. Anything this batch ` +
+      'superseded goes back to being the live position. This cannot be undone.')) return;
     setBusy(id); setError(null);
     try { await call(api.imports.remove(id)); await load(); touch(); }
     catch (e) { setError((e as Error).message); } finally { setBusy(null); }
@@ -43,7 +46,8 @@ export function DataRegister() {
         <p className="hint">
           Superseded batches stay in the database — their rows are simply excluded from reporting,
           so an old position can always be explained. "Skipped" counts subtotal rows the parser
-          recognised in the source report and deliberately left out.
+          recognised in the source report and deliberately left out. Deleting a batch removes its
+          rows and restores whatever it superseded.
         </p>
 
         <div className="table-wrap" style={{ maxHeight: 'calc(100vh - 270px)' }}>
@@ -81,11 +85,11 @@ export function DataRegister() {
                       <button className="btn sm" disabled={busy === b.import_batch_id}
                               onClick={() => post(b.import_batch_id)}>Post</button>
                     )}
-                    {b.status !== 'POSTED' && (
-                      <button className="btn sm danger" style={{ marginLeft: 6 }}
-                              disabled={busy === b.import_batch_id}
-                              onClick={() => remove(b.import_batch_id)}>Delete</button>
-                    )}
+                    <button className="btn sm danger" style={{ marginLeft: 6 }}
+                            disabled={busy === b.import_batch_id}
+                            onClick={() => remove(b.import_batch_id, b.status === 'POSTED')}>
+                      Delete
+                    </button>
                   </td>
                 </tr>
               ))}

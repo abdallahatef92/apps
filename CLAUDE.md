@@ -23,6 +23,10 @@ Read `README.md` first for the data model and the reasoning behind it.
 - **Source reports interleave subtotal rows.** Anything that reads a spreadsheet must
   respect `report_definition.detail_key_fields`; rows with those fields blank are
   SKIPPED, and only rows with `stg_row.status = 'VALID'` may post.
+- **Superseding is scoped by the rows, not by the wizard.** `import_batch.project_key`
+  is only a hint for files with no project column and legitimately differs between two
+  uploads of the same file, so `supersedePrevious` compares the projects the facts
+  actually landed on. Never key replacement logic on the batch's declared project.
 - **Nothing reaches a fact table without passing through staging.** Read → map →
   validate into `stg_row` → post. The user must be able to see what will happen first.
 - **The renderer has no Node and no database access.** Everything crosses via a channel

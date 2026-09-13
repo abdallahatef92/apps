@@ -140,7 +140,8 @@ export function registerIpc(): void {
     saveColumnMapping(reportDefinitionId, mapping));
 
   handle('import:stage', (req: StageRequest) => stageFile(req, process.env.USERNAME ?? process.env.USER ?? null));
-  handle('import:post', (batchId: number) => postBatch(batchId));
+  handle('import:post', (batchId: number, allowDuplicate = false) =>
+    postBatch(batchId, { allowDuplicate }));
   handle('import:delete', (batchId: number) => deleteBatch(batchId));
   handle('import:issues', (batchId: number, limit = 200) =>
     getDb().prepare(`SELECT row_no, status, message, raw_json FROM stg_row

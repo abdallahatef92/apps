@@ -48,6 +48,7 @@ export function Upload({ onDone }: { onDone: () => void }) {
   const [saveMapping, setSaveMapping] = useState(true);
 
   const [detailKeys, setDetailKeys] = useState<string[]>([]);
+  const [allowDuplicate, setAllowDuplicate] = useState(false);
   const [staged, setStaged] = useState<StageResult | null>(null);
   const [posted, setPosted] = useState<PostResult | null>(null);
 
@@ -140,12 +141,13 @@ export function Upload({ onDone }: { onDone: () => void }) {
       detailKeyFields: detailKeys,
     })) as StageResult;
     setStaged(result);
+    setAllowDuplicate(false);
     setStep(4);
   });
 
   const post = () => guard(async () => {
     if (!staged) return;
-    setPosted(await call(api.imports.post(staged.importBatchId)) as PostResult);
+    setPosted(await call(api.imports.post(staged.importBatchId, allowDuplicate)) as PostResult);
     onDone();
   });
 
@@ -156,7 +158,7 @@ export function Upload({ onDone }: { onDone: () => void }) {
 
   const reset = () => {
     setStep(1); setPreview(null); setStaged(null); setPosted(null);
-    setMapping({}); setNotes('');
+    setMapping({}); setNotes(''); setAllowDuplicate(false);
   };
 
   const missingRequired = targets.filter((t) => t.required && !mapping[t.field]);
@@ -429,6 +431,24 @@ export function Upload({ onDone }: { onDone: () => void }) {
             </div>
           </div>
 
+          {!posted && staged.duplicateOf && (
+            <div className="banner err">
+              <div>
+                <strong>This file has already been imported.</strong> Batch
+                &nbsp;#{staged.duplicateOf.importBatchId} ({staged.duplicateOf.fileName}, data date
+                &nbsp;{staged.duplicateOf.dataDate}) has byte-for-byte identical content and is
+                &nbsp;{staged.duplicateOf.status}. Posting it again would count the same cost twice.
+                <div style={{ marginTop: 8 }}>
+                  <label className="row" style={{ gap: 8, alignItems: 'center' }}>
+                    <input type="checkbox" checked={allowDuplicate} style={{ width: 16 }}
+                           onChange={(e) => setAllowDuplicate(e.target.checked)} />
+                    <span>Post it anyway — I know this is a duplicate</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          )}
+
           {posted ? (
             <div className="banner ok">
               Posted {posted.posted.toLocaleString()} rows into the warehouse as batch
@@ -479,7 +499,11 @@ export function Upload({ onDone }: { onDone: () => void }) {
           <div className="row">
             {!posted && <button className="btn danger" onClick={discard} disabled={busy}>Discard batch</button>}
             {!posted && (
-              <button className="btn primary" onClick={post} disabled={busy || staged.validCount === 0}>
+              <button
+                className="btn primary"
+                onClick={post}
+                disabled={busy || staged.validCount === 0 || (!!staged.duplicateOf && !allowDuplicate)}
+              >
                 {busy ? <span className="spinner" /> : null} Post {staged.validCount.toLocaleString()} rows
               </button>
             )}

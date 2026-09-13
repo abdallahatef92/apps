@@ -136,6 +136,8 @@ export interface StageResult {
   issues: ValidationIssue[];
   /** Distinct source values that did not resolve to a dimension member. */
   unresolved: { dimension: string; values: string[] }[];
+  /** Set when a batch with byte-identical file content already exists. */
+  duplicateOf: { importBatchId: number; fileName: string; dataDate: string; status: string } | null;
 }
 
 export interface PostResult {

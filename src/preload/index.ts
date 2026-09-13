@@ -47,7 +47,8 @@ const api = {
   },
   imports: {
     stage: (req: unknown) => invoke<any>('import:stage', req),
-    post: (batchId: number) => invoke<any>('import:post', batchId),
+    post: (batchId: number, allowDuplicate = false) =>
+      invoke<any>('import:post', batchId, allowDuplicate),
     remove: (batchId: number) => invoke<void>('import:delete', batchId),
   },
   queries: {

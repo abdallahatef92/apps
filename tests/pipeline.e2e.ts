@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { openDatabase, getDb } from '../src/main/db';
 import { readWorkbook } from '../src/main/ingest/workbook';
 import { suggestMapping } from '../src/main/ingest/targetFields';
-import { postBatch, stageFile } from '../src/main/ingest/importer';
+import { deleteBatch, postBatch, stageFile } from '../src/main/ingest/importer';
 import { runStoredQuery } from '../src/main/services/queryRunner';
 import { exportResult } from '../src/main/services/exportExcel';
 import {
@@ -44,6 +44,100 @@ async function load(filePath: string, module: Module, reportId: number,
   }, 'e2e');
 
   return { preview, sheet, suggested, staged, posted: postBatch(staged.importBatchId) };
+}
+
+/**
+ * Re-uploading the same extract must never add cost twice, however the project
+ * was chosen. The wizard's project field is only a hint for files with no project
+ * column, and it legitimately differs between uploads — the first import of a
+ * fresh database has no project to pick yet — so scope has to come from the rows.
+ */
+async function duplicateGuards(dir: string): Promise<void> {
+  console.log('\n--- duplicate protection ---');
+  openDatabase(join(dir, 'dup.db'));
+  const db = getDb();
+  // The project code the fixture's rows carry, so both uploads resolve to it
+  // whether the wizard names it or the importer reads it off the file.
+  const projectKey = Number(db.prepare('INSERT INTO dim_project (project_code, project_name) VALUES (?,?)')
+    .run('P-100', 'Test Plant').lastInsertRowid);
+
+  const file = join(dir, 'dup-cji3.xlsx');
+  await makeCji3File(file);
+
+  const upload = async (project: number | null) => {
+    const preview = await readWorkbook(file);
+    const sheet = preview.sheets[0];
+    const mapping: ColumnMappingEntry[] = Object.entries(suggestMapping('ACTUAL', sheet.columns))
+      .map(([target_field, source_column]) => ({ target_field, source_column }));
+    return stageFile({
+      filePath: file, fileName: 'cji3.xlsx', fileHash: preview.fileHash, fileSize: preview.fileSize,
+      sheetName: sheet.sheetName, headerRow: sheet.headerRow, module: 'ACTUAL',
+      reportDefinitionId: 6, dataDate: '2026-09-13', periodKey: null, projectKey: project,
+      scenarioKey: null, notes: null, mapping, saveMapping: true,
+    }, 'dup-test');
+  };
+
+  // First upload: no project exists yet, so the wizard takes it from the file.
+  const first = await upload(null);
+  check('first upload sees no duplicate', first.duplicateOf === null);
+  postBatch(first.importBatchId);
+  near('cost after one upload',
+    (db.prepare('SELECT COALESCE(SUM(amount),0) a FROM v_actual').get() as any).a, 1_700_000);
+
+  // Second upload of the very same file, this time with the project selected.
+  const second = await upload(projectKey);
+  check('re-upload of identical content is detected at staging',
+    second.duplicateOf?.importBatchId === first.importBatchId,
+    String(second.duplicateOf?.importBatchId));
+
+  let refused = false;
+  try { postBatch(second.importBatchId); } catch { refused = true; }
+  check('posting an identical file is refused', refused);
+  near('cost unchanged after the refusal',
+    (db.prepare('SELECT COALESCE(SUM(amount),0) a FROM v_actual').get() as any).a, 1_700_000);
+
+  // Forcing it through must still supersede, despite the differing project hint.
+  postBatch(second.importBatchId, { allowDuplicate: true });
+  near('forcing a duplicate supersedes instead of doubling',
+    (db.prepare('SELECT COALESCE(SUM(amount),0) a FROM v_actual').get() as any).a, 1_700_000);
+  check('the earlier batch is superseded even though its project hint differed',
+    (db.prepare('SELECT status FROM import_batch WHERE import_batch_id = ?')
+      .get(first.importBatchId) as any).status === 'SUPERSEDED');
+
+  // Deleting the live batch restores what it replaced, rather than emptying the warehouse.
+  deleteBatch(second.importBatchId);
+  check('the superseded batch is restored to POSTED',
+    (db.prepare('SELECT status FROM import_batch WHERE import_batch_id = ?')
+      .get(first.importBatchId) as any).status === 'POSTED');
+  near('cost is back to a single copy after the delete',
+    (db.prepare('SELECT COALESCE(SUM(amount),0) a FROM v_actual').get() as any).a, 1_700_000);
+
+  // The inverse: scoping by the rows must not make one project's extract wipe out
+  // another's just because they came from the same report.
+  const otherKey = Number(db.prepare('INSERT INTO dim_project (project_code, project_name) VALUES (?,?)')
+    .run('P-200', 'Second Plant').lastInsertRowid);
+  const otherFile = join(dir, 'dup-cji3-p200.xlsx');
+  await makeCji3File(otherFile);
+  const other = await (async () => {
+    const preview = await readWorkbook(otherFile);
+    const sheet = preview.sheets[0];
+    const mapping: ColumnMappingEntry[] = Object.entries(suggestMapping('ACTUAL', sheet.columns))
+      .filter(([f]) => f !== 'project_code') // force it onto the second project
+      .map(([target_field, source_column]) => ({ target_field, source_column }));
+    return stageFile({
+      filePath: otherFile, fileName: 'cji3-p200.xlsx', fileHash: 'different-content-hash',
+      fileSize: preview.fileSize, sheetName: sheet.sheetName, headerRow: sheet.headerRow,
+      module: 'ACTUAL', reportDefinitionId: 6, dataDate: '2026-09-13', periodKey: null,
+      projectKey: otherKey, scenarioKey: null, notes: null, mapping, saveMapping: false,
+    }, 'dup-test');
+  })();
+  postBatch(other.importBatchId);
+
+  check('another project\'s extract does not supersede the first',
+    (db.prepare('SELECT status FROM import_batch WHERE import_batch_id = ?')
+      .get(first.importBatchId) as any).status === 'POSTED');
+  near('both projects are counted',
+    (db.prepare('SELECT COALESCE(SUM(amount),0) a FROM v_actual').get() as any).a, 3_400_000);
 }
 
 /**
@@ -246,6 +340,7 @@ async function main(): Promise<void> {
   check('export carries a lineage sheet', !!wb.getWorksheet('Report info'));
 
   await sapScenario(dir);
+  await duplicateGuards(dir);
 
   rmSync(dir, { recursive: true, force: true });
   console.log(failures === 0 ? '\nAll pipeline checks passed.' : `\n${failures} check(s) failed.`);

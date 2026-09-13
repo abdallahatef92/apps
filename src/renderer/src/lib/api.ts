@@ -22,7 +22,7 @@ type Bridge = {
   };
   imports: {
     stage(req: unknown): Promise<IpcResult<any>>;
-    post(id: number): Promise<IpcResult<any>>;
+    post(id: number, allowDuplicate?: boolean): Promise<IpcResult<any>>;
     remove(id: number): Promise<IpcResult<void>>;
   };
   queries: {

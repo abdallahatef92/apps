@@ -97,9 +97,11 @@ export async function stageFile(req: StageRequest, importedBy: string | null): P
   const db = getDb();
 
   const duplicate = db.prepare(
-    `SELECT import_batch_id, data_date FROM import_batch
-     WHERE file_hash = ? AND status IN ('STAGED','POSTED') ORDER BY import_batch_id DESC LIMIT 1`,
-  ).get(req.fileHash) as { import_batch_id: number; data_date: string } | undefined;
+    `SELECT import_batch_id, file_name, data_date, status FROM import_batch
+     WHERE file_hash = ? AND status IN ('STAGED','MAPPED','POSTED')
+     ORDER BY import_batch_id DESC LIMIT 1`,
+  ).get(req.fileHash) as
+    { import_batch_id: number; file_name: string; data_date: string; status: string } | undefined;
 
   const { rows } = await readSheetRows(req.filePath, req.sheetName, req.headerRow);
 
@@ -191,6 +193,10 @@ export async function stageFile(req: StageRequest, importedBy: string | null): P
     skippedCount: skipped,
     amountTotal,
     issues: issues.slice(0, 200),
+    duplicateOf: duplicate
+      ? { importBatchId: duplicate.import_batch_id, fileName: duplicate.file_name,
+          dataDate: duplicate.data_date, status: duplicate.status }
+      : null,
     unresolved: [
       { dimension: 'WBS', values: newWbs.slice(0, 100) },
       { dimension: 'COST_ELEMENT', values: newCe.slice(0, 100) },
@@ -229,6 +235,17 @@ export function saveColumnMapping(reportDefinitionId: number, mapping: ColumnMap
     }
   });
   run();
+}
+
+/** A different batch, already posted, holding byte-identical file content. */
+export function findPostedDuplicate(batchId: number, fileHash: string | null):
+  { import_batch_id: number; file_name: string; data_date: string; posted_at: string | null } | undefined {
+  if (!fileHash) return undefined;
+  return getDb().prepare(
+    `SELECT import_batch_id, file_name, data_date, posted_at FROM import_batch
+     WHERE file_hash = ? AND status = 'POSTED' AND import_batch_id <> ?
+     ORDER BY import_batch_id DESC LIMIT 1`)
+    .get(fileHash, batchId) as any;
 }
 
 export function loadColumnMapping(reportDefinitionId: number): ColumnMappingEntry[] {
@@ -431,11 +448,24 @@ function ensurePeriod(periodKey: string): string {
  * re-uploading a refreshed extract replaces the old numbers instead of doubling
  * them, while the superseded rows stay in the database for audit.
  */
-export function postBatch(batchId: number): PostResult {
+export function postBatch(batchId: number, options: { allowDuplicate?: boolean } = {}): PostResult {
   const db = getDb();
   const batch = db.prepare('SELECT * FROM import_batch WHERE import_batch_id = ?').get(batchId) as any;
   if (!batch) throw new Error(`Batch ${batchId} not found.`);
   if (batch.status === 'POSTED') throw new Error(`Batch ${batchId} is already posted.`);
+
+  // Byte-identical re-upload. Superseding would handle the arithmetic, but a
+  // second copy of the same file is nearly always a mistake, so it is refused
+  // outright unless the user says otherwise.
+  if (!options.allowDuplicate) {
+    const twin = findPostedDuplicate(batchId, batch.file_hash);
+    if (twin) {
+      throw new Error(
+        `This is the same file as batch #${twin.import_batch_id} ("${twin.file_name}", ` +
+        `data date ${twin.data_date}), which is already posted. Posting it again would count ` +
+        `the same cost twice. Delete that batch first, or confirm posting anyway.`);
+    }
+  }
 
   // Only VALID rows post. ERROR rows failed validation and SKIPPED rows are the
   // report's own subtotals — posting either would corrupt the numbers.
@@ -645,18 +675,60 @@ function postWbsMaster(batchId: number, batch: any, staged: any[]): number {
   return written;
 }
 
+/** Which fact table a module writes to. Fixed map — never user input. */
+const FACT_TABLE: Record<string, string | null> = {
+  ACTUAL: 'fact_actual',
+  COMMITMENT: 'fact_actual',
+  BUDGET: 'fact_budget',
+  FORECAST: 'fact_forecast',
+  SERVICE: 'fact_service_line',
+  MASTER: null, // writes dimensions, not facts
+};
+
+/** The projects a batch's posted rows actually belong to. */
+function projectsTouchedBy(batchId: number, module: string): number[] {
+  const table = FACT_TABLE[module];
+  if (!table) return [];
+  return (getDb().prepare(`SELECT DISTINCT project_key FROM ${table} WHERE import_batch_id = ?`)
+    .all(batchId) as { project_key: number }[]).map((r) => r.project_key);
+}
+
+/**
+ * Mark earlier postings of the same report, module and period as superseded.
+ *
+ * Scope is decided by the projects the rows actually landed on, not by the
+ * project chosen in the wizard. That choice is only a hint for files with no
+ * project column, and it differs between uploads of the very same file — the
+ * first import of a fresh database has no project to pick yet, later ones do.
+ * Keying on it let an identical re-upload sit alongside the original and double
+ * the cost.
+ */
 function supersedePrevious(batchId: number, batch: any): void {
   const db = getDb();
-  db.prepare(`UPDATE import_batch
-              SET status = 'SUPERSEDED', superseded_by = @new
-              WHERE import_batch_id <> @new
-                AND status = 'POSTED'
-                AND report_definition_id = @rd
-                AND module = @module
-                AND IFNULL(period_key,'~') = IFNULL(@period,'~')
-                AND IFNULL(project_key,-1) = IFNULL(@project,-1)`)
-    .run({ new: batchId, rd: batch.report_definition_id, module: batch.module,
-           period: batch.period_key, project: batch.project_key });
+  const projects = projectsTouchedBy(batchId, batch.module);
+
+  const candidates = db.prepare(`
+    SELECT import_batch_id, project_key FROM import_batch
+    WHERE import_batch_id <> @new
+      AND status = 'POSTED'
+      AND report_definition_id = @rd
+      AND module = @module
+      AND IFNULL(period_key,'~') = IFNULL(@period,'~')`)
+    .all({ new: batchId, rd: batch.report_definition_id, module: batch.module,
+           period: batch.period_key }) as { import_batch_id: number; project_key: number | null }[];
+
+  const overlapping = candidates.filter((c) => {
+    if (projects.length === 0) {
+      // Master data writes no facts, so fall back to the declared project.
+      return (c.project_key ?? -1) === (batch.project_key ?? -1);
+    }
+    return projectsTouchedBy(c.import_batch_id, batch.module).some((p) => projects.includes(p));
+  });
+
+  if (overlapping.length === 0) return;
+  const upd = db.prepare(
+    `UPDATE import_batch SET status = 'SUPERSEDED', superseded_by = ? WHERE import_batch_id = ?`);
+  for (const c of overlapping) upd.run(batchId, c.import_batch_id);
 }
 
 /**
@@ -685,7 +757,14 @@ function ensureScenario(projectKey: number, type: 'BUDGET' | 'FORECAST', dataDat
     .lastInsertRowid);
 }
 
-/** Discard a batch and everything it produced. Only unposted batches can be deleted outright. */
+/**
+ * Discard a batch and everything it produced.
+ *
+ * Anything this batch superseded is restored to POSTED, so deleting a mistaken
+ * import puts the previous position back rather than leaving a hole. Dimension
+ * members the batch created are left alone: postings from other batches may
+ * point at them, and an unused dimension row is harmless.
+ */
 export function deleteBatch(batchId: number): void {
   const db = getDb();
   const run = db.transaction(() => {
@@ -694,6 +773,8 @@ export function deleteBatch(batchId: number): void {
     db.prepare('DELETE FROM fact_forecast WHERE import_batch_id = ?').run(batchId);
     db.prepare('DELETE FROM fact_service_line WHERE import_batch_id = ?').run(batchId);
     db.prepare('DELETE FROM stg_row WHERE import_batch_id = ?').run(batchId);
+    db.prepare(`UPDATE import_batch SET status = 'POSTED', superseded_by = NULL
+                WHERE superseded_by = ? AND status = 'SUPERSEDED'`).run(batchId);
     db.prepare('UPDATE import_batch SET superseded_by = NULL WHERE superseded_by = ?').run(batchId);
     db.prepare('DELETE FROM import_batch WHERE import_batch_id = ?').run(batchId);
   });
