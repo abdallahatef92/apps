@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../App';
 import { api, call } from '../lib/api';
-import { money, periodOf, today } from '../lib/format';
+import { periodOf, today } from '../lib/format';
 import type {
   ColumnMappingEntry, FilePreview, Module, PostResult, ReportDefinition,
   SheetPreview, StageResult, TargetField,
@@ -16,7 +16,13 @@ const STEPS: { n: Step; label: string }[] = [
   { n: 4, label: 'Review & post' },
 ];
 
-const MODULES: Module[] = ['ACTUAL', 'BUDGET', 'FORECAST'];
+const MODULES: { code: Module; label: string; hint: string }[] = [
+  { code: 'ACTUAL', label: 'Actuals', hint: 'Posted cost from SAP' },
+  { code: 'BUDGET', label: 'Budget', hint: 'Approved budget by WBS' },
+  { code: 'FORECAST', label: 'Forecast', hint: 'ETC / EAC by period' },
+  { code: 'SERVICE', label: 'Service lines', hint: 'Subcontractor detail behind a PO — reconciled against actuals, never added to them' },
+  { code: 'MASTER', label: 'WBS structure', hint: 'Project breakdown structure' },
+];
 
 export function Upload({ onDone }: { onDone: () => void }) {
   const { projects, projectKey } = useApp();
@@ -41,6 +47,7 @@ export function Upload({ onDone }: { onDone: () => void }) {
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [saveMapping, setSaveMapping] = useState(true);
 
+  const [detailKeys, setDetailKeys] = useState<string[]>([]);
   const [staged, setStaged] = useState<StageResult | null>(null);
   const [posted, setPosted] = useState<PostResult | null>(null);
 
@@ -53,6 +60,7 @@ export function Upload({ onDone }: { onDone: () => void }) {
   useEffect(() => { setFileProject(projectKey); }, [projectKey]);
 
   const moduleReports = reports.filter((r) => r.module === module);
+  const selectedReport = reports.find((r) => r.report_definition_id === reportId) ?? null;
   useEffect(() => { setReportId(moduleReports[0]?.report_definition_id ?? null); },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [module, reports.length]);
@@ -97,6 +105,13 @@ export function Upload({ onDone }: { onDone: () => void }) {
     }
     const suggested = await call(api.mapping.suggest(module, sheet.columns));
     setMapping({ ...suggested, ...savedMap });
+
+    try {
+      const parsed = JSON.parse(selectedReport?.detail_key_fields ?? '[]');
+      setDetailKeys(Array.isArray(parsed) ? parsed.map(String) : []);
+    } catch {
+      setDetailKeys([]);
+    }
     setStep(3);
   });
 
@@ -122,6 +137,7 @@ export function Upload({ onDone }: { onDone: () => void }) {
       notes: notes || null,
       mapping: entries,
       saveMapping,
+      detailKeyFields: detailKeys,
     })) as StageResult;
     setStaged(result);
     setStep(4);
@@ -172,7 +188,7 @@ export function Upload({ onDone }: { onDone: () => void }) {
             <label className="field">
               <span>Module</span>
               <select value={module} onChange={(e) => setModule(e.target.value as Module)}>
-                {MODULES.map((m) => <option key={m} value={m}>{m}</option>)}
+                {MODULES.map((m) => <option key={m.code} value={m.code}>{m.label}</option>)}
               </select>
             </label>
 
@@ -187,6 +203,17 @@ export function Upload({ onDone }: { onDone: () => void }) {
               </select>
             </label>
           </div>
+
+          {selectedReport?.description && (
+            <div className="banner info" style={{ marginBottom: 14 }}>{selectedReport.description}</div>
+          )}
+          {module === 'SERVICE' && (
+            <div className="banner warn" style={{ marginBottom: 14 }}>
+              Service lines are a sub-ledger of cost already posted in SAP. They are stored
+              separately and reconciled against actuals — loading them here will not change your
+              actual cost figures.
+            </div>
+          )}
 
           <button className="btn primary" onClick={pickFile} disabled={busy || !reportId}>
             {busy ? <span className="spinner" /> : '↥'} Choose Excel / CSV file…
@@ -380,13 +407,25 @@ export function Upload({ onDone }: { onDone: () => void }) {
               <div className="value good">{staged.validCount.toLocaleString()}</div>
             </div>
             <div className="kpi">
+              <div className="label">Subtotal rows skipped</div>
+              <div className="value">{staged.skippedCount.toLocaleString()}</div>
+              <div className="delta">Not data — would double-count</div>
+            </div>
+            <div className="kpi">
               <div className="label">Rejected</div>
               <div className={`value ${staged.errorCount ? 'bad' : ''}`}>{staged.errorCount.toLocaleString()}</div>
             </div>
-            <div className="kpi">
-              <div className="label">Control total</div>
-              <div className="value">{money(staged.amountTotal)}</div>
-              <div className="delta">Compare against the report footer</div>
+          </div>
+
+          <div className="card">
+            <h3>Control total</h3>
+            <p className="hint">
+              This is the sum of the {staged.validCount.toLocaleString()} rows that will post.
+              It should equal the grand total printed on the report — if the file carries subtotal
+              rows, that only holds once they are excluded, which is what the skip count above is.
+            </p>
+            <div style={{ fontSize: 26, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+              {staged.amountTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
           </div>
 

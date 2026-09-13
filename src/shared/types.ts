@@ -1,4 +1,4 @@
-export type Module = 'ACTUAL' | 'BUDGET' | 'FORECAST' | 'COMMITMENT' | 'MASTER';
+export type Module = 'ACTUAL' | 'BUDGET' | 'FORECAST' | 'COMMITMENT' | 'SERVICE' | 'MASTER';
 
 export interface QueryResult {
   columns: string[];
@@ -40,6 +40,8 @@ export interface ReportDefinition {
   description: string | null;
   expected_frequency: string | null;
   staleness_days: number;
+  /** JSON array of canonical fields identifying a real data row. */
+  detail_key_fields: string;
 }
 
 export interface FreshnessRow {
@@ -108,6 +110,12 @@ export interface StageRequest {
   notes: string | null;
   mapping: ColumnMappingEntry[];
   saveMapping: boolean;
+  /**
+   * Canonical fields that must be non-empty for a row to count as data. SAP
+   * exports interleave subtotal rows, which leave these blank; such rows are
+   * staged as SKIPPED rather than rejected, and never posted.
+   */
+  detailKeyFields?: string[];
 }
 
 export interface ValidationIssue {
@@ -122,6 +130,8 @@ export interface StageResult {
   validCount: number;
   warnCount: number;
   errorCount: number;
+  /** Subtotal / non-data rows recognised and left out. */
+  skippedCount: number;
   amountTotal: number;
   issues: ValidationIssue[];
   /** Distinct source values that did not resolve to a dimension member. */
@@ -145,6 +155,7 @@ export interface BatchRow {
   row_count_file: number;
   row_count_posted: number;
   row_count_rejected: number;
+  row_count_skipped: number;
   amount_total: number | null;
   imported_at: string;
   notes: string | null;

@@ -21,7 +21,7 @@ export interface QueryParamDef {
 export interface SystemQuery {
   code: string;
   name: string;
-  module: 'ACTUAL' | 'BUDGET' | 'FORECAST' | 'CROSS' | 'ADMIN';
+  module: 'ACTUAL' | 'BUDGET' | 'FORECAST' | 'SERVICE' | 'CROSS' | 'ADMIN';
   category: string;
   description: string;
   sql: string;
@@ -349,6 +349,230 @@ LEFT JOIN (SELECT project_key, SUM(forecast_amount) etc_amount FROM v_forecast W
        ON f.project_key = p.project_key
 WHERE p.is_active = 1
 ORDER BY p.project_code`,
+  },
+  {
+    code: 'COST_VS_REVENUE',
+    name: 'Cost vs revenue by period',
+    module: 'CROSS',
+    category: 'Overview',
+    description: 'Actual cost against revenue billed, per period, with the running margin. '
+      + 'A CJI3 export carries income on 4xxxxxxx accounts as negative amounts; this keeps the two apart.',
+    params: [P_PROJECT],
+    sql: `
+WITH periods AS (
+  SELECT period_key FROM v_actual  WHERE project_key = :project_key
+  UNION
+  SELECT period_key FROM v_revenue WHERE project_key = :project_key
+),
+c AS (SELECT period_key, SUM(amount) AS amt FROM v_actual  WHERE project_key = :project_key GROUP BY period_key),
+r AS (SELECT period_key, SUM(amount) AS amt FROM v_revenue WHERE project_key = :project_key GROUP BY period_key)
+SELECT
+  p.period_key,
+  COALESCE(r.amt,0) AS revenue,
+  COALESCE(c.amt,0) AS cost,
+  COALESCE(r.amt,0) - COALESCE(c.amt,0) AS margin,
+  SUM(COALESCE(r.amt,0)) OVER (ORDER BY p.period_key) AS revenue_cum,
+  SUM(COALESCE(c.amt,0)) OVER (ORDER BY p.period_key) AS cost_cum,
+  SUM(COALESCE(r.amt,0)) OVER (ORDER BY p.period_key)
+    - SUM(COALESCE(c.amt,0)) OVER (ORDER BY p.period_key) AS margin_cum,
+  ROUND(100.0 * (SUM(COALESCE(r.amt,0)) OVER (ORDER BY p.period_key)
+    - SUM(COALESCE(c.amt,0)) OVER (ORDER BY p.period_key))
+    / NULLIF(SUM(COALESCE(r.amt,0)) OVER (ORDER BY p.period_key), 0), 1) AS margin_pct
+FROM periods p
+LEFT JOIN c ON c.period_key = p.period_key
+LEFT JOIN r ON r.period_key = p.period_key
+ORDER BY p.period_key`,
+  },
+  {
+    code: 'WBS_ROLLUP',
+    name: 'WBS tree with rolled-up actuals',
+    module: 'ACTUAL',
+    category: 'Aggregation',
+    description: 'The cost breakdown structure down to a chosen level, with actual cost rolled up '
+      + 'from every descendant. Uses the materialised path, so no recursion is needed.',
+    params: [P_PROJECT, { name: 'max_level', type: 'int', label: 'Down to level', default: 3 }],
+    sql: `
+SELECT
+  w.wbs_level,
+  w.wbs_code,
+  w.wbs_name,
+  w.is_leaf,
+  (SELECT COALESCE(SUM(a.amount),0) FROM v_actual a
+     JOIN dim_wbs d ON d.wbs_key = a.wbs_key
+    WHERE d.wbs_path LIKE w.wbs_path || '%') AS actual_rollup,
+  (SELECT COALESCE(SUM(b.budget_amount),0) FROM v_budget b
+     JOIN dim_wbs d ON d.wbs_key = b.wbs_key
+    WHERE b.is_current = 1 AND d.wbs_path LIKE w.wbs_path || '%') AS budget_rollup,
+  w.planned_start,
+  w.planned_finish
+FROM dim_wbs w
+WHERE w.project_key = :project_key
+  AND w.wbs_level <= COALESCE(:max_level, 3)
+ORDER BY w.wbs_path`,
+  },
+  {
+    code: 'SC_PO_RECONCILIATION',
+    name: 'PO reconciliation: actuals vs service lines',
+    module: 'SERVICE',
+    category: 'Reconciliation',
+    description: 'Per purchase order, actual cost posted in SAP against the subcontractor service '
+      + 'lines behind it. A difference means the sub-ledger and the ledger disagree — or that a '
+      + 'certificate has not been loaded yet.',
+    params: [P_PROJECT, { name: 'tolerance', type: 'int', label: 'Tolerance', default: 1 }],
+    sql: `
+WITH act AS (
+  SELECT po_no, SUM(amount) AS amount, COUNT(*) AS posting_lines
+  FROM v_actual WHERE project_key = :project_key AND po_no IS NOT NULL AND po_no <> ''
+  GROUP BY po_no
+),
+sl AS (
+  SELECT po_no, SUM(amount_net) AS amount, COUNT(*) AS service_lines,
+         MAX(vendor_name) AS vendor_name, COUNT(DISTINCT invoice_no) AS certificates
+  FROM v_service_line WHERE project_key = :project_key
+  GROUP BY po_no
+),
+keys AS (SELECT po_no FROM act UNION SELECT po_no FROM sl)
+SELECT
+  k.po_no,
+  sl.vendor_name,
+  COALESCE(act.amount,0)        AS actual_amount,
+  COALESCE(sl.amount,0)         AS service_line_amount,
+  COALESCE(act.amount,0) - COALESCE(sl.amount,0) AS difference,
+  act.posting_lines,
+  sl.service_lines,
+  sl.certificates,
+  CASE
+    WHEN sl.amount IS NULL THEN 'NO SERVICE DETAIL'
+    WHEN act.amount IS NULL THEN 'NOT POSTED'
+    WHEN ABS(COALESCE(act.amount,0) - COALESCE(sl.amount,0)) <= COALESCE(:tolerance,1) THEN 'RECONCILED'
+    ELSE 'DIFFERENCE'
+  END AS status
+FROM keys k
+LEFT JOIN act ON act.po_no = k.po_no
+LEFT JOIN sl  ON sl.po_no  = k.po_no
+ORDER BY ABS(COALESCE(act.amount,0) - COALESCE(sl.amount,0)) DESC, k.po_no`,
+  },
+  {
+    code: 'SC_BY_SUPPLIER',
+    name: 'Subcontractors by value',
+    module: 'SERVICE',
+    category: 'Aggregation',
+    description: 'Certified work per subcontractor, net and gross, with the number of certificates.',
+    params: [P_PROJECT],
+    sql: `
+SELECT
+  COALESCE(vendor_name, vendor_code, '(unknown)') AS supplier,
+  COUNT(DISTINCT po_no)      AS purchase_orders,
+  COUNT(DISTINCT invoice_no) AS certificates,
+  COUNT(*)                   AS service_lines,
+  SUM(amount_net)            AS work_done_net,
+  SUM(COALESCE(amount_vat,0)) AS vat,
+  SUM(COALESCE(amount_gross, amount_net + COALESCE(amount_vat,0))) AS work_done_gross,
+  ROUND(100.0 * SUM(amount_net) / NULLIF(SUM(SUM(amount_net)) OVER (), 0), 1) AS pct_of_total
+FROM v_service_line
+WHERE project_key = :project_key
+GROUP BY COALESCE(vendor_name, vendor_code, '(unknown)')
+ORDER BY work_done_net DESC`,
+  },
+  {
+    code: 'SC_BY_CATEGORY',
+    name: 'Subcontract work by category',
+    module: 'SERVICE',
+    category: 'Aggregation',
+    description: 'Certified work grouped by the work category on the certificate (concrete, '
+      + 'equipment rent, finishes …), with the WBS elements it touches.',
+    params: [P_PROJECT],
+    sql: `
+SELECT
+  COALESCE(category,'(uncategorised)') AS category,
+  COUNT(DISTINCT wbs_code)  AS wbs_elements,
+  COUNT(DISTINCT vendor_name) AS suppliers,
+  COUNT(*)                  AS service_lines,
+  SUM(amount_net)           AS work_done_net,
+  ROUND(100.0 * SUM(amount_net) / NULLIF(SUM(SUM(amount_net)) OVER (), 0), 1) AS pct_of_total
+FROM v_service_line
+WHERE project_key = :project_key
+GROUP BY COALESCE(category,'(uncategorised)')
+ORDER BY work_done_net DESC`,
+  },
+  {
+    code: 'SC_LINE_DETAIL',
+    name: 'Service line detail',
+    module: 'SERVICE',
+    category: 'Detail',
+    description: 'Every certified service line. Filter by purchase order to drill from an actual '
+      + 'cost posting into exactly what was certified against it.',
+    params: [P_PROJECT, { name: 'po_no', type: 'text', label: 'Purchase order' }],
+    sql: `
+SELECT
+  po_no, invoice_serial, invoice_no, period_key, vendor_name,
+  wbs_code, wbs_name, cost_element_code, category, service_code, service_text,
+  uom, unit_rate, quantity_previous, quantity_current, quantity_total, progress_pct,
+  amount_net, amount_vat, amount_gross
+FROM v_service_line
+WHERE project_key = :project_key
+  AND (:po_no IS NULL OR po_no = :po_no)
+ORDER BY po_no, invoice_no, item_no, line_no`,
+  },
+  {
+    code: 'SC_COVERAGE',
+    name: 'Subcontract coverage of actuals',
+    module: 'SERVICE',
+    category: 'Reconciliation',
+    description: 'How much of actual cost is explained by loaded service-line detail, split by '
+      + 'whether the posting carries a purchase order at all.',
+    params: [P_PROJECT],
+    sql: `
+WITH a AS (
+  SELECT
+    CASE WHEN po_no IS NULL OR po_no = '' THEN 'No purchase order' ELSE 'On a purchase order' END AS bucket,
+    SUM(amount) AS amount, COUNT(*) AS lines
+  FROM v_actual WHERE project_key = :project_key
+  GROUP BY 1
+)
+SELECT bucket, lines, amount,
+       ROUND(100.0 * amount / NULLIF(SUM(amount) OVER (), 0), 1) AS pct_of_actual,
+       (SELECT COALESCE(SUM(amount_net),0) FROM v_service_line WHERE project_key = :project_key) AS service_lines_loaded
+FROM a
+ORDER BY amount DESC`,
+  },
+  {
+    code: 'REVENUE_BY_WBS',
+    name: 'Revenue by WBS',
+    module: 'CROSS',
+    category: 'Overview',
+    description: 'Income posted to the project, by WBS element and period.',
+    params: [P_PROJECT],
+    sql: `
+SELECT
+  wbs_code, wbs_name, period_key,
+  cost_element_code, cost_element_name,
+  COUNT(*) AS postings,
+  SUM(amount) AS revenue
+FROM v_revenue
+WHERE project_key = :project_key
+GROUP BY wbs_code, wbs_name, period_key, cost_element_code, cost_element_name
+ORDER BY revenue DESC`,
+  },
+  {
+    code: 'ACT_BY_DOC_TYPE',
+    name: 'Actuals by document type',
+    module: 'ACTUAL',
+    category: 'Data quality',
+    description: 'Cost split by SAP document type — useful for spotting reversals and journal '
+      + 'corrections hiding inside the actuals.',
+    params: [P_PROJECT],
+    sql: `
+SELECT
+  COALESCE(NULLIF(document_type,''),'(none)') AS document_type,
+  COUNT(*)   AS postings,
+  SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) AS debits,
+  SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END) AS credits,
+  SUM(amount) AS net_amount
+FROM v_actual
+WHERE project_key = :project_key
+GROUP BY COALESCE(NULLIF(document_type,''),'(none)')
+ORDER BY ABS(SUM(amount)) DESC`,
   },
   {
     code: 'DATA_FRESHNESS',

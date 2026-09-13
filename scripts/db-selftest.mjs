@@ -17,8 +17,13 @@ const dir = mkdtempSync(join(tmpdir(), 'ci-selftest-'));
 const db = new DatabaseSync(join(dir, 'test.db'));
 db.exec('PRAGMA foreign_keys = ON');
 
-db.exec(readFileSync('src/main/db/migrations/001_core.sql', 'utf8'));
-db.exec(readFileSync('src/main/db/migrations/002_seed.sql', 'utf8'));
+for (const m of ['001_core', '002_seed', '003_sap_reality']) {
+  db.exec(readFileSync(`src/main/db/migrations/${m}.sql`, 'utf8'));
+}
+if (db.prepare('PRAGMA foreign_key_check').all().length > 0) {
+  console.error('  FAIL migrations left foreign key violations');
+  process.exit(1);
+}
 
 // Minimal calendar
 const pad = (n) => String(n).padStart(2, '0');
@@ -88,7 +93,13 @@ for (const q of queries) {
     const stmt = db.prepare(q.sql.trim());
     const names = [...new Set([...q.sql.matchAll(/(?<![:\w]):([a-zA-Z_]\w*)/g)].map((m) => m[1]))];
     const binding = {};
-    for (const n of names) binding[n] = n === 'project_key' ? projectKey : n === 'top_n' ? 20 : null;
+    for (const n of names) {
+      binding[n] = n === 'project_key' ? projectKey
+        : n === 'top_n' ? 20
+        : n === 'max_level' ? 3
+        : n === 'tolerance' ? 1
+        : null;
+    }
     const rows = stmt.all(binding);
     console.log(`  ok  ${q.code.padEnd(22)} ${String(rows.length).padStart(4)} rows`);
   } catch (err) {

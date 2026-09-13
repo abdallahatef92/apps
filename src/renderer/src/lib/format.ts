@@ -1,6 +1,8 @@
-const NUMERIC_HINT = /(amount|budget|actual|forecast|etc|eac|vac|variance|cost|value|qty|quantity|rate|total|cum|overrun|count|rows|days|pct|percent|_no$|_key$)/i;
-const PCT_HINT = /(pct|percent)/i;
+const NUMERIC_HINT = /(amount|budget|actual|forecast|etc|eac|vac|variance|cost|value|qty|quantity|rate|total|cum|overrun|count|rows|days|pct|percent|progress|lines|_no$|_key$)/i;
+const PCT_HINT = /(pct|percent|progress)/i;
 const KEY_HINT = /(_key$|_id$|row_no|top_n)/i;
+/** Columns that are money and therefore always carry decimals, even when whole. */
+const MONEY_HINT = /(amount|budget|actual|forecast|etc|eac|vac|variance|cost|value|rate|price|cum|overrun|margin|revenue|vat|net|gross)/i;
 
 export function isNumericColumn(name: string, sample: unknown): boolean {
   if (typeof sample === 'number') return true;
@@ -12,9 +14,11 @@ export function formatCell(name: string, value: unknown): string {
   if (typeof value !== 'number') return String(value);
   if (KEY_HINT.test(name)) return String(value);
   if (PCT_HINT.test(name)) return `${value.toFixed(1)}%`;
-  if (Number.isInteger(value) && Math.abs(value) < 10000 && /(count|rows|documents|days|line)/i.test(name)) {
-    return value.toLocaleString();
+  if (MONEY_HINT.test(name)) {
+    return value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
+  // A count is a count: no decimals on whole numbers that are not money.
+  if (Number.isInteger(value)) return value.toLocaleString();
   return value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 

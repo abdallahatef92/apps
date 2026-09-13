@@ -23,6 +23,11 @@ const api = {
   reports: {
     list: () => invoke<any[]>('reports:list'),
   },
+  settings: {
+    list: () => invoke<{ key: string; value: string }[]>('settings:list'),
+    set: (key: string, value: string) => invoke<void>('settings:set', key, value),
+    reclassify: () => invoke<{ costElements: number; updated: number }>('settings:reclassify'),
+  },
   freshness: {
     list: () => invoke<any[]>('freshness:list'),
   },

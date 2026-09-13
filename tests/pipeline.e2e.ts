@@ -14,7 +14,9 @@ import { suggestMapping } from '../src/main/ingest/targetFields';
 import { postBatch, stageFile } from '../src/main/ingest/importer';
 import { runStoredQuery } from '../src/main/services/queryRunner';
 import { exportResult } from '../src/main/services/exportExcel';
-import { makeActualsFile, makeBudgetFile } from './makeFixtures';
+import {
+  makeActualsFile, makeBudgetFile, makeCji3File, makeSubcontractorFile, makeWbsTreeFile,
+} from './makeFixtures';
 import type { ColumnMappingEntry, Module } from '../src/shared/types';
 
 let failures = 0;
@@ -42,6 +44,102 @@ async function load(filePath: string, module: Module, reportId: number,
   }, 'e2e');
 
   return { preview, sheet, suggested, staged, posted: postBatch(staged.importBatchId) };
+}
+
+/**
+ * The SAP-shaped scenario: a CJI3 extract with subtotal rows and income postings,
+ * the subcontractor sub-ledger beneath its PO, and the project structure export.
+ */
+async function sapScenario(dir: string): Promise<void> {
+  console.log('\n--- SAP-shaped extracts ---');
+  openDatabase(join(dir, 'sap.db'));
+  const db = getDb();
+  const projectKey = Number(db.prepare('INSERT INTO dim_project (project_code, project_name) VALUES (?,?)')
+    .run('P-100', 'Test Plant').lastInsertRowid);
+
+  // Structure first, so postings land on a hierarchy that already exists.
+  const treePath = join(dir, 'wbs_tree.xlsx');
+  await makeWbsTreeFile(treePath);
+  const tree = await load(treePath, 'MASTER', 8, '2026-03-31', null, projectKey);
+  check('WBS code read from the "Title" column', tree.suggested.wbs_code === 'Title', tree.suggested.wbs_code);
+  check('WBS name read from the "Description" column', tree.suggested.wbs_name === 'Description', tree.suggested.wbs_name);
+  check('8 WBS elements built (repeated root collapsed)', tree.posted.posted === 8, String(tree.posted.posted));
+
+  const foundations = db.prepare(`SELECT w.wbs_level, w.wbs_path, w.is_leaf, p.wbs_code AS parent
+      FROM dim_wbs w LEFT JOIN dim_wbs p ON p.wbs_key = w.parent_wbs_key
+      WHERE w.wbs_code = 'P-100.CIV.01'`).get() as any;
+  check('hierarchy parented from the level column', foundations.parent === 'P-100.CIV', String(foundations.parent));
+  check('materialised path built', foundations.wbs_path === '/P-100/P-100.CIV/P-100.CIV.01/', foundations.wbs_path);
+  check('leaf flag set', foundations.is_leaf === 1);
+  const branch = db.prepare("SELECT is_leaf FROM dim_wbs WHERE wbs_code = 'P-100.CIV'").get() as any;
+  check('a node with children is not a leaf', branch.is_leaf === 0);
+  check('planned dates carried across',
+    (db.prepare("SELECT planned_finish f FROM dim_wbs WHERE wbs_code = 'P-100.CIV.01'").get() as any).f === '2026-03-31');
+
+  // CJI3: subtotals must be skipped and income kept out of cost.
+  const cjiPath = join(dir, 'cji3.xlsx');
+  await makeCji3File(cjiPath);
+  const cji = await load(cjiPath, 'ACTUAL', 6, '2026-03-31', '2026-03', projectKey);
+  check('WBS Element preferred over the generic Object column',
+    cji.suggested.wbs_code === 'WBS Element', cji.suggested.wbs_code);
+  check('purchase order mapped', cji.suggested.po_no === 'Purchasing Document', String(cji.suggested.po_no));
+  check('cost type not stolen by the "Object Type" column',
+    cji.suggested.cost_type === undefined, String(cji.suggested.cost_type));
+  check('4 subtotal rows skipped', cji.staged.skippedCount === 4, String(cji.staged.skippedCount));
+  check('5 detail rows posted', cji.posted.posted === 5, String(cji.posted.posted));
+  near('control total equals the file grand total, not the sum of every row',
+    cji.staged.amountTotal, 500_000);
+
+  const split = db.prepare(`SELECT
+      (SELECT COALESCE(SUM(amount),0) FROM v_actual  WHERE project_key = ?) AS cost,
+      (SELECT COALESCE(SUM(amount),0) FROM v_revenue WHERE project_key = ?) AS revenue,
+      (SELECT COALESCE(SUM(amount),0) FROM v_posting WHERE project_key = ?) AS net`)
+    .get(projectKey, projectKey, projectKey) as any;
+  near('actual COST excludes income', split.cost, 1_700_000);
+  near('revenue reported positive', split.revenue, 1_200_000);
+  near('cost less revenue reproduces the file total', split.net, 500_000);
+
+  const types = db.prepare(`SELECT cost_type, SUM(amount) amt FROM v_actual
+    WHERE project_key = ? GROUP BY cost_type ORDER BY cost_type`).all(projectKey) as any[];
+  check('cost types inferred from the account range',
+    types.map((t) => t.cost_type).join(',') === 'MATERIAL,SUBCONTRACT',
+    types.map((t) => t.cost_type).join(','));
+  check('income cost element carries no cost type',
+    (db.prepare("SELECT cost_type, posting_nature n FROM dim_cost_element WHERE cost_element_code='40101100'")
+      .get() as any).n === 'REVENUE');
+
+  // Subcontractor sub-ledger: reconciles to actuals, never added to them.
+  const scPath = join(dir, 'subcontractor.xlsx');
+  await makeSubcontractorFile(scPath);
+  const sc = await load(scPath, 'SERVICE', 7, '2026-03-31', null, projectKey);
+  check('supplier name read despite the misleading caption',
+    sc.suggested.vendor_name === 'Account Number of Supplier', String(sc.suggested.vendor_name));
+  check('2 certificate subtotal rows skipped', sc.staged.skippedCount === 2, String(sc.staged.skippedCount));
+  check('2 service lines posted', sc.posted.posted === 2, String(sc.posted.posted));
+
+  const afterSc = db.prepare('SELECT COALESCE(SUM(amount),0) a FROM v_actual WHERE project_key = ?')
+    .get(projectKey) as any;
+  near('loading the sub-ledger does not change actual cost', afterSc.a, 1_700_000);
+
+  const recon = runStoredQuery('SC_PO_RECONCILIATION', { project_key: projectKey, tolerance: 1 });
+  const po = (recon.rows as any[]).find((r) => r.po_no === '4500001');
+  near('PO actual', Number(po.actual_amount), 1_500_000);
+  near('PO service lines', Number(po.service_line_amount), 1_500_000);
+  check('PO reconciles', po.status === 'RECONCILED', String(po.status));
+
+  const rollup = runStoredQuery('WBS_ROLLUP', { project_key: projectKey, max_level: 2 });
+  const civ = (rollup.rows as any[]).find((r) => r.wbs_code === 'P-100.CIV');
+  near('actuals roll up the tree through the materialised path', Number(civ.actual_rollup), 1_500_000);
+
+  const pl = runStoredQuery('COST_VS_REVENUE', { project_key: projectKey });
+  near('margin equals revenue less cost',
+    Number((pl.rows.at(-1) as any).margin_cum), 1_200_000 - 1_700_000);
+
+  for (const code of ['SC_BY_SUPPLIER', 'SC_BY_CATEGORY', 'SC_LINE_DETAIL', 'SC_COVERAGE',
+                      'REVENUE_BY_WBS', 'ACT_BY_DOC_TYPE']) {
+    const r = runStoredQuery(code, { project_key: projectKey, po_no: null });
+    check(`${code} runs`, r.rowCount >= 0, `${r.rowCount} rows`);
+  }
 }
 
 async function main(): Promise<void> {
@@ -146,6 +244,8 @@ async function main(): Promise<void> {
   check('export produced a Data sheet with a totals row',
     wb.getWorksheet('Data')!.rowCount === bva.rowCount + 2, `${wb.getWorksheet('Data')!.rowCount} rows`);
   check('export carries a lineage sheet', !!wb.getWorksheet('Report info'));
+
+  await sapScenario(dir);
 
   rmSync(dir, { recursive: true, force: true });
   console.log(failures === 0 ? '\nAll pipeline checks passed.' : `\n${failures} check(s) failed.`);

@@ -53,20 +53,56 @@ The database otherwise lives in the OS user-data directory (Settings shows the p
 
 **Upload → map → review → post.**
 
-1. **Source & file.** Say which module (actual / budget / forecast) and which source
-   report this file is, then choose it.
+1. **Source & file.** Say which module — actuals, budget, forecast, subcontractor
+   service lines or WBS structure — and which source report this file is, then choose
+   it.
 2. **Sheet & data date.** The parser finds the header row underneath any title block and
    guesses the as-of date from the file's own text or name. You confirm both.
 3. **Column mapping.** Columns are matched to canonical fields automatically — SAP's
    usual captions are already known (`WBS Element`, `Val/COArea Crcy`,
    `Name of offsetting account`, …). Correct anything wrong; saving the mapping makes the
    next upload of that report a single click.
-4. **Review & post.** Every row is validated into staging first. You see the row counts,
-   a control total to check against the report footer, which dimension members are new,
-   and every rejected row with a reason — before anything reaches the fact tables.
+4. **Review & post.** Every row is validated into staging first. You see the row
+   counts, how many subtotal rows were recognised and excluded, a control total to
+   check against the report footer, which dimension members are new, and every
+   rejected row with a reason — before anything reaches the fact tables.
 
 Analysis and Query library then read the posted data; both export to a formatted Excel
 workbook that carries a lineage sheet naming the query, the parameters and the row count.
+
+---
+
+## What the real SAP extracts taught us
+
+Three things in a genuine CJI3 export will quietly produce wrong numbers, and the
+importer handles all three. They are worth knowing about because they are not obvious.
+
+**A CJI3 export interleaves subtotal rows with detail.** In the sample we worked
+from, 181 of 6,628 rows were grand totals and per-cost-element subtotals — blank
+document number, real amount. Loading them naively inflates cost by roughly three
+times. Each source report declares which canonical fields identify a real data row
+(`detail_key_fields`); rows leaving them blank are staged as **SKIPPED**, counted on
+the review screen, and never posted. The remaining detail then sums to exactly the
+grand total printed in the file, which is the check worth making on every import.
+
+**A CJI3 export contains revenue, not just cost.** Income posts to 4xxxxxxx accounts
+as negative amounts against the same WBS. In the sample, summing the file gives
+102.5M — but that is cost *net of* 83.1M of billing. Actual cost is 185.6M. Cost
+elements are classified on import, `v_actual` holds cost alone, `v_revenue` holds
+income sign-flipped to positive, and `v_posting` holds both. The account pattern is a
+setting (Settings › Cost classification), because charts of accounts differ.
+
+**A subcontractor report is a sub-ledger, not extra cost.** It is the service-line
+detail behind purchase orders already posted in CJI3, so adding it to actuals
+double-counts. It lands in `fact_service_line`, joined to `fact_actual` by purchase
+order. The *PO reconciliation* analysis compares the two: on the sample, 45 of 46
+purchase orders agree to within 1 EGP, and the 46th correctly shows as having no
+service detail loaded yet.
+
+A fourth, smaller trap: in an SAP project structure export the **"Title" column holds
+the WBS code and "Description" holds its name**, and the root repeats at level 00 and
+01. The WBS master importer expects this, and rebuilds parent links, levels, the
+materialised path and leaf flags from the level column and row order.
 
 ---
 
@@ -74,13 +110,15 @@ workbook that carries a lineage sheet naming the query, the parameters and the r
 
 A star schema, deliberately conventional.
 
-**Facts** — `fact_actual` (one row per SAP posting line), `fact_budget` and
-`fact_forecast` (one row per WBS / cost element / scenario / period).
+**Facts** — `fact_actual` (one row per SAP posting line, cost and revenue alike),
+`fact_budget` and `fact_forecast` (one row per WBS / cost element / scenario /
+period), and `fact_service_line` (subcontractor detail beneath a PO, deliberately
+outside actuals).
 
 **Dimensions** — `dim_project`, `dim_wbs` (self-referencing hierarchy with a
-materialised path, so rollups are a single indexed `LIKE`), `dim_cost_element`,
-`dim_vendor`, `dim_period`, `dim_date`, `dim_currency`, and `dim_scenario` for budget and
-forecast versions.
+materialised path, so rollups are a single indexed `LIKE`), `dim_cost_element` (which
+carries `posting_nature`, the cost-or-revenue flag), `dim_vendor`, `dim_period`,
+`dim_date`, `dim_currency`, and `dim_scenario` for budget and forecast versions.
 
 **Lineage** — `source_system` → `report_definition` → `import_batch`. Every fact row
 points at the batch that created it, and every batch records its data date, file name,
@@ -90,6 +128,10 @@ is what makes superseding safe.
 **Staging** — `stg_row` holds the raw and mapped form of every row read, so a rejection
 can always be traced back to the cell it came from. `column_mapping` stores the per-report
 profile; `value_mapping` handles source values that need translating to a dimension member.
+
+**Views** — `v_actual` (cost), `v_revenue` (income, positive), `v_posting` (both),
+`v_budget`, `v_forecast`, `v_service_line`, `v_data_freshness`. Reports read views,
+never fact tables, which is what makes superseding and the cost/revenue split hold.
 
 **Queries** — `query_library` holds the SQL. Queries shipped with the app are marked
 `is_system` and refreshed on every start; anything you write is yours and never touched.
@@ -102,9 +144,16 @@ Query library: [`src/main/db/systemQueries.ts`](src/main/db/systemQueries.ts).
 
 ## What ships in the query library
 
-Actuals by WBS · by cost type · by vendor · monthly trend · line-item detail ·
-budget vs actual by WBS and by cost element · EAC vs budget with VAC · S-curve ·
-top overruns · portfolio summary · data freshness · import register · mapping coverage.
+*Cost* — actuals by WBS, by cost type, by vendor, by document type, monthly trend,
+line-item detail, and the WBS tree with actuals rolled up through the hierarchy.
+
+*Comparison* — budget vs actual by WBS and by cost element, EAC vs budget with VAC,
+S-curve, top overruns, portfolio summary, cost vs revenue with running margin.
+
+*Subcontract* — PO reconciliation (actuals against service lines), work by supplier,
+work by category, service-line detail, and coverage of actuals by loaded detail.
+
+*Governance* — data freshness, import register, mapping coverage.
 
 Each is a parameterised `SELECT` using named bindings (`:project_key`, `:period_to`, …).
 Write your own in the Query library page, or duplicate a system one to start from.

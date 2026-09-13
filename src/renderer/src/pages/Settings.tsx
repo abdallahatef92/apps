@@ -9,8 +9,20 @@ export function Settings() {
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ project_code: '', project_name: '', client_name: '', currency_code: 'USD', contract_value: '' });
+  const [revenuePattern, setRevenuePattern] = useState('^4');
 
-  useEffect(() => { api.app.info().then((r) => { if (r.ok) setInfo(r.data); }); }, []);
+  useEffect(() => {
+    api.app.info().then((r) => { if (r.ok) setInfo(r.data); });
+    api.settings.list().then((r) => {
+      if (r.ok) setRevenuePattern(r.data.find((x) => x.key === 'revenue_account_pattern')?.value ?? '^4');
+    });
+  }, []);
+
+  const saveClassification = () => guard(async () => {
+    await call(api.settings.set('revenue_account_pattern', revenuePattern));
+    const res = await call(api.settings.reclassify());
+    setNote(`Rule saved and applied to ${res.costElements} cost elements already loaded.`);
+  });
 
   const guard = async (fn: () => Promise<void>) => {
     setBusy(true); setError(null); setNote(null);
@@ -52,6 +64,26 @@ export function Settings() {
         <div className="row">
           <button className="btn" onClick={backup} disabled={busy}>Back up now</button>
           <button className="btn" onClick={openDb} disabled={busy}>Open another database…</button>
+        </div>
+      </div>
+
+      <div className="card">
+        <h3>Cost classification</h3>
+        <p className="hint">
+          A CJI3 export carries income as well as cost, posted as negative amounts. Cost elements
+          whose account matches this pattern are treated as revenue and kept out of actual cost —
+          otherwise billing would silently cancel out spend. The default <code className="mono">^4</code>
+          {' '}suits the usual SAP operating chart, where 4xxxxxxx is income and 3xxxxxxx is expense.
+        </p>
+        <div className="row">
+          <label className="field">
+            <span>Revenue account pattern (regular expression)</span>
+            <input value={revenuePattern} style={{ width: 200 }} className="mono"
+                   onChange={(e) => setRevenuePattern(e.target.value)} />
+          </label>
+          <button className="btn" onClick={saveClassification} disabled={busy}>
+            Save and reclassify
+          </button>
         </div>
       </div>
 

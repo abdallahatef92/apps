@@ -6,7 +6,7 @@ import { closeDatabase, currentDbPath, defaultDbPath, getDb, openDatabase } from
 import { runSelect, runStoredQuery } from './services/queryRunner';
 import { exportResult } from './services/exportExcel';
 import { readWorkbook } from './ingest/workbook';
-import { deleteBatch, loadColumnMapping, postBatch, saveColumnMapping, stageFile } from './ingest/importer';
+import { deleteBatch, loadColumnMapping, postBatch, revenueAccountPattern, saveColumnMapping, stageFile } from './ingest/importer';
 import { suggestMapping, targetFields } from './ingest/targetFields';
 import type { IpcResult, Module, QueryResult, StageRequest } from '../shared/types';
 
@@ -73,6 +73,37 @@ export function registerIpc(): void {
       .run(p.project_code.trim(), p.project_name.trim(), p.client_name ?? null,
         cur?.currency_key ?? null, p.contract_value ?? null);
     return { project_key: Number(info.lastInsertRowid) };
+  });
+
+  handle('settings:list', () =>
+    getDb().prepare('SELECT key, value FROM app_setting ORDER BY key').all());
+
+  handle('settings:set', (key: string, value: string) => {
+    getDb().prepare(`INSERT INTO app_setting (key, value) VALUES (?,?)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                                    updated_at = datetime('now')`)
+      .run(key, value);
+  });
+
+  /**
+   * Re-apply the cost/revenue rule to cost elements already in the warehouse, so
+   * changing the pattern fixes history instead of only affecting the next import.
+   */
+  handle('settings:reclassify', () => {
+    const db = getDb();
+    const pattern = revenueAccountPattern();
+    const rows = db.prepare('SELECT cost_element_key, cost_element_code FROM dim_cost_element')
+      .all() as { cost_element_key: number; cost_element_code: string }[];
+    const upd = db.prepare('UPDATE dim_cost_element SET posting_nature = ? WHERE cost_element_key = ?');
+    let changed = 0;
+    const run = db.transaction(() => {
+      for (const r of rows) {
+        const nature = pattern.test(r.cost_element_code) ? 'REVENUE' : 'COST';
+        changed += upd.run(nature, r.cost_element_key).changes;
+      }
+    });
+    run();
+    return { costElements: rows.length, updated: changed };
   });
 
   handle('reports:list', () =>

@@ -50,7 +50,11 @@ export function Dashboard() {
   const actual = Number(row?.actual_amount ?? 0);
   const eac = Number(row?.eac_amount ?? 0);
   const vac = Number(row?.vac_amount ?? 0);
-  const stale = freshness.filter((f) => f.freshness_status !== 'CURRENT');
+  // Without a budget there is nothing to vary from, so a variance would be a
+  // fiction the size of the spend. Say so instead.
+  const hasBudget = budget !== 0;
+  const stale = freshness.filter((f) => f.freshness_status === 'STALE');
+  const never = freshness.filter((f) => f.freshness_status === 'NO_DATA');
 
   return (
     <>
@@ -58,16 +62,23 @@ export function Dashboard() {
 
       {stale.length > 0 && (
         <div className="banner warn">
-          <strong>{stale.length}</strong>&nbsp;of {freshness.length} data sources are stale or empty —
-          figures below may not reflect the latest SAP position.
+          <strong>{stale.length}</strong>&nbsp;of {freshness.length} data sources
+          {stale.length === 1 ? ' has' : ' have'} gone stale — the figures below may not reflect the
+          latest SAP position.
+        </div>
+      )}
+      {stale.length === 0 && never.length > 0 && (
+        <div className="banner info">
+          {never.length} configured source{never.length === 1 ? ' has' : 's have'} never been
+          loaded. Everything that has been loaded is current.
         </div>
       )}
 
       <div className="grid k4" style={{ marginBottom: 16 }}>
         <div className="kpi">
           <div className="label">Budget</div>
-          <div className="value">{money(budget, project?.currency_code ?? '')}</div>
-          <div className="delta">Current approved version</div>
+          <div className="value">{hasBudget ? money(budget, project?.currency_code ?? '') : '—'}</div>
+          <div className="delta">{hasBudget ? 'Current approved version' : 'No budget loaded'}</div>
         </div>
         <div className="kpi">
           <div className="label">Actual to date</div>
@@ -77,14 +88,18 @@ export function Dashboard() {
         <div className="kpi">
           <div className="label">EAC</div>
           <div className="value">{money(eac, project?.currency_code ?? '')}</div>
-          <div className="delta">Actual + ETC</div>
+          <div className="delta">{eac === actual ? 'Actual only — no forecast loaded' : 'Actual + ETC'}</div>
         </div>
         <div className="kpi">
           <div className="label">Variance at completion</div>
-          <div className={`value ${vac < 0 ? 'bad' : vac > 0 ? 'good' : ''}`}>
-            {money(vac, project?.currency_code ?? '')}
+          <div className={`value ${hasBudget ? (vac < 0 ? 'bad' : vac > 0 ? 'good' : '') : ''}`}>
+            {hasBudget ? money(vac, project?.currency_code ?? '') : '—'}
           </div>
-          <div className="delta">{vac < 0 ? 'Projected overrun' : 'Projected underrun'}</div>
+          <div className="delta">
+            {hasBudget
+              ? (vac < 0 ? 'Projected overrun' : 'Projected underrun')
+              : 'Load a budget to measure variance'}
+          </div>
         </div>
       </div>
 

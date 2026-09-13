@@ -6,6 +6,11 @@ type Bridge = {
   db: { open(): Promise<IpcResult<{ changed: boolean; dbPath: string }>>; backup(): Promise<IpcResult<string | null>> };
   projects: { list(): Promise<IpcResult<any[]>>; create(p: unknown): Promise<IpcResult<{ project_key: number }>> };
   reports: { list(): Promise<IpcResult<any[]>> };
+  settings: {
+    list(): Promise<IpcResult<{ key: string; value: string }[]>>;
+    set(key: string, value: string): Promise<IpcResult<void>>;
+    reclassify(): Promise<IpcResult<{ costElements: number; updated: number }>>;
+  };
   freshness: { list(): Promise<IpcResult<any[]>> };
   batches: { list(limit?: number): Promise<IpcResult<any[]>>; issues(id: number, limit?: number): Promise<IpcResult<any[]>> };
   files: { pick(): Promise<IpcResult<string | null>>; preview(p: string): Promise<IpcResult<any>> };

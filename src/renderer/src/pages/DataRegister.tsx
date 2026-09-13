@@ -42,7 +42,8 @@ export function DataRegister() {
         <h3>Import register</h3>
         <p className="hint">
           Superseded batches stay in the database — their rows are simply excluded from reporting,
-          so an old position can always be explained.
+          so an old position can always be explained. "Skipped" counts subtotal rows the parser
+          recognised in the source report and deliberately left out.
         </p>
 
         <div className="table-wrap" style={{ maxHeight: 'calc(100vh - 270px)' }}>
@@ -51,13 +52,13 @@ export function DataRegister() {
               <tr>
                 <th className="num">#</th><th>Source report</th><th>Module</th>
                 <th>Data date</th><th>Period</th><th>File</th>
-                <th className="num">Rows</th><th className="num">Rejected</th>
+                <th className="num">Rows</th><th className="num">Skipped</th><th className="num">Rejected</th>
                 <th className="num">Control total</th><th>Status</th><th>Imported</th><th></th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 && (
-                <tr><td colSpan={12}><div className="empty">Nothing imported yet.</div></td></tr>
+                <tr><td colSpan={13}><div className="empty">Nothing imported yet.</div></td></tr>
               )}
               {rows.map((b) => (
                 <tr key={b.import_batch_id}>
@@ -70,6 +71,7 @@ export function DataRegister() {
                     {b.file_name}
                   </td>
                   <td className="num">{(b.row_count_posted || b.row_count_file).toLocaleString()}</td>
+                  <td className="num faint">{b.row_count_skipped || '—'}</td>
                   <td className="num">{b.row_count_rejected || '—'}</td>
                   <td className="num">{money(b.amount_total)}</td>
                   <td><span className={`badge ${STATUS_BADGE[b.status] ?? 'mute'}`}>{b.status}</span></td>

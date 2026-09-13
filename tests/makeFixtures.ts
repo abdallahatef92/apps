@@ -1,7 +1,11 @@
 import ExcelJS from 'exceljs';
 
 /**
- * Two fixtures shaped like the real thing: an SAP line-item actuals extract
+ * Fixtures shaped like the real thing. Cost element codes follow the usual SAP
+ * operating chart (3xxxxxxx expense, 4xxxxxxx income) because the classification
+ * rules depend on it.
+ *
+ * The first two: an SAP line-item actuals extract
  * (title block above the header, thousands separators, a parenthesised credit)
  * and a budget workbook.
  */
@@ -18,16 +22,16 @@ export async function makeActualsFile(path: string, dataDate: string): Promise<v
     'Quantity', 'UoM', 'Val/COArea Crcy', 'Currency', 'Posting Text']);
 
   const rows: unknown[][] = [
-    ['P-100.CIV.01', 'Foundations', '600100', 'Subcontract civil', '2026-01-18', '5100001', 'RE', 'Al Rashid Contracting', 120, 'M3', '1,240,500.00', 'USD', 'Concrete pour zone A'],
-    ['P-100.CIV.01', 'Foundations', '600100', 'Subcontract civil', '2026-02-11', '5100002', 'RE', 'Al Rashid Contracting', 80, 'M3', '820,000.00', 'USD', 'Concrete pour zone B'],
-    ['P-100.CIV.01', 'Foundations', '400200', 'Cement & aggregates', '2026-02-20', '5100003', 'KR', 'Gulf Materials', 400, 'TON', '96,750.50', 'USD', 'Cement delivery'],
-    ['P-100.MEC.01', 'Piping', '600200', 'Subcontract mechanical', '2026-02-28', '5100004', 'RE', 'Delta Mechanical', 1500, 'M', '2,105,000.00', 'USD', 'Pipe spool erection'],
-    ['P-100.MEC.01', 'Piping', '400300', 'Pipe & fittings', '2026-03-05', '5100005', 'KR', 'SteelCo', 900, 'M', '740,200.00', 'USD', 'Carbon steel pipe'],
-    ['P-100.MEC.01', 'Piping', '400300', 'Pipe & fittings', '2026-03-09', '5100006', 'KR', 'SteelCo', -20, 'M', '(16,450.00)', 'USD', 'Return of surplus pipe'],
-    ['P-100.ELE.01', 'Electrical', '600300', 'Subcontract electrical', '2026-03-14', '5100007', 'RE', 'Voltech', 1, 'LS', '415,300.00', 'USD', 'Cable tray installation'],
-    ['P-100.ELE.01', 'Electrical', '500100', 'Site labour', '2026-03-22', '5100008', 'SA', 'Internal payroll', 2400, 'HR', '187,600.00', 'USD', 'Direct labour March'],
-    ['P-100.CIV.02', 'Structures', '600100', 'Subcontract civil', '2026-03-27', '5100009', 'RE', 'Al Rashid Contracting', 60, 'TON', '1,015,900.00', 'USD', 'Steel structure erection'],
-    ['P-100.CIV.02', 'Structures', '600100', 'Subcontract civil', '2026-03-30', '5100010', 'RE', 'Al Rashid Contracting', 70, 'TON', '1,200,000.00', 'USD', 'Structure rework — variation order'],
+    ['P-100.CIV.01', 'Foundations', '30501100', 'Subcontract civil', '2026-01-18', '5100001', 'RE', 'Al Rashid Contracting', 120, 'M3', '1,240,500.00', 'USD', 'Concrete pour zone A'],
+    ['P-100.CIV.01', 'Foundations', '30501100', 'Subcontract civil', '2026-02-11', '5100002', 'RE', 'Al Rashid Contracting', 80, 'M3', '820,000.00', 'USD', 'Concrete pour zone B'],
+    ['P-100.CIV.01', 'Foundations', '30201100', 'Cement & aggregates', '2026-02-20', '5100003', 'KR', 'Gulf Materials', 400, 'TON', '96,750.50', 'USD', 'Cement delivery'],
+    ['P-100.MEC.01', 'Piping', '30501200', 'Subcontract mechanical', '2026-02-28', '5100004', 'RE', 'Delta Mechanical', 1500, 'M', '2,105,000.00', 'USD', 'Pipe spool erection'],
+    ['P-100.MEC.01', 'Piping', '30201200', 'Pipe & fittings', '2026-03-05', '5100005', 'KR', 'SteelCo', 900, 'M', '740,200.00', 'USD', 'Carbon steel pipe'],
+    ['P-100.MEC.01', 'Piping', '30201200', 'Pipe & fittings', '2026-03-09', '5100006', 'KR', 'SteelCo', -20, 'M', '(16,450.00)', 'USD', 'Return of surplus pipe'],
+    ['P-100.ELE.01', 'Electrical', '30501300', 'Subcontract electrical', '2026-03-14', '5100007', 'RE', 'Voltech', 1, 'LS', '415,300.00', 'USD', 'Cable tray installation'],
+    ['P-100.ELE.01', 'Electrical', '30301100', 'Site labour', '2026-03-22', '5100008', 'SA', 'Internal payroll', 2400, 'HR', '187,600.00', 'USD', 'Direct labour March'],
+    ['P-100.CIV.02', 'Structures', '30501100', 'Subcontract civil', '2026-03-27', '5100009', 'RE', 'Al Rashid Contracting', 60, 'TON', '1,015,900.00', 'USD', 'Steel structure erection'],
+    ['P-100.CIV.02', 'Structures', '30501100', 'Subcontract civil', '2026-03-30', '5100010', 'RE', 'Al Rashid Contracting', 70, 'TON', '1,200,000.00', 'USD', 'Structure rework — variation order'],
   ];
   rows.forEach((r) => ws.addRow(r));
   await wb.xlsx.writeFile(path);
@@ -42,13 +46,100 @@ export async function makeBudgetFile(path: string): Promise<void> {
     'Cost Element Description', 'Quantity', 'Unit', 'Unit Rate', 'Budget Amount']);
 
   const rows: unknown[][] = [
-    ['P-100.CIV.01', 'Foundations', 'Civil', '600100', 'Subcontract civil', 250, 'M3', 10000, 2500000],
-    ['P-100.CIV.01', 'Foundations', 'Civil', '400200', 'Cement & aggregates', 900, 'TON', 250, 225000],
-    ['P-100.CIV.02', 'Structures', 'Civil', '600100', 'Subcontract civil', 120, 'TON', 15000, 1800000],
-    ['P-100.MEC.01', 'Piping', 'Mechanical', '600200', 'Subcontract mechanical', 3000, 'M', 1400, 4200000],
-    ['P-100.MEC.01', 'Piping', 'Mechanical', '400300', 'Pipe & fittings', 3000, 'M', 550, 1650000],
-    ['P-100.ELE.01', 'Electrical', 'Electrical', '600300', 'Subcontract electrical', 1, 'LS', 900000, 900000],
-    ['P-100.ELE.01', 'Electrical', 'Electrical', '500100', 'Site labour', 12000, 'HR', 78, 936000],
+    ['P-100.CIV.01', 'Foundations', 'Civil', '30501100', 'Subcontract civil', 250, 'M3', 10000, 2500000],
+    ['P-100.CIV.01', 'Foundations', 'Civil', '30201100', 'Cement & aggregates', 900, 'TON', 250, 225000],
+    ['P-100.CIV.02', 'Structures', 'Civil', '30501100', 'Subcontract civil', 120, 'TON', 15000, 1800000],
+    ['P-100.MEC.01', 'Piping', 'Mechanical', '30501200', 'Subcontract mechanical', 3000, 'M', 1400, 4200000],
+    ['P-100.MEC.01', 'Piping', 'Mechanical', '30201200', 'Pipe & fittings', 3000, 'M', 550, 1650000],
+    ['P-100.ELE.01', 'Electrical', 'Electrical', '30501300', 'Subcontract electrical', 1, 'LS', 900000, 900000],
+    ['P-100.ELE.01', 'Electrical', 'Electrical', '30301100', 'Site labour', 12000, 'HR', 78, 936000],
+  ];
+  rows.forEach((r) => ws.addRow(r));
+  await wb.xlsx.writeFile(path);
+}
+
+/**
+ * A CJI3-shaped extract carrying the three traps a real SAP export contains:
+ *
+ *  - subtotal rows interleaved with detail (blank Document Number), which would
+ *    double-count if loaded;
+ *  - income postings on a 4xxxxxxx account as negative amounts, which would
+ *    silently net down actual cost;
+ *  - a purchase order on the subcontract lines, linking them to service detail.
+ */
+export async function makeCji3File(path: string): Promise<void> {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Data');
+
+  ws.addRow(['Cost Element', 'Cost element name', 'WBS Element', 'Project definition',
+    'Object', 'Posting Date', 'Document Number', 'Document Type', 'Purchasing Document',
+    'Offsetting Account', 'Name of offsetting account', 'Object Type',
+    'Total quantity', 'Posted unit of meas.', 'Val/COArea Crcy', 'CO area currency']);
+
+  // Grand total, then per-cost-element subtotals, interleaved as SAP prints them.
+  ws.addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', 500000, 'EGP']);
+  ws.addRow(['30501100', '', '', '', '', '', '', '', '', '', '', '', '', '', 1500000, 'EGP']);
+  ws.addRow(['30501100', 'Subcontractor Cost', 'P-100.CIV.01', 'P-100', 'P-100.CIV.01',
+    '2026-01-18', 'D1', 'SC', '4500001', 'V001', 'Al Rashid Contracting', 'WBS', 40, 'M3', 1000000, 'EGP']);
+  ws.addRow(['30501100', 'Subcontractor Cost', 'P-100.CIV.01', 'P-100', 'P-100.CIV.01',
+    '2026-02-11', 'D2', 'SC', '4500001', 'V001', 'Al Rashid Contracting', 'WBS', 20, 'M3', 500000, 'EGP']);
+  ws.addRow(['30201100', '', '', '', '', '', '', '', '', '', '', '', '', '', 200000, 'EGP']);
+  ws.addRow(['30201100', 'Main Material', 'P-100.MEC.01', 'P-100', 'P-100.MEC.01',
+    '2026-02-20', 'D3', 'WA', '', 'V002', 'Gulf Materials', 'WBS', 300, 'TON', 250000, 'EGP']);
+  ws.addRow(['30201100', 'Main Material', 'P-100.MEC.01', 'P-100', 'P-100.MEC.01',
+    '2026-03-05', 'D4', 'WA', '', 'V002', 'Gulf Materials', 'WBS', -60, 'TON', -50000, 'EGP']);
+  ws.addRow(['40101100', '', '', '', '', '', '', '', '', '', '', '', '', '', -1200000, 'EGP']);
+  ws.addRow(['40101100', 'Op contracts Income', 'P-100.CIV.01', 'P-100', 'P-100.CIV.01',
+    '2026-03-31', 'R1', 'RV', '', 'C001', 'Client billing', 'WBS', 0, '', -1200000, 'EGP']);
+
+  await wb.xlsx.writeFile(path);
+}
+
+/** Service lines beneath PO 4500001, reconciling exactly to its actual postings. */
+export async function makeSubcontractorFile(path: string): Promise<void> {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Data');
+
+  ws.addRow(['Profit Ctr', 'Invoice Serial (new)', 'Date', 'Pur. Doc.',
+    'Account Number of Supplier', 'Supplier', 'DocumentNo', 'Entry Sh.', 'Item', 'Line',
+    'Gross Price', 'Crcy', 'Service', 'Short Text 1', 'Total Quantity', 'BUn',
+    'Previous Quantity', 'Current Quantity', 'Progress %', 'VAT Current',
+    'SC Work Current Cost', 'SC Work Current + Vat', 'G/L Acct', 'WBS Element', 'Description']);
+
+  ws.addRow(['P-100', 'C1', '2026-01-18', '4500001', 'Al Rashid Contracting', 'V001',
+    '5100001', '1000001', 10, 1, 25000, 'EGP', 'S0302', 'Concrete pour zone A',
+    40, 'M3', 0, 40, 100, 140000, 1000000, 1140000, '30501100', 'P-100.CIV.01', 'DIV03 - CONCRETE']);
+  ws.addRow(['', 'C1 (1)', '', '', '', '', '', '', '', '', '', '', '', '',
+    40, '', 0, 40, 100, 140000, 1000000, 1140000, '', '', '']);
+  ws.addRow(['P-100', 'C2', '2026-02-11', '4500001', 'Al Rashid Contracting', 'V001',
+    '5100002', '1000002', 10, 1, 25000, 'EGP', 'S0302', 'Concrete pour zone B',
+    60, 'M3', 40, 20, 100, 70000, 500000, 570000, '30501100', 'P-100.CIV.01', 'DIV03 - CONCRETE']);
+  ws.addRow(['', 'C2 (1)', '', '', '', '', '', '', '', '', '', '', '', '',
+    60, '', 40, 20, 100, 70000, 500000, 570000, '', '', '']);
+
+  await wb.xlsx.writeFile(path);
+}
+
+/**
+ * A project structure export. Note the SAP caption trap this reproduces: "Title"
+ * carries the WBS code and "Description" carries its name, and the root is
+ * repeated at level 00 and 01.
+ */
+export async function makeWbsTreeFile(path: string): Promise<void> {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Sheet1');
+  ws.addRow(['.', 'Level', 'Description', 'Title', 'Start date', 'Basic fin.', 'Act. start', 'Actual End']);
+
+  const rows: unknown[][] = [
+    [1, '00', 'Test Plant', 'P-100', '2026-01-01', '2026-12-31', '2026-01-05', ''],
+    [2, '01', 'Test Plant', 'P-100', '2026-01-01', '2026-12-31', '2026-01-05', ''],
+    [3, '02', 'Civil works', 'P-100.CIV', '2026-01-01', '2026-06-30', '2026-01-05', ''],
+    [4, '03', 'Foundations', 'P-100.CIV.01', '2026-01-01', '2026-03-31', '2026-01-05', '2026-03-28'],
+    [5, '03', 'Structures', 'P-100.CIV.02', '2026-02-01', '2026-06-30', '', ''],
+    [6, '02', 'Mechanical works', 'P-100.MEC', '2026-02-01', '2026-09-30', '2026-02-10', ''],
+    [7, '03', 'Piping', 'P-100.MEC.01', '2026-02-01', '2026-08-31', '2026-02-10', ''],
+    [8, '02', 'Electrical works', 'P-100.ELE', '2026-03-01', '2026-10-31', '', ''],
+    [9, '03', 'Electrical', 'P-100.ELE.01', '2026-03-01', '2026-10-31', '', ''],
   ];
   rows.forEach((r) => ws.addRow(r));
   await wb.xlsx.writeFile(path);

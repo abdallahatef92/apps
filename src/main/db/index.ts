@@ -6,11 +6,24 @@ import { dirname, join } from 'node:path';
 
 import coreSql from './migrations/001_core.sql?raw';
 import seedSql from './migrations/002_seed.sql?raw';
+import sapRealitySql from './migrations/003_sap_reality.sql?raw';
 import { SYSTEM_QUERIES } from './systemQueries';
 
-const MIGRATIONS: { version: number; name: string; sql: string }[] = [
+interface Migration {
+  version: number;
+  name: string;
+  sql: string;
+  /**
+   * Set when the SQL manages its own transaction — needed for a table rebuild,
+   * because `PRAGMA foreign_keys` is a no-op inside an open transaction.
+   */
+  selfTransacting?: boolean;
+}
+
+const MIGRATIONS: Migration[] = [
   { version: 1, name: '001_core', sql: coreSql },
   { version: 2, name: '002_seed', sql: seedSql },
+  { version: 3, name: '003_sap_reality', sql: sapRealitySql, selfTransacting: true },
 ];
 
 let db: DB | null = null;
@@ -61,13 +74,24 @@ function migrate(conn: DB): void {
     conn.prepare('SELECT version FROM schema_migration').all().map((r: any) => r.version as number),
   );
 
+  const record = conn.prepare('INSERT INTO schema_migration (version, name) VALUES (?, ?)');
+
   for (const m of MIGRATIONS) {
     if (applied.has(m.version)) continue;
-    const run = conn.transaction(() => {
+    if (m.selfTransacting) {
       conn.exec(m.sql);
-      conn.prepare('INSERT INTO schema_migration (version, name) VALUES (?, ?)').run(m.version, m.name);
-    });
-    run();
+      record.run(m.version, m.name);
+    } else {
+      const run = conn.transaction(() => {
+        conn.exec(m.sql);
+        record.run(m.version, m.name);
+      });
+      run();
+    }
+    const violations = conn.pragma('foreign_key_check') as unknown[];
+    if (violations.length > 0) {
+      throw new Error(`Migration ${m.name} left ${violations.length} foreign key violation(s).`);
+    }
     console.log(`[db] applied migration ${m.name}`);
   }
 }

@@ -34,12 +34,27 @@ const REQUIRED: Record<string, string[]> = {
   BUDGET: ['wbs_code', 'budget_amount'],
   FORECAST: ['wbs_code', 'forecast_amount'],
   COMMITMENT: ['wbs_code', 'amount'],
+  SERVICE: ['wbs_code', 'po_no', 'amount_net'],
   MASTER: ['wbs_code'],
 };
 
 const AMOUNT_FIELD: Record<string, string> = {
-  ACTUAL: 'amount', BUDGET: 'budget_amount', FORECAST: 'forecast_amount', COMMITMENT: 'amount', MASTER: '',
+  ACTUAL: 'amount', BUDGET: 'budget_amount', FORECAST: 'forecast_amount',
+  COMMITMENT: 'amount', SERVICE: 'amount_net', MASTER: '',
 };
+
+/**
+ * A subtotal row leaves the report's key fields blank while still carrying an
+ * amount. Loading one would count the same money twice, so such rows are
+ * recognised, staged as SKIPPED and reported back to the user.
+ */
+function isSubtotalRow(c: Canonical, detailKeyFields: string[]): boolean {
+  if (detailKeyFields.length === 0) return false;
+  return detailKeyFields.every((f) => {
+    const v = c[f];
+    return v === null || v === undefined || String(v).trim() === '';
+  });
+}
 
 function validateRow(module: Module, c: Canonical, rowNo: number, batchPeriod: string | null,
                      batchProject: number | null): ValidationIssue[] {
@@ -63,7 +78,7 @@ function validateRow(module: Module, c: Canonical, rowNo: number, batchPeriod: s
     issues.push({ rowNo, severity: 'ERROR', message: 'No project on the row and none chosen for the file.' });
   }
 
-  if (module === 'ACTUAL') {
+  if (module === 'ACTUAL' || module === 'COMMITMENT') {
     const fromPostingDate = toDate(c.posting_date)?.slice(0, 7) ?? null;
     const period = toPeriod(c.period_key) ?? fromPostingDate ?? batchPeriod;
     if (!period) {
@@ -108,8 +123,15 @@ export async function stageFile(req: StageRequest, importedBy: string | null): P
   const insStg = db.prepare(
     `INSERT INTO stg_row (import_batch_id, row_no, raw_json, status, message) VALUES (?,?,?,?,?)`);
 
+  // A detail-key rule can only be judged on fields the file actually supplies.
+  // Without this, a report whose key column is missing would have every row read
+  // as a subtotal and nothing would import.
+  const mappedFields = new Set(req.mapping.filter((m) => m.source_column).map((m) => m.target_field));
+  const detailKeyFields = (req.detailKeyFields ?? loadDetailKeyFields(req.reportDefinitionId))
+    .filter((f) => mappedFields.has(f));
+
   const issues: ValidationIssue[] = [];
-  let valid = 0, warn = 0, error = 0, amountTotal = 0;
+  let valid = 0, warn = 0, error = 0, skipped = 0, amountTotal = 0;
   const unresolvedWbs = new Set<string>();
   const unresolvedCe = new Set<string>();
 
@@ -119,6 +141,14 @@ export async function stageFile(req: StageRequest, importedBy: string | null): P
     rows.forEach((raw, i) => {
       const rowNo = i + 1;
       const mapped = applyMapping(raw, req.mapping);
+
+      if (isSubtotalRow(mapped, detailKeyFields)) {
+        skipped++;
+        insStg.run(batchId, rowNo, JSON.stringify({ raw, mapped }), 'SKIPPED',
+          `Subtotal or non-data row: ${detailKeyFields.join(', ')} empty.`);
+        return;
+      }
+
       const rowIssues = validateRow(req.module, mapped, rowNo, req.periodKey, req.projectKey);
       const hasError = rowIssues.some((x) => x.severity === 'ERROR');
 
@@ -139,8 +169,10 @@ export async function stageFile(req: StageRequest, importedBy: string | null): P
     });
 
     db.prepare(`UPDATE import_batch
-                SET row_count_rejected = ?, amount_total = ?, status = 'MAPPED' WHERE import_batch_id = ?`)
-      .run(error, amountTotal, batchId);
+                SET row_count_rejected = ?, row_count_skipped = ?, amount_total = ?,
+                    status = 'MAPPED'
+                WHERE import_batch_id = ?`)
+      .run(error, skipped, amountTotal, batchId);
 
     if (req.saveMapping) saveColumnMapping(req.reportDefinitionId, req.mapping);
   });
@@ -156,6 +188,7 @@ export async function stageFile(req: StageRequest, importedBy: string | null): P
     validCount: valid,
     warnCount: warn,
     errorCount: error,
+    skippedCount: skipped,
     amountTotal,
     issues: issues.slice(0, 200),
     unresolved: [
@@ -163,6 +196,19 @@ export async function stageFile(req: StageRequest, importedBy: string | null): P
       { dimension: 'COST_ELEMENT', values: newCe.slice(0, 100) },
     ].filter((u) => u.values.length > 0),
   };
+}
+
+/** The report's declared detail-key fields, used to recognise subtotal rows. */
+export function loadDetailKeyFields(reportDefinitionId: number): string[] {
+  const row = getDb().prepare('SELECT detail_key_fields FROM report_definition WHERE report_definition_id = ?')
+    .get(reportDefinitionId) as { detail_key_fields: string } | undefined;
+  if (!row?.detail_key_fields) return [];
+  try {
+    const parsed = JSON.parse(row.detail_key_fields);
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
 }
 
 function filterUnknown(values: string[], sql: string): string[] {
@@ -197,6 +243,7 @@ export function loadColumnMapping(reportDefinitionId: number): ColumnMappingEntr
 // ---------------------------------------------------------------------------
 
 class DimCache {
+  private readonly revenue = revenueAccountPattern();
   private project = new Map<string, number>();
   private wbs = new Map<string, number>();
   private costElement = new Map<string, number>();
@@ -252,13 +299,24 @@ class DimCache {
     const db = getDb();
     const row = db.prepare('SELECT cost_element_key FROM dim_cost_element WHERE cost_element_code = ?')
       .get(code) as any;
-    const normType = normaliseCostType(costType);
+    const nature = classifyNature(code, name, this.revenue);
+    // A column such as SAP's "Object Type" reads as a cost type but says nothing
+    // useful, so a vague OTHER never beats what the account range tells us.
+    const stated = normaliseCostType(costType);
+    const type = nature === 'REVENUE'
+      ? null
+      : (stated && stated !== 'OTHER' ? stated : costTypeFromCode(code) ?? stated);
     const key = row?.cost_element_key ?? Number(
-      db.prepare('INSERT INTO dim_cost_element (cost_element_code, cost_element_name, cost_type) VALUES (?,?,?)')
-        .run(code, name || code, normType).lastInsertRowid);
-    if (row && normType) {
-      db.prepare('UPDATE dim_cost_element SET cost_type = COALESCE(cost_type, ?) WHERE cost_element_key = ?')
-        .run(normType, key);
+      db.prepare(`INSERT INTO dim_cost_element
+        (cost_element_code, cost_element_name, cost_type, posting_nature) VALUES (?,?,?,?)`)
+        .run(code, name || code, type, nature).lastInsertRowid);
+    if (row) {
+      db.prepare(`UPDATE dim_cost_element
+                  SET cost_element_name = COALESCE(NULLIF(cost_element_name, cost_element_code), ?, cost_element_name),
+                      cost_type = COALESCE(cost_type, ?),
+                      posting_nature = ?
+                  WHERE cost_element_key = ?`)
+        .run(name ?? null, type, nature, key);
     }
     this.costElement.set(code, key);
     return key;
@@ -307,6 +365,49 @@ function normaliseCostType(v: unknown): string | null {
   return 'OTHER';
 }
 
+/** Default account pattern for income, matching the usual SAP operating chart. */
+export const DEFAULT_REVENUE_ACCOUNT_PATTERN = '^4';
+
+/**
+ * The account pattern that marks a cost element as income.
+ *
+ * Chart of accounts differ between installations, so this is a setting rather
+ * than a constant. Settings › Cost classification exposes it.
+ */
+export function revenueAccountPattern(): RegExp {
+  const row = getDb().prepare("SELECT value FROM app_setting WHERE key = 'revenue_account_pattern'")
+    .get() as { value: string } | undefined;
+  try {
+    return new RegExp(row?.value || DEFAULT_REVENUE_ACCOUNT_PATTERN);
+  } catch {
+    return new RegExp(DEFAULT_REVENUE_ACCOUNT_PATTERN);
+  }
+}
+
+/**
+ * Cost or revenue?
+ *
+ * A CJI3 export contains both, with income posted as a negative amount, so
+ * treating the file total as "actual cost" understates cost by the revenue
+ * billed. Marking the cost element is what lets `v_actual` hold cost alone.
+ */
+function classifyNature(code: string, name: string | null | undefined, revenue: RegExp): 'COST' | 'REVENUE' {
+  if (revenue.test(code)) return 'REVENUE';
+  if (name && /\b(income|revenue|billing|turnover|sales)\b/i.test(name)) return 'REVENUE';
+  return 'COST';
+}
+
+/** Cost type inferred from the SAP account range when the file does not say. */
+function costTypeFromCode(code: string): string | null {
+  if (/^301/.test(code)) return 'EQUIPMENT';   // equipment rent, spares, fuel, in-house plant
+  if (/^302/.test(code)) return 'MATERIAL';    // main and consumable material
+  if (/^303/.test(code)) return 'LABOR';       // salaries and wages
+  if (/^305/.test(code)) return 'SUBCONTRACT'; // subcontractor cost, casual labour
+  if (/^30[467]/.test(code)) return 'INDIRECT';// site overheads, fees, charges
+  if (/^3/.test(code)) return 'OTHER';
+  return null;
+}
+
 function ensurePeriod(periodKey: string): string {
   const db = getDb();
   const exists = db.prepare('SELECT 1 FROM dim_period WHERE period_key = ?').get(periodKey);
@@ -336,9 +437,11 @@ export function postBatch(batchId: number): PostResult {
   if (!batch) throw new Error(`Batch ${batchId} not found.`);
   if (batch.status === 'POSTED') throw new Error(`Batch ${batchId} is already posted.`);
 
+  // Only VALID rows post. ERROR rows failed validation and SKIPPED rows are the
+  // report's own subtotals — posting either would corrupt the numbers.
   const staged = db.prepare(
     `SELECT stg_row_id, row_no, raw_json FROM stg_row
-     WHERE import_batch_id = ? AND status <> 'ERROR' ORDER BY row_no`).all(batchId) as any[];
+     WHERE import_batch_id = ? AND status = 'VALID' ORDER BY row_no`).all(batchId) as any[];
 
   const dims = new DimCache();
   let posted = 0;
@@ -380,14 +483,15 @@ export function postBatch(batchId: number): PostResult {
         db.prepare(`INSERT INTO fact_actual
           (import_batch_id, project_key, wbs_key, cost_element_key, vendor_key, currency_key,
            posting_date_key, document_date_key, period_key, document_no, document_type,
-           reference_no, description, quantity, uom, amount, source_row_no)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+           reference_no, po_no, description, quantity, uom, amount, source_row_no)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
           batchId, projectKey, wbsKey, ceKey,
           dims.vendorKey(toText(mapped.vendor_code), toText(mapped.vendor_name)), currencyKey,
           postingDate ? Number(postingDate.replace(/-/g, '')) : null,
           docDate ? Number(docDate.replace(/-/g, '')) : null,
           period,
-          toText(mapped.document_no), toText(mapped.document_type), null,
+          toText(mapped.document_no), toText(mapped.document_type),
+          toText(mapped.reference_no), toText(mapped.po_no),
           toText(mapped.description), toNumber(mapped.quantity), toText(mapped.uom),
           toNumber(mapped.amount) ?? 0, s.row_no);
         posted++;
@@ -403,6 +507,30 @@ export function postBatch(batchId: number): PostResult {
           toNumber(mapped.budget_quantity), toText(mapped.uom), toNumber(mapped.unit_rate),
           toNumber(mapped.budget_amount) ?? 0, toText(mapped.description), s.row_no);
         posted++;
+      } else if (batch.module === 'SERVICE') {
+        const certDate = toDate(mapped.invoice_date);
+        const period = toPeriod(mapped.period_key) ?? certDate?.slice(0, 7) ?? batch.period_key;
+        if (period) ensurePeriod(period);
+        db.prepare(`INSERT INTO fact_service_line
+          (import_batch_id, project_key, wbs_key, cost_element_key, vendor_key, currency_key,
+           period_key, po_no, invoice_no, entry_sheet_no, invoice_serial, invoice_date_key,
+           item_no, line_no, service_code, service_text, category, contract_type, uom,
+           unit_rate, quantity_total, quantity_previous, quantity_current, progress_pct,
+           amount_net, amount_vat, amount_gross, source_row_no)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+          batchId, projectKey, wbsKey, ceKey,
+          dims.vendorKey(toText(mapped.vendor_code), toText(mapped.vendor_name)), currencyKey,
+          period, toText(mapped.po_no), toText(mapped.invoice_no), toText(mapped.entry_sheet_no),
+          toText(mapped.invoice_serial), certDate ? Number(certDate.replace(/-/g, '')) : null,
+          toText(mapped.item_no), toText(mapped.line_no), toText(mapped.service_code),
+          toText(mapped.service_text), toText(mapped.category), toText(mapped.contract_type),
+          toText(mapped.uom), toNumber(mapped.unit_rate), toNumber(mapped.quantity_total),
+          toNumber(mapped.quantity_previous), toNumber(mapped.quantity_current),
+          toNumber(mapped.progress_pct), toNumber(mapped.amount_net) ?? 0,
+          toNumber(mapped.amount_vat), toNumber(mapped.amount_gross), s.row_no);
+        posted++;
+      } else if (batch.module === 'MASTER') {
+        // Handled after the row loop, because the hierarchy needs the whole file.
       } else if (batch.module === 'FORECAST') {
         const scenarioKey = ensureScenario(projectKey, 'FORECAST', batch.data_date);
         const period = toPeriod(mapped.period_key) ?? batch.period_key;
@@ -420,6 +548,10 @@ export function postBatch(batchId: number): PostResult {
       }
     }
 
+    if (batch.module === 'MASTER') {
+      posted = postWbsMaster(batchId, batch, staged);
+    }
+
     supersedePrevious(batchId, batch);
 
     db.prepare(`UPDATE import_batch
@@ -431,6 +563,86 @@ export function postBatch(batchId: number): PostResult {
   run();
 
   return { importBatchId: batchId, posted, rejected: rejected.n };
+}
+
+/**
+ * Rebuild the cost breakdown structure from a project structure export.
+ *
+ * The file gives a level per row and lists rows in outline order, so the parent
+ * of a row is the nearest row above it one level shallower. That yields
+ * parent_wbs_key, wbs_level, a materialised wbs_path and the leaf flag — which is
+ * what makes a rollup a single indexed prefix match instead of a recursive query.
+ *
+ * This updates dimension rows rather than writing facts, so it is idempotent: a
+ * re-issued structure re-parents and renames in place and existing postings keep
+ * pointing at the same wbs_key.
+ */
+function postWbsMaster(batchId: number, batch: any, staged: any[]): number {
+  const db = getDb();
+  const projectKey: number | null = batch.project_key;
+  if (!projectKey) throw new Error('A WBS structure import needs a project selected for the file.');
+
+  interface Node { code: string; name: string | null; level: number; key: number;
+                   path: string; parent: number | null }
+  const stack: Node[] = [];
+  let written = 0;
+
+  for (const s of staged) {
+    const { mapped } = JSON.parse(s.raw_json) as { mapped: Canonical };
+    const code = toText(mapped.wbs_code);
+    if (!code) continue;
+
+    // Fall back to the code's own punctuation depth when the file has no level.
+    const declared = toNumber(mapped.wbs_level);
+    const level = declared === null ? code.split(/[.\-/]/).length - 1 : declared;
+
+    while (stack.length > 0 && stack[stack.length - 1].level >= level) stack.pop();
+    const parent = stack.length > 0 ? stack[stack.length - 1] : null;
+
+    // The root of an SAP structure export is often repeated at level 00 and 01.
+    if (parent && parent.code === code) continue;
+
+    const existing = db.prepare('SELECT wbs_key FROM dim_wbs WHERE project_key = ? AND wbs_code = ?')
+      .get(projectKey, code) as any;
+
+    const name = toText(mapped.wbs_name) ?? code;
+    const path = `${parent ? parent.path : '/'}${code}/`;
+    const attrs = [name, parent?.key ?? null, level, path,
+      toDate(mapped.planned_start), toDate(mapped.planned_finish),
+      toDate(mapped.actual_start), toDate(mapped.actual_finish),
+      toText(mapped.discipline), toText(mapped.package), written];
+
+    let key: number;
+    if (existing) {
+      key = existing.wbs_key;
+      db.prepare(`UPDATE dim_wbs SET
+          wbs_name = ?, parent_wbs_key = ?, wbs_level = ?, wbs_path = ?,
+          planned_start = ?, planned_finish = ?, actual_start = ?, actual_finish = ?,
+          discipline = COALESCE(?, discipline), package = COALESCE(?, package),
+          sort_order = ?
+        WHERE wbs_key = ?`).run(...attrs, key);
+    } else {
+      key = Number(db.prepare(`INSERT INTO dim_wbs
+        (project_key, wbs_code, wbs_name, parent_wbs_key, wbs_level, wbs_path,
+         planned_start, planned_finish, actual_start, actual_finish,
+         discipline, package, sort_order)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+        .run(projectKey, code, ...attrs).lastInsertRowid);
+    }
+
+    stack.push({ code, name, level, key, path, parent: parent?.key ?? null });
+    written++;
+  }
+
+  // A node is a leaf when nothing in this project names it as a parent.
+  db.prepare(`UPDATE dim_wbs SET is_leaf =
+      CASE WHEN EXISTS (SELECT 1 FROM dim_wbs c WHERE c.parent_wbs_key = dim_wbs.wbs_key)
+           THEN 0 ELSE 1 END
+    WHERE project_key = ?`).run(projectKey);
+
+  db.prepare(`UPDATE stg_row SET status = 'POSTED' WHERE import_batch_id = ? AND status = 'VALID'`)
+    .run(batchId);
+  return written;
 }
 
 function supersedePrevious(batchId: number, batch: any): void {
@@ -480,6 +692,7 @@ export function deleteBatch(batchId: number): void {
     db.prepare('DELETE FROM fact_actual WHERE import_batch_id = ?').run(batchId);
     db.prepare('DELETE FROM fact_budget WHERE import_batch_id = ?').run(batchId);
     db.prepare('DELETE FROM fact_forecast WHERE import_batch_id = ?').run(batchId);
+    db.prepare('DELETE FROM fact_service_line WHERE import_batch_id = ?').run(batchId);
     db.prepare('DELETE FROM stg_row WHERE import_batch_id = ?').run(batchId);
     db.prepare('UPDATE import_batch SET superseded_by = NULL WHERE superseded_by = ?').run(batchId);
     db.prepare('DELETE FROM import_batch WHERE import_batch_id = ?').run(batchId);
