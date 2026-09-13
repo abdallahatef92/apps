@@ -23,10 +23,19 @@ Read `README.md` first for the data model and the reasoning behind it.
 - **Source reports interleave subtotal rows.** Anything that reads a spreadsheet must
   respect `report_definition.detail_key_fields`; rows with those fields blank are
   SKIPPED, and only rows with `stg_row.status = 'VALID'` may post.
-- **Superseding is scoped by the rows, not by the wizard.** `import_batch.project_key`
-  is only a hint for files with no project column and legitimately differs between two
-  uploads of the same file, so `supersedePrevious` compares the projects the facts
-  actually landed on. Never key replacement logic on the batch's declared project.
+- **A posting line owns its identity.** `NATURAL_KEY` in `importer.ts` names the fields
+  that identify a row (for a CO line item: document number + posting row + fiscal year,
+  which is SAP's BELNR + BUZEI + GJAHR). It is stored as `line_uid`, unique per project,
+  and posting upserts on it, so extracts that overlap — a report split by month, or
+  re-run over a wider period — merge instead of accumulating. Never dedupe by file, by
+  period, or by batch when the rows carry a key.
+- **Never trust a key that repeats.** If `line_uid` collides inside one file, the key
+  does not identify a line and using it would silently drop real rows. `postBatch` falls
+  back to plain inserts plus batch superseding, and the import screen says so.
+- **Batch superseding is the fallback only.** It runs when a source has no usable line
+  identity. It is scoped by the projects the facts actually landed on, never by
+  `import_batch.project_key` — that is a wizard hint and differs between two uploads of
+  the same file.
 - **Nothing reaches a fact table without passing through staging.** Read → map →
   validate into `stg_row` → post. The user must be able to see what will happen first.
 - **The renderer has no Node and no database access.** Everything crosses via a channel

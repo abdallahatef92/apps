@@ -67,8 +67,16 @@ const ACTUAL_FIELDS: FieldDef[] = [
     description: 'Date on the source document.',
     synonyms: ['document date', 'doc date', 'invoice date'] },
   { field: 'document_no', label: 'Document number', type: 'text', required: false,
-    description: 'SAP document / reference number.',
+    description: 'SAP CO document number. Part of the line identity that stops a re-import duplicating.',
     synonyms: ['document no', 'document number', 'doc no', 'docno', 'ref document', 'reference'] },
+  { field: 'document_line', label: 'Posting row', type: 'text', required: false,
+    description: 'Line number within the document. Together with the document number and fiscal '
+      + 'year this identifies the posting uniquely, so re-importing replaces rather than adds.',
+    synonyms: ['posting row', 'document line', 'line item', 'buzei', 'item no', 'row'] },
+  { field: 'fiscal_year', label: 'Fiscal year', type: 'text', required: false,
+    description: 'Fiscal year of the posting. Completes the line identity — document numbers '
+      + 'restart each year.',
+    synonyms: ['fiscal year', 'gjahr', 'year'] },
   { field: 'document_type', label: 'Document type', type: 'text', required: false,
     description: 'SAP document type (RE, KR, SA, RV …).',
     synonyms: ['document type', 'doc type', 'dtype', 'cotype', 'co document type'] },

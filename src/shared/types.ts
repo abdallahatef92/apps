@@ -138,12 +138,30 @@ export interface StageResult {
   unresolved: { dimension: string; values: string[] }[];
   /** Set when a batch with byte-identical file content already exists. */
   duplicateOf: { importBatchId: number; fileName: string; dataDate: string; status: string } | null;
+  /**
+   * Whether the file carries an identity per line. With one, re-importing an
+   * overlapping extract replaces those lines; without one, rows can only be added.
+   */
+  lineKey: {
+    /** Fields that would identify a line for this module. */
+    expected: string[];
+    /** Of those, the ones this file supplies. */
+    used: string[];
+    usable: boolean;
+    duplicatesInFile: number;
+    willReplace: number;
+  };
 }
 
 export interface PostResult {
   importBatchId: number;
+  /** Rows written: new lines plus lines replaced in place. */
   posted: number;
+  /** Of those, how many replaced a line already in the warehouse. */
+  replaced: number;
   rejected: number;
+  /** True when replacement was by line identity rather than by superseding the batch. */
+  byLineKey: boolean;
 }
 
 export interface BatchRow {

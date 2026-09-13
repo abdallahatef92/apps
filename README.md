@@ -149,6 +149,15 @@ order. The *PO reconciliation* analysis compares the two: on the sample, 45 of 4
 purchase orders agree to within 1 EGP, and the 46th correctly shows as having no
 service detail loaded yet.
 
+These reports are also rarely loaded whole. An extract gets split by month, or re-run
+over a wider period, and the parts overlap. Replacing a whole batch cannot express that:
+it either loses the months the new file did not cover, or duplicates the ones it did.
+So identity lives on the line rather than the file — `document number + posting row +
+fiscal year` for a CO line item, `PO + invoice + item + line` for a service line, both
+verified unique across the real extracts. Import upserts on it. If that key turns out to
+repeat within a file, it is not identifying anything, so it is refused rather than used
+to silently drop rows.
+
 A fourth, smaller trap: in an SAP project structure export the **"Title" column holds
 the WBS code and "Description" holds its name**, and the root repeats at level 00 and
 01. The WBS master importer expects this, and rebuilds parent links, levels, the

@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path';
 import coreSql from './migrations/001_core.sql?raw';
 import seedSql from './migrations/002_seed.sql?raw';
 import sapRealitySql from './migrations/003_sap_reality.sql?raw';
+import lineIdentitySql from './migrations/004_line_identity.sql?raw';
 import { SYSTEM_QUERIES } from './systemQueries';
 
 interface Migration {
@@ -24,6 +25,7 @@ const MIGRATIONS: Migration[] = [
   { version: 1, name: '001_core', sql: coreSql },
   { version: 2, name: '002_seed', sql: seedSql },
   { version: 3, name: '003_sap_reality', sql: sapRealitySql, selfTransacting: true },
+  { version: 4, name: '004_line_identity', sql: lineIdentitySql },
 ];
 
 let db: DB | null = null;

@@ -431,13 +431,48 @@ export function Upload({ onDone }: { onDone: () => void }) {
             </div>
           </div>
 
-          {!posted && staged.duplicateOf && (
+          {!posted && (
+            <div className={`banner ${staged.lineKey.usable ? 'info' : 'warn'}`}>
+              <div>
+                {staged.lineKey.usable ? (
+                  <>
+                    <strong>Each row is identified by {staged.lineKey.used.join(' + ')}.</strong>{' '}
+                    {staged.lineKey.willReplace > 0
+                      ? <>{staged.lineKey.willReplace.toLocaleString()} of these lines are already in
+                          the warehouse and will be updated in place; the remaining
+                          &nbsp;{(staged.validCount - staged.lineKey.willReplace).toLocaleString()} are new.
+                          Overlapping extracts merge, so nothing is counted twice.</>
+                      : <>None of these lines are in the warehouse yet, so all
+                          &nbsp;{staged.validCount.toLocaleString()} are new. Re-importing an
+                          overlapping extract later will update them rather than add to them.</>}
+                  </>
+                ) : (
+                  <>
+                    <strong>No usable line identity in this file.</strong>{' '}
+                    {staged.lineKey.duplicatesInFile > 0
+                      ? <>{staged.lineKey.used.join(' + ')} repeats on
+                          &nbsp;{staged.lineKey.duplicatesInFile.toLocaleString()} row(s), so it cannot
+                          tell one posting from another.</>
+                      : <>Nothing identifies an individual row.</>}
+                    {staged.lineKey.expected.length > 0 && (
+                      <> Map {staged.lineKey.expected.join(', ')} to let re-imports merge instead of
+                        adding. Without it, a later overlapping extract can only replace this whole
+                        import, not merge with it.</>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {!posted && staged.duplicateOf && !staged.lineKey.usable && (
             <div className="banner err">
               <div>
                 <strong>This file has already been imported.</strong> Batch
                 &nbsp;#{staged.duplicateOf.importBatchId} ({staged.duplicateOf.fileName}, data date
                 &nbsp;{staged.duplicateOf.dataDate}) has byte-for-byte identical content and is
-                &nbsp;{staged.duplicateOf.status}. Posting it again would count the same cost twice.
+                &nbsp;{staged.duplicateOf.status}. With no line identity to merge on, posting it
+                again would count the same cost twice.
                 <div style={{ marginTop: 8 }}>
                   <label className="row" style={{ gap: 8, alignItems: 'center' }}>
                     <input type="checkbox" checked={allowDuplicate} style={{ width: 16 }}
@@ -449,11 +484,23 @@ export function Upload({ onDone }: { onDone: () => void }) {
             </div>
           )}
 
+          {!posted && staged.duplicateOf && staged.lineKey.usable && (
+            <div className="banner info">
+              The same file was imported before as batch #{staged.duplicateOf.importBatchId}.
+              Because every row carries a line identity, posting it again rewrites those same lines
+              rather than adding to them.
+            </div>
+          )}
+
           {posted ? (
             <div className="banner ok">
-              Posted {posted.posted.toLocaleString()} rows into the warehouse as batch
-              &nbsp;<strong>#{posted.importBatchId}</strong> with data date {dataDate}.
-              Any earlier posting of this report for the same period has been superseded.
+              Posted {posted.posted.toLocaleString()} rows as batch
+              &nbsp;<strong>#{posted.importBatchId}</strong> with data date {dataDate}
+              {posted.byLineKey
+                ? <> — {posted.replaced.toLocaleString()} updated an existing line and
+                    &nbsp;{(posted.posted - posted.replaced).toLocaleString()} were new.</>
+                : <>. This source has no line identity, so any earlier posting of the same report
+                    and period was superseded wholesale.</>}
             </div>
           ) : (
             <div className="banner info">

@@ -66,31 +66,69 @@ export async function makeBudgetFile(path: string): Promise<void> {
  *  - income postings on a 4xxxxxxx account as negative amounts, which would
  *    silently net down actual cost;
  *  - a purchase order on the subcontract lines, linking them to service detail.
+ *
+ * `onlyMonths` cuts the export down to selected months, the way a cost engineer
+ * splits a large extract before loading it.
  */
-export async function makeCji3File(path: string): Promise<void> {
+export async function makeCji3File(
+  path: string,
+  options: { onlyMonths?: string[] } = {},
+): Promise<void> {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('Data');
 
   ws.addRow(['Cost Element', 'Cost element name', 'WBS Element', 'Project definition',
-    'Object', 'Posting Date', 'Document Number', 'Document Type', 'Purchasing Document',
-    'Offsetting Account', 'Name of offsetting account', 'Object Type',
+    'Object', 'Posting Date', 'Document Number', 'Posting Row', 'Fiscal Year',
+    'Document Type', 'Purchasing Document', 'Offsetting Account',
+    'Name of offsetting account', 'Object Type',
     'Total quantity', 'Posted unit of meas.', 'Val/COArea Crcy', 'CO area currency']);
 
-  // Grand total, then per-cost-element subtotals, interleaved as SAP prints them.
-  ws.addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', 500000, 'EGP']);
-  ws.addRow(['30501100', '', '', '', '', '', '', '', '', '', '', '', '', '', 1500000, 'EGP']);
-  ws.addRow(['30501100', 'Subcontractor Cost', 'P-100.CIV.01', 'P-100', 'P-100.CIV.01',
-    '2026-01-18', 'D1', 'SC', '4500001', 'V001', 'Al Rashid Contracting', 'WBS', 40, 'M3', 1000000, 'EGP']);
-  ws.addRow(['30501100', 'Subcontractor Cost', 'P-100.CIV.01', 'P-100', 'P-100.CIV.01',
-    '2026-02-11', 'D2', 'SC', '4500001', 'V001', 'Al Rashid Contracting', 'WBS', 20, 'M3', 500000, 'EGP']);
-  ws.addRow(['30201100', '', '', '', '', '', '', '', '', '', '', '', '', '', 200000, 'EGP']);
-  ws.addRow(['30201100', 'Main Material', 'P-100.MEC.01', 'P-100', 'P-100.MEC.01',
-    '2026-02-20', 'D3', 'WA', '', 'V002', 'Gulf Materials', 'WBS', 300, 'TON', 250000, 'EGP']);
-  ws.addRow(['30201100', 'Main Material', 'P-100.MEC.01', 'P-100', 'P-100.MEC.01',
-    '2026-03-05', 'D4', 'WA', '', 'V002', 'Gulf Materials', 'WBS', -60, 'TON', -50000, 'EGP']);
-  ws.addRow(['40101100', '', '', '', '', '', '', '', '', '', '', '', '', '', -1200000, 'EGP']);
-  ws.addRow(['40101100', 'Op contracts Income', 'P-100.CIV.01', 'P-100', 'P-100.CIV.01',
-    '2026-03-31', 'R1', 'RV', '', 'C001', 'Client billing', 'WBS', 0, '', -1200000, 'EGP']);
+  // month tag, then the row itself. Two lines share document D2 to prove the
+  // posting row is what separates them, exactly as it does in a real export.
+  const detail: [string, unknown[]][] = [
+    ['2026-01', ['30501100', 'Subcontractor Cost', 'P-100.CIV.01', 'P-100', 'P-100.CIV.01',
+      '2026-01-18', 'D1', 1, '2026', 'SC', '4500001', 'V001', 'Al Rashid Contracting', 'WBS',
+      40, 'M3', 1000000, 'EGP']],
+    ['2026-02', ['30501100', 'Subcontractor Cost', 'P-100.CIV.01', 'P-100', 'P-100.CIV.01',
+      '2026-02-11', 'D2', 1, '2026', 'SC', '4500001', 'V001', 'Al Rashid Contracting', 'WBS',
+      20, 'M3', 300000, 'EGP']],
+    ['2026-02', ['30501100', 'Subcontractor Cost', 'P-100.CIV.01', 'P-100', 'P-100.CIV.01',
+      '2026-02-11', 'D2', 2, '2026', 'SC', '4500001', 'V001', 'Al Rashid Contracting', 'WBS',
+      10, 'M3', 200000, 'EGP']],
+    ['2026-02', ['30201100', 'Main Material', 'P-100.MEC.01', 'P-100', 'P-100.MEC.01',
+      '2026-02-20', 'D3', 1, '2026', 'WA', '', 'V002', 'Gulf Materials', 'WBS',
+      300, 'TON', 250000, 'EGP']],
+    ['2026-03', ['30201100', 'Main Material', 'P-100.MEC.01', 'P-100', 'P-100.MEC.01',
+      '2026-03-05', 'D4', 1, '2026', 'WA', '', 'V002', 'Gulf Materials', 'WBS',
+      -60, 'TON', -50000, 'EGP']],
+    ['2026-03', ['40101100', 'Op contracts Income', 'P-100.CIV.01', 'P-100', 'P-100.CIV.01',
+      '2026-03-31', 'R1', 1, '2026', 'RV', '', 'C001', 'Client billing', 'WBS',
+      0, '', -1200000, 'EGP']],
+  ];
+
+  const wanted = options.onlyMonths
+    ? detail.filter(([m]) => options.onlyMonths!.includes(m))
+    : detail;
+
+  const blank = (ce: string, amount: number) =>
+    [ce, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', amount, 'EGP'];
+
+  // A full export prints grand totals and per-cost-element subtotals between the
+  // detail; a hand-cut subset normally does not.
+  if (!options.onlyMonths) {
+    ws.addRow(blank('', 500000));
+    ws.addRow(blank('30501100', 1500000));
+    ws.addRow(wanted[0][1]);
+    ws.addRow(wanted[1][1]);
+    ws.addRow(wanted[2][1]);
+    ws.addRow(blank('30201100', 200000));
+    ws.addRow(wanted[3][1]);
+    ws.addRow(wanted[4][1]);
+    ws.addRow(blank('40101100', -1200000));
+    ws.addRow(wanted[5][1]);
+  } else {
+    for (const [, row] of wanted) ws.addRow(row);
+  }
 
   await wb.xlsx.writeFile(path);
 }
