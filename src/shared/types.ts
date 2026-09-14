@@ -203,6 +203,8 @@ export interface VizSpec {
   x?: string;
   series?: { column: string; label: string }[];
   area?: boolean;
+  /** Per-period measure drawn as columns in a panel below the lines. */
+  bars?: { column: string; label: string; seriesIndex?: number };
   label?: string;
   value?: string;
   reference?: string;

@@ -9,10 +9,21 @@ interface Props {
   height?: number;
   /** Fill under the first series — reads as a volume rather than a rate. */
   area?: boolean;
+  /**
+   * A per-period measure drawn as columns in a panel of its own beneath the
+   * lines, sharing the x axis and the crosshair.
+   *
+   * It gets its own panel rather than its own y axis on purpose. Monthly spend
+   * and a cumulative total differ by more than an order of magnitude, so on one
+   * scale the columns vanish, and a second y axis on the same plot is the classic
+   * way to make two series look related when the relationship is an artefact of
+   * two arbitrary scales. Stacked panels keep both readable and honest.
+   */
+  bars?: { column: string; label: string; seriesIndex?: number };
 }
 
 /** Time series with a crosshair and a tooltip covering every series at that x. */
-export function LineChart({ result, xColumn, series, height = 280, area = false }: Props) {
+export function LineChart({ result, xColumn, series, height = 280, area = false, bars }: Props) {
   const rows = result.rows;
   const { tip, show, hide } = useTooltip();
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
@@ -21,15 +32,34 @@ export function LineChart({ result, xColumn, series, height = 280, area = false 
   const W = 1000, PAD_L = 66, PAD_R = 18, PAD_T = 14, PAD_B = 34;
   const H = height;
 
+  // Two stacked plots when there are columns: lines above, columns below. The gap
+  // has to clear the lower panel's own top tick label, or its axis reads as part
+  // of the chart above it.
+  const GAP = 44;
+  const barBottom = H - PAD_B;
+  const barTop = bars ? barBottom - Math.max(56, (H - PAD_T - PAD_B) * 0.3) : barBottom;
+  const lineBottom = bars ? barTop - GAP : barBottom;
+
   const scale = useMemo(() => {
     const values = series.flatMap((s) => rows.map((r) => Number(r[s.column] ?? 0)));
     return niceScale(Math.min(0, ...values), Math.max(0, ...values));
   }, [rows, series]);
 
+  const barScale = useMemo(() => {
+    if (!bars) return null;
+    const values = rows.map((r) => Number(r[bars.column] ?? 0));
+    return niceScale(Math.min(0, ...values), Math.max(0, ...values), 2);
+  }, [rows, bars]);
+
   if (rows.length === 0) return <div className="empty">No data to plot.</div>;
 
   const x = (i: number) => PAD_L + (i * (W - PAD_L - PAD_R)) / Math.max(1, rows.length - 1);
-  const y = (v: number) => H - PAD_B - ((v - scale.lo) / (scale.hi - scale.lo || 1)) * (H - PAD_T - PAD_B);
+  const y = (v: number) =>
+    lineBottom - ((v - scale.lo) / (scale.hi - scale.lo || 1)) * (lineBottom - PAD_T);
+  const by = (v: number) => !barScale ? barBottom
+    : barBottom - ((v - barScale.lo) / (barScale.hi - barScale.lo || 1)) * (barBottom - barTop);
+  const barWidth = Math.min(30, ((W - PAD_L - PAD_R) / Math.max(1, rows.length)) * 0.6);
+  const barColor = SERIES[(bars?.seriesIndex ?? 1) % SERIES.length];
   const labelEvery = Math.ceil(rows.length / 12);
 
   const onMove = (e: React.MouseEvent) => {
@@ -39,11 +69,14 @@ export function LineChart({ result, xColumn, series, height = 280, area = false 
     const i = Math.round(((px - PAD_L) / (W - PAD_L - PAD_R)) * (rows.length - 1));
     const idx = Math.max(0, Math.min(rows.length - 1, i));
     setHoverIndex(idx);
-    show(e.clientX, e.clientY, String(rows[idx][xColumn] ?? ''),
-      series.map((s, si) => ({
+    show(e.clientX, e.clientY, String(rows[idx][xColumn] ?? ''), [
+      ...(bars ? [{ label: bars.label, color: barColor,
+                    value: fmtFull(Number(rows[idx][bars.column] ?? 0)) }] : []),
+      ...series.map((s, si) => ({
         label: s.label, color: SERIES[si % SERIES.length],
         value: fmtFull(Number(rows[idx][s.column] ?? 0)),
-      })));
+      })),
+    ]);
   };
 
   return (
@@ -66,6 +99,34 @@ export function LineChart({ result, xColumn, series, height = 280, area = false 
               </g>
             ))}
 
+            {bars && barScale && (
+              <>
+                {barScale.ticks.map((v) => (
+                  <g key={`b${v}`}>
+                    <line x1={PAD_L} x2={W - PAD_R} y1={by(v)} y2={by(v)}
+                          className="chart-grid" strokeWidth={1} />
+                    <text x={PAD_L - 10} y={by(v) + 4} textAnchor="end" className="chart-tip">
+                      {fmtCompact(v)}
+                    </text>
+                  </g>
+                ))}
+                {/* The lower panel is a separate plot on its own scale — say so. */}
+                <text x={PAD_L} y={barTop - 18} className="chart-tip" fontWeight={600}>
+                  {bars.label}
+                </text>
+                {rows.map((r, i) => {
+                  const v = Number(r[bars.column] ?? 0);
+                  const top = Math.min(by(v), by(0));
+                  const h = Math.abs(by(v) - by(0));
+                  return (
+                    <rect key={i} x={x(i) - barWidth / 2} y={top} width={barWidth}
+                          height={Math.max(1, h)} rx={3} fill={barColor}
+                          opacity={hoverIndex === null || hoverIndex === i ? 0.95 : 0.45} />
+                  );
+                })}
+              </>
+            )}
+
             {rows.map((r, i) => (i % labelEvery === 0 ? (
               <text key={i} x={x(i)} y={H - 11} textAnchor="middle" className="chart-tip">
                 {String(r[xColumn] ?? '')}
@@ -73,7 +134,7 @@ export function LineChart({ result, xColumn, series, height = 280, area = false 
             ) : null))}
 
             {hoverIndex !== null && (
-              <line x1={x(hoverIndex)} x2={x(hoverIndex)} y1={PAD_T} y2={H - PAD_B}
+              <line x1={x(hoverIndex)} x2={x(hoverIndex)} y1={PAD_T} y2={barBottom}
                     stroke="var(--accent-line)" strokeWidth={1} />
             )}
 

@@ -14,8 +14,9 @@ export function VizPanel({ result, viz, height = 320 }:
 
   if (viz.kind === 'line' && has(viz.x) && viz.series?.some((s) => has(s.column))) {
     return (
-      <LineChart result={result} xColumn={viz.x!} height={height} area={viz.area}
-                 series={viz.series!.filter((s) => has(s.column))} />
+      <LineChart result={result} xColumn={viz.x!} height={viz.bars ? height + 90 : height}
+                 area={viz.area} series={viz.series!.filter((s) => has(s.column))}
+                 bars={has(viz.bars?.column) ? viz.bars : undefined} />
     );
   }
   if (viz.kind === 'bar' && has(viz.label) && has(viz.value)) {

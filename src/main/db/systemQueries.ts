@@ -28,6 +28,8 @@ export interface VizSpec {
   x?: string;
   series?: { column: string; label: string }[];
   area?: boolean;
+  /** Per-period measure drawn as columns in a panel below the lines. */
+  bars?: { column: string; label: string; seriesIndex?: number };
   /** bar / treemap */
   label?: string;
   value?: string;
@@ -294,13 +296,17 @@ ORDER BY vac_amount ASC`,
     name: 'S-curve: budget / actual / forecast',
     module: 'CROSS',
     category: 'Trend',
-    description: 'Cumulative budget, actual and forecast by period — the cost S-curve. '
-      + 'A budget that is not time-phased is shown as a flat budget-at-completion line.',
+    description: 'The cost S-curve: cumulative budget, actual and forecast by period, over columns '
+      + 'of what was actually spent in each month. A budget that is not time-phased is shown as a '
+      + 'flat budget-at-completion line.',
     params: [P_PROJECT],
     viz: { kind: 'line', x: 'period_key',
       series: [{ column: 'budget_cum', label: 'Budget' },
                { column: 'actual_cum', label: 'Actual (cum.)' },
                { column: 'forecast_cum', label: 'Actual + forecast' }],
+      // Same hue as the cumulative actual line: colour follows the entity, and
+      // these columns are that same actual, just not yet added up.
+      bars: { column: 'actual_period', label: 'Actual in month', seriesIndex: 1 },
       headline: 'KPI_PROJECT' },
     sql: `
 WITH periods AS (

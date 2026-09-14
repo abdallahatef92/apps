@@ -118,15 +118,17 @@ export function Dashboard() {
         <div className="card">
           <h3>Cost S-curve</h3>
           <p className="hint">
-            Cumulative position by period, computed in SQL. Where the actual and forecast lines meet
-            is today's cut-off.
+            Cumulative position by period over what was spent in each month, computed in SQL. The
+            columns share the x axis but keep their own scale — monthly spend and a running total
+            differ by too much to share one.
           </p>
-          <LineChart result={curve} xColumn="period_key" height={300}
+          <LineChart result={curve} xColumn="period_key" height={390}
             series={[
               { column: 'budget_cum', label: 'Budget' },
               { column: 'actual_cum', label: 'Actual (cum.)' },
               { column: 'forecast_cum', label: 'Actual + forecast' },
-            ]} />
+            ]}
+            bars={{ column: 'actual_period', label: 'Actual in month', seriesIndex: 1 }} />
         </div>
       )}
 
