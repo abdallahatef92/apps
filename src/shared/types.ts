@@ -1,4 +1,4 @@
-export type Module = 'ACTUAL' | 'BUDGET' | 'FORECAST' | 'COMMITMENT' | 'SERVICE' | 'MASTER';
+export type Module = 'ACTUAL' | 'BUDGET' | 'FORECAST' | 'COMMITMENT' | 'SERVICE' | 'MASTER' | 'ORDER';
 
 export interface QueryResult {
   columns: string[];

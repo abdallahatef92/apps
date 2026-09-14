@@ -12,6 +12,7 @@ interface ParamDef { name: string; type: string; label: string; required?: boole
 const SIGN_COLUMNS = ['variance_amount', 'vac_amount', 'overrun_amount', 'difference', 'margin', 'margin_cum'];
 const MODULE_LABEL: Record<string, string> = {
   ACTUAL: 'Cost', CROSS: 'Comparison', FORECAST: 'Forecast', SERVICE: 'Subcontract', BUDGET: 'Budget',
+  ORDER: 'Order settlement',
 };
 
 type Tab = 'chart' | 'table' | 'sql';
@@ -212,8 +213,8 @@ export function Analysis() {
                   maxHeight={520}
                   signColumns={SIGN_COLUMNS}
                   badgeColumn={result.columns.includes('source') ? 'source' : undefined}
-                  flagColumn={result.columns.includes('po_missing_detail') ? 'po_missing_detail' : undefined}
-                  flagLabel="This PO's CJI3 posting is shown because no service-line detail has been loaded for it yet."
+                  flagColumn={result.columns.includes('missing_detail') ? 'missing_detail' : undefined}
+                  flagLabel="This CJI3 posting is shown because no detail (PO or order settlement) has been loaded for it yet."
                 />
               ) : (
                 <pre className="mono" style={{ margin: 0, whiteSpace: 'pre-wrap', lineHeight: 1.6,

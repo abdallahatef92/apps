@@ -36,11 +36,14 @@ const REQUIRED: Record<string, string[]> = {
   COMMITMENT: ['wbs_code', 'amount'],
   SERVICE: ['wbs_code', 'po_no', 'amount_net'],
   MASTER: ['wbs_code'],
+  // wbs_code is deliberately not required here: a line still sitting on a cost
+  // centre (category = CTR) has no WBS yet and is still a real, valid row.
+  ORDER: ['order_no', 'amount'],
 };
 
 const AMOUNT_FIELD: Record<string, string> = {
   ACTUAL: 'amount', BUDGET: 'budget_amount', FORECAST: 'forecast_amount',
-  COMMITMENT: 'amount', SERVICE: 'amount_net', MASTER: '',
+  COMMITMENT: 'amount', SERVICE: 'amount_net', MASTER: '', ORDER: 'amount',
 };
 
 /**
@@ -61,6 +64,10 @@ const NATURAL_KEY: Record<string, string[]> = {
   BUDGET: [],
   FORECAST: [],
   MASTER: [],
+  // No column in an order-detail export identifies a line uniquely — two
+  // genuinely different postings can share order, cost element and period —
+  // so this also keeps batch-level replacement rather than trust a false key.
+  ORDER: [],
 };
 
 /**
@@ -756,6 +763,27 @@ export function postBatch(batchId: number, options: { allowDuplicate?: boolean }
           toNumber(mapped.eac_amount), toNumber(mapped.committed_amount),
           toText(mapped.forecast_method), toText(mapped.description), s.row_no);
         posted++;
+      } else if (batch.module === 'ORDER') {
+        // No single period column here — the report gives fiscal year and
+        // posting month separately, so the period is built rather than read.
+        const fy = toText(mapped.fiscal_year);
+        const monthRaw = toText(mapped.period_month);
+        const month = monthRaw ? String(parseInt(monthRaw, 10)).padStart(2, '0') : null;
+        const period = (fy && month && !Number.isNaN(Number(month))) ? ensurePeriod(`${fy}-${month}`) : null;
+
+        db.prepare(`INSERT INTO fact_order_line
+          (import_batch_id, project_key, wbs_key, cost_element_key, vendor_key, currency_key,
+           period_key, order_no, order_description, order_type, category, cost_center_code,
+           cost_center_name, po_no, quantity, uom, amount, source_row_no)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+          batchId, projectKey, wbsKey, ceKey,
+          dims.vendorKey(toText(mapped.vendor_code), toText(mapped.vendor_name)),
+          currencyKey, period,
+          toText(mapped.order_no), toText(mapped.order_description), toText(mapped.order_type),
+          toText(mapped.category), toText(mapped.cost_center_code), toText(mapped.cost_center_name),
+          toText(mapped.po_no), toNumber(mapped.quantity), toText(mapped.uom),
+          toNumber(mapped.amount) ?? 0, s.row_no);
+        posted++;
       }
     }
 
@@ -866,6 +894,7 @@ const FACT_TABLE: Record<string, string | null> = {
   BUDGET: 'fact_budget',
   FORECAST: 'fact_forecast',
   SERVICE: 'fact_service_line',
+  ORDER: 'fact_order_line',
   MASTER: null, // writes dimensions, not facts
 };
 

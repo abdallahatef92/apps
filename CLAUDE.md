@@ -101,16 +101,22 @@ and a second CTE in `UNIFIED_COST_REGISTER` keyed on the new field — the "PO w
 detail" exclusion in `direct_cost` needs to check the new key too, or a posting could
 be excluded from actuals without anything replacing it.
 
-An internal order settling into a WBS is one such non-PO case: CJI3 names the
-receiver directly on the posting via `partner_object_type` ("Order") and
-`partner_object` (the order number) — captured on `fact_actual` / exposed on
-`v_actual` since migration 008, and queryable today via `ORDER_SETTLEMENTS`. That
-migration only captures the identity; it does not exclude these postings from
-`v_actual`, because there is no order-level detail report loaded yet to substitute
-in for them. When one is loaded, key its new CTE on `partner_object` (not `po_no`)
-and extend the `direct_cost` exclusion in `UNIFIED_COST_REGISTER` to also drop a
-row when `partner_object_type = 'Order'` and its `partner_object` has detail —
-mirroring the PO exclusion exactly, just on a different column.
+An internal order settling into a WBS is one such non-PO case, implemented in full:
+CJI3 names the receiver directly on the posting via `partner_object_type` ("Order")
+and `partner_object` (the order number) — captured on `fact_actual` since migration
+008. Its line-item detail lives in `fact_order_line` / `v_order_line` (migration
+009), the ORDER module — a CO line item keyed on an internal order rather than a
+WBS, with no natural key of its own, so it falls back to batch superseding like
+budget, forecast and master data. `UNIFIED_COST_REGISTER` excludes a `direct_cost`
+row when its `partner_object` has detail loaded, and unions in `order_detail`
+alongside `detail_lines`, mirroring the PO exclusion exactly, just on a different
+column. Only `category = 'WBS'` rows in `fact_order_line` count as detail loaded or
+enter the register — `category = 'CTR'` means the cost still sits on a cost centre
+and has not settled to any project's WBS yet, so it must never be summed as project
+cost. The flag column generalised from `po_missing_detail` to `missing_detail`
+accordingly — it now covers a PO or a settled order with no detail loaded.
+`ORDER_SETTLEMENTS` and `ORDER_DETAIL_SOURCES` are the order-side equivalents of
+checking CJI3 postings and `DETAIL_SOURCES`.
 
 ## Adding a source report
 

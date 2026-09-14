@@ -40,8 +40,8 @@ async function main(): Promise<void> {
   near('unified register total equals total actual cost (no gap, no double-count)', registerTotal, totalActual);
   near('the SERVICE half of the register equals total service-line net', bySource.SERVICE?.amount ?? 0, totalServiceNet);
 
-  const flagged = (register.rows as any[]).filter((r) => r.po_missing_detail === 1);
-  console.log(`\nPOs with a CJI3 posting but no service detail loaded: ${flagged.length} row(s)`);
+  const flagged = (register.rows as any[]).filter((r) => r.missing_detail === 1);
+  console.log(`\nPOs / order settlements with a CJI3 posting but no detail loaded: ${flagged.length} row(s)`);
   for (const r of flagged.slice(0, 5)) console.log(`  ${r.po_no}  ${fmt(r.amount)}  ${r.reference}`);
 
   const summary = runStoredQuery('UNIFIED_COST_SUMMARY', { project_key: projectKey });

@@ -12,6 +12,7 @@ import vizSpecSql from './migrations/005_viz_spec.sql?raw';
 import detailSubstitutionSql from './migrations/006_detail_substitution.sql?raw';
 import costTypeRulesSql from './migrations/007_cost_type_rules.sql?raw';
 import partnerObjectSql from './migrations/008_partner_object.sql?raw';
+import orderSettlementSql from './migrations/009_order_settlement.sql?raw';
 import { SYSTEM_QUERIES } from './systemQueries';
 
 interface Migration {
@@ -34,6 +35,7 @@ const MIGRATIONS: Migration[] = [
   { version: 6, name: '006_detail_substitution', sql: detailSubstitutionSql },
   { version: 7, name: '007_cost_type_rules', sql: costTypeRulesSql },
   { version: 8, name: '008_partner_object', sql: partnerObjectSql },
+  { version: 9, name: '009_order_settlement', sql: orderSettlementSql },
 ];
 
 let db: DB | null = null;

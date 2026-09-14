@@ -282,6 +282,65 @@ const WBS_MASTER_FIELDS: FieldDef[] = [
     description: 'Optional work package tag.', synonyms: ['package', 'work package'] },
 ];
 
+/**
+ * Order settlement detail — CO line items posted to an internal order rather
+ * than a WBS. No column identifies a line uniquely, so unlike ACTUAL/SERVICE
+ * there is no natural-key field here at all; re-imports fall back to batch
+ * superseding, the same as budget, forecast and master data.
+ */
+const ORDER_FIELDS: FieldDef[] = [
+  ...COMMON_DIMS,
+  { field: 'order_no', label: 'Order', type: 'text', required: true,
+    description: 'Internal order number. This is what links a line to the settlement posting CJI3 '
+      + 'carries under Partner Object.',
+    synonyms: ['order'] },
+  { field: 'order_description', label: 'Order description', type: 'text', required: false,
+    description: 'Free text on the order.',
+    synonyms: ['order description'] },
+  { field: 'order_type', label: 'Order type', type: 'text', required: false,
+    description: 'SAP order type (e.g. a fuel charging order, a repair order).',
+    synonyms: ['order type'] },
+  { field: 'category', label: 'Settlement category', type: 'text', required: false,
+    description: '"WBS" once this line has settled onto a project element; "CTR" while it still '
+      + 'sits on a cost centre and has not reached any project yet.',
+    synonyms: ['category'] },
+  { field: 'cost_center_code', label: 'Cost centre', type: 'text', required: false,
+    description: 'Cost centre currently holding the cost, for a line not yet settled to a WBS.',
+    synonyms: ['cost center', 'cost centre'] },
+  { field: 'cost_center_name', label: 'Cost centre description', type: 'text', required: false,
+    description: 'Name of the cost centre.',
+    synonyms: ['cost center description', 'cost centre description'] },
+  { field: 'vendor_code', label: 'Business partner', type: 'text', required: false,
+    description: 'Vendor / business partner on the line.',
+    synonyms: ['business partner'] },
+  { field: 'vendor_name', label: 'Business partner name', type: 'text', required: false,
+    description: 'Business partner description.',
+    synonyms: ['business partner de', 'business partner description'] },
+  { field: 'po_no', label: 'Purchase order', type: 'text', required: false,
+    description: 'Purchase order behind the line, when there is one. Not the join key for this '
+      + 'report — order_no is.',
+    synonyms: ['po', 'purchasing document', 'purchase order'] },
+  { field: 'fiscal_year', label: 'Fiscal year', type: 'text', required: false,
+    description: 'Combined with the posting month to build the period.',
+    synonyms: ['year', 'fiscal year'] },
+  { field: 'period_month', label: 'Posting month', type: 'text', required: false,
+    description: 'Numeric posting month (1-12). Combined with the fiscal year to build the period, '
+      + 'since this report gives no single period column.',
+    synonyms: ['month'] },
+  { field: 'quantity', label: 'Quantity', type: 'number', required: false,
+    description: 'Quantity posted.',
+    synonyms: ['total qty', 'quantity', 'qty'] },
+  { field: 'uom', label: 'Unit of measure', type: 'text', required: false,
+    description: 'Unit for the quantity.',
+    synonyms: ['activity type uom', 'uom', 'unit of measure'] },
+  { field: 'amount', label: 'Actual amount', type: 'number', required: true,
+    description: 'Actual cost on the order line.',
+    synonyms: ['actual', 'amount', 'value'] },
+  { field: 'currency_code', label: 'Currency', type: 'text', required: false,
+    description: 'ISO currency of the amount.',
+    synonyms: ['currency', 'curr', 'crcy'] },
+];
+
 const BY_MODULE: Record<string, FieldDef[]> = {
   ACTUAL: ACTUAL_FIELDS,
   BUDGET: BUDGET_FIELDS,
@@ -289,6 +348,7 @@ const BY_MODULE: Record<string, FieldDef[]> = {
   COMMITMENT: ACTUAL_FIELDS,
   SERVICE: SERVICE_FIELDS,
   MASTER: WBS_MASTER_FIELDS,
+  ORDER: ORDER_FIELDS,
 };
 
 export function targetFields(module: Module): TargetField[] {

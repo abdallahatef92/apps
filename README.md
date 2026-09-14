@@ -255,9 +255,12 @@ whatever the next category is) the same way, and it joins in with no new SQL —
 
 Not every category settles through a purchase order. An internal order settling
 into a WBS carries its own receiver right on the CJI3 line — `Partner Object Type`
-("Order") and `Partner Object` (the order number) — so `ORDER_SETTLEMENTS` can
-already show every such posting today, keyed the same way the PO case is keyed on
-`po_no`, just waiting for an order-level detail report to substitute in for it.
+("Order") and `Partner Object` (the order number) — and its own line-item detail
+loads as its own module (ORDER), keyed on the order number the same way subcontract
+detail is keyed on a PO. A line still sitting on a cost centre, not yet settled to
+a project, never enters the register — only a line that has actually reached a
+WBS does. `ORDER_SETTLEMENTS` and `ORDER_DETAIL_SOURCES` are the order-side views
+of checking a CJI3 posting and seeing what is loaded against it.
 
 *Governance* — data freshness, import register, mapping coverage.
 

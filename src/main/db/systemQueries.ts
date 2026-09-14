@@ -762,24 +762,26 @@ ORDER BY cost_type, period_key`,
   {
     // "Detail Substitution": a summary posting in the actual-cost ledger is
     // swapped for its own itemized detail from a secondary report, matched on a
-    // shared key. PO number is the key today because the first detail source
-    // (subcontractor certificates) is PO-based; fact_service_line itself carries
-    // nothing subcontractor-specific, so a second PO-based detail report — an
-    // equipment-rental reconciliation, a materials-delivery report, anything with
-    // a PO, a vendor, a description and an amount — loads into the same SERVICE
-    // module and joins in here with no new SQL. report_name on each SERVICE row
-    // is what keeps two such sources distinguishable once both are loaded.
+    // shared key. PO number is the key for the subcontractor case; fact_service_line
+    // itself carries nothing subcontractor-specific, so a second PO-based detail
+    // report — an equipment-rental reconciliation, a materials-delivery report,
+    // anything with a PO, a vendor, a description and an amount — loads into the
+    // same SERVICE module and joins in here with no new SQL. report_name on each
+    // SERVICE row is what keeps two such sources distinguishable once both are
+    // loaded. An internal order settling onto a WBS is the same pattern on a
+    // different key: CJI3 names the receiver directly (partner_object_type =
+    // 'Order', partner_object = the order number), and fact_order_line supplies
+    // its line-item detail, joined in the same way.
     code: 'UNIFIED_COST_REGISTER',
     name: 'Unified cost register (detail substitution)',
     module: 'CROSS',
     category: 'Reconciliation',
-    description: 'Every cost line, once. Actual postings that carry no purchase order (direct '
-      + 'cost — material, labour, in-house equipment) plus the line-item detail loaded for every '
-      + 'PO — subcontractor certificates today, and any other PO-based detail report you load '
-      + 'alongside it. A PO\'s CJI3 posting is left out here because its detail lines are that '
-      + 'same money at finer grain — vendor, description, quantity — so nothing is counted twice. '
-      + 'POs with no detail loaded yet still show their CJI3 posting, flagged, so the register '
-      + 'never silently drops cost.',
+    description: 'Every cost line, once. Actual postings with no purchase order and no order '
+      + 'settlement (direct cost — material, labour, in-house equipment) plus the line-item detail '
+      + 'loaded for every PO and every settled internal order. A PO\'s or order\'s CJI3 posting is '
+      + 'left out here because its detail lines are that same money at finer grain — vendor, '
+      + 'description, quantity — so nothing is counted twice. A PO or order with no detail loaded '
+      + 'yet still shows its CJI3 posting, flagged, so the register never silently drops cost.',
     params: [P_PROJECT,
       { name: 'period_from', type: 'period', label: 'Period from' },
       { name: 'period_to', type: 'period', label: 'Period to' }],
@@ -791,8 +793,16 @@ WITH po_with_detail AS (
   SELECT DISTINCT po_no FROM v_service_line
   WHERE project_key = :project_key AND po_no IS NOT NULL AND po_no <> ''
 ),
+order_with_detail AS (
+  -- Internal orders settled onto a project WBS with detail loaded for that
+  -- settlement. A line still on a cost centre (category = CTR) has not
+  -- reached a project yet, so it does not count as "detail loaded" here.
+  SELECT DISTINCT order_no FROM v_order_line
+  WHERE project_key = :project_key AND category = 'WBS'
+    AND order_no IS NOT NULL AND order_no <> ''
+),
 direct_cost AS (
-  -- CJI3 postings with no PO, or with a PO that has no detail loaded yet
+  -- CJI3 postings with no PO and no settled order with detail loaded yet
   -- (kept so cost is never silently dropped, flagged so it's easy to spot).
   SELECT
     'ACTUAL'                                            AS source,
@@ -809,12 +819,20 @@ direct_cost AS (
     a.quantity,
     a.uom,
     a.amount,
-    CASE WHEN a.po_no IS NOT NULL AND a.po_no <> ''
-              AND a.po_no NOT IN (SELECT po_no FROM po_with_detail)
-         THEN 1 ELSE 0 END                               AS po_missing_detail
+    CASE
+      WHEN a.po_no IS NOT NULL AND a.po_no <> ''
+           AND a.po_no NOT IN (SELECT po_no FROM po_with_detail) THEN 1
+      WHEN a.partner_object_type = 'Order'
+           AND a.partner_object IS NOT NULL AND a.partner_object <> ''
+           AND a.partner_object NOT IN (SELECT order_no FROM order_with_detail) THEN 1
+      ELSE 0
+    END                                                  AS missing_detail
   FROM v_actual a
   WHERE a.project_key = :project_key
     AND (a.po_no IS NULL OR a.po_no = '' OR a.po_no NOT IN (SELECT po_no FROM po_with_detail))
+    AND (a.partner_object_type IS NULL OR a.partner_object_type <> 'Order'
+         OR a.partner_object IS NULL OR a.partner_object = ''
+         OR a.partner_object NOT IN (SELECT order_no FROM order_with_detail))
     AND (:period_from IS NULL OR a.period_key >= :period_from)
     AND (:period_to   IS NULL OR a.period_key <= :period_to)
 ),
@@ -836,15 +854,43 @@ detail_lines AS (
     s.quantity_current                                    AS quantity,
     s.uom,
     s.amount_net                                          AS amount,
-    0                                                      AS po_missing_detail
+    0                                                      AS missing_detail
   FROM v_service_line s
   WHERE s.project_key = :project_key
+    AND (:period_from IS NULL OR s.period_key >= :period_from)
+    AND (:period_to   IS NULL OR s.period_key <= :period_to)
+),
+order_detail AS (
+  -- The line-item detail behind every settled internal order — the
+  -- finer-grained replacement for that order's CJI3 settlement posting.
+  -- Only category = 'WBS' lines: a 'CTR' line has not reached a project yet.
+  SELECT
+    'ORDER'                                             AS source,
+    s.report_name,
+    s.period_key,
+    s.wbs_code, s.wbs_name,
+    s.cost_element_code, s.cost_element_name, s.cost_type,
+    s.vendor_name,
+    NULL                                                 AS po_no,
+    s.order_no                                          AS reference,
+    NULL                                                 AS document_type,
+    s.category,
+    s.order_description                                  AS description,
+    s.quantity,
+    s.uom,
+    s.amount,
+    0                                                      AS missing_detail
+  FROM v_order_line s
+  WHERE s.project_key = :project_key
+    AND s.category = 'WBS'
     AND (:period_from IS NULL OR s.period_key >= :period_from)
     AND (:period_to   IS NULL OR s.period_key <= :period_to)
 )
 SELECT * FROM direct_cost
 UNION ALL
 SELECT * FROM detail_lines
+UNION ALL
+SELECT * FROM order_detail
 ORDER BY period_key, source, po_no, reference`,
   },
   {
@@ -852,8 +898,8 @@ ORDER BY period_key, source, po_no, reference`,
     name: 'Unified cost register — monthly total',
     module: 'CROSS',
     category: 'Reconciliation',
-    description: 'The same detail-substitution merge, totalled per month and per source, so the '
-      + 'two halves — direct cost and PO detail — can be checked against each other and against '
+    description: 'The same detail-substitution merge, totalled per month, so the direct-cost, PO '
+      + 'detail and order-settlement detail halves can be checked against each other and against '
       + 'the plain actual-cost total.',
     params: [P_PROJECT],
     viz: { kind: 'bar', label: 'period_key', value: 'total_amount', headline: 'KPI_PROJECT' },
@@ -862,12 +908,23 @@ WITH po_with_detail AS (
   SELECT DISTINCT po_no FROM v_service_line
   WHERE project_key = :project_key AND po_no IS NOT NULL AND po_no <> ''
 ),
+order_with_detail AS (
+  SELECT DISTINCT order_no FROM v_order_line
+  WHERE project_key = :project_key AND category = 'WBS'
+    AND order_no IS NOT NULL AND order_no <> ''
+),
 merged AS (
   SELECT period_key, amount FROM v_actual
   WHERE project_key = :project_key
     AND (po_no IS NULL OR po_no = '' OR po_no NOT IN (SELECT po_no FROM po_with_detail))
+    AND (partner_object_type IS NULL OR partner_object_type <> 'Order'
+         OR partner_object IS NULL OR partner_object = ''
+         OR partner_object NOT IN (SELECT order_no FROM order_with_detail))
   UNION ALL
   SELECT period_key, amount_net FROM v_service_line WHERE project_key = :project_key
+  UNION ALL
+  SELECT period_key, amount FROM v_order_line
+  WHERE project_key = :project_key AND category = 'WBS'
 )
 SELECT period_key, SUM(amount) AS total_amount, COUNT(*) AS lines
 FROM merged
@@ -903,9 +960,9 @@ ORDER BY amount DESC`,
     category: 'Reconciliation',
     description: 'Actual cost postings that settle from an internal order rather than a purchase '
       + 'order or invoice — identified by CJI3\'s own "Partner Object Type" / "Partner Object" '
-      + 'columns, not a guess from a blank document type. Not yet excluded from actuals or merged '
-      + 'with anything: this is a checkpoint to confirm the right postings are being found before an '
-      + 'order-level detail report is loaded as its own Detail Substitution source.',
+      + 'columns, not a guess from a blank document type. detail_loaded shows whether an order-level '
+      + 'detail report already covers that order in the unified cost register, or whether it is still '
+      + 'showing here as an unreplaced CJI3 posting.',
     params: [P_PROJECT],
     viz: { kind: 'bar', label: 'partner_object', value: 'amount' },
     sql: `
@@ -913,12 +970,38 @@ SELECT
   a.partner_object_type, a.partner_object, a.partner_object_name,
   a.cost_element_code, a.cost_element_name, a.cost_type,
   a.wbs_code, a.wbs_name,
-  COUNT(*) AS lines, SUM(a.amount) AS amount
+  COUNT(*) AS lines, SUM(a.amount) AS amount,
+  CASE WHEN EXISTS (
+    SELECT 1 FROM v_order_line o
+    WHERE o.project_key = a.project_key AND o.category = 'WBS' AND o.order_no = a.partner_object
+  ) THEN 1 ELSE 0 END AS detail_loaded
 FROM v_actual a
 WHERE a.project_key = :project_key
   AND a.partner_object_type IS NOT NULL AND a.partner_object_type <> ''
 GROUP BY a.partner_object_type, a.partner_object, a.partner_object_name,
          a.cost_element_code, a.cost_element_name, a.cost_type, a.wbs_code, a.wbs_name
+ORDER BY amount DESC`,
+  },
+  {
+    code: 'ORDER_DETAIL_SOURCES',
+    name: 'Order detail sources feeding the register',
+    module: 'CROSS',
+    category: 'Reconciliation',
+    description: 'Every report currently supplying order-level detail for the unified cost register '
+      + '— the same role DETAIL_SOURCES plays for PO detail, keyed on the internal order number '
+      + 'instead. Only category = WBS lines count: a line still on a cost centre has not settled to '
+      + 'a project yet.',
+    params: [P_PROJECT],
+    viz: { kind: 'bar', label: 'report_name', value: 'amount' },
+    sql: `
+SELECT
+  report_name,
+  COUNT(DISTINCT order_no) AS orders,
+  COUNT(*)                 AS lines,
+  SUM(amount)              AS amount
+FROM v_order_line
+WHERE project_key = :project_key AND category = 'WBS'
+GROUP BY report_name
 ORDER BY amount DESC`,
   },
   {
