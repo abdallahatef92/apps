@@ -1,0 +1,47 @@
+{
+  "name": "cost-intelligence",
+  "version": "0.1.0",
+  "description": "Cost Intelligence \u2014 project cost control: actuals, budget, forecasting",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "main": "./out/main/index.js",
+  "author": "Cost Control",
+  "license": "UNLICENSED",
+  "scripts": {
+    "postinstall": "electron-builder install-app-deps",
+    "dev": "electron-vite dev",
+    "build": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "dist": "npm run build && electron-builder",
+    "db:check": "node --experimental-sqlite --no-warnings scripts/db-selftest.mjs",
+    "test:build": "esbuild tests/pipeline.e2e.ts --bundle --platform=node --format=cjs --target=node20 --outfile=out/test/pipeline.cjs --external:better-sqlite3 --external:exceljs --alias:electron=./tests/electron-stub.ts --loader:.sql=text",
+    "test:e2e": "npm run test:build && node scripts/run-under-electron.mjs out/test/pipeline.cjs",
+    "demo:build": "esbuild tests/seedDemo.ts --bundle --platform=node --format=cjs --target=node20 --outfile=out/test/seedDemo.cjs --external:better-sqlite3 --external:exceljs --alias:electron=./tests/electron-stub.ts --loader:.sql=text",
+    "test": "npm run db:check && npm run test:e2e",
+    "demo:seed": "npm run demo:build && node scripts/run-under-electron.mjs out/test/seedDemo.cjs",
+    "load:real": "esbuild tests/loadReal.ts --bundle --platform=node --format=cjs --target=node20 --outfile=out/test/loadReal.cjs --external:better-sqlite3 --external:exceljs --alias:electron=./tests/electron-stub.ts --loader:.sql=text && node scripts/run-under-electron.mjs out/test/loadReal.cjs",
+    "check:split": "esbuild tests/splitScenario.ts --bundle --platform=node --format=cjs --target=node20 --outfile=out/test/splitScenario.cjs --external:better-sqlite3 --external:exceljs --alias:electron=./tests/electron-stub.ts --loader:.sql=text && node scripts/run-under-electron.mjs out/test/splitScenario.cjs",
+    "check:unified": "esbuild tests/checkUnified.ts --bundle --platform=node --format=cjs --target=node20 --outfile=out/test/checkUnified.cjs --external:better-sqlite3 --external:exceljs --alias:electron=./tests/electron-stub.ts --loader:.sql=text && node scripts/run-under-electron.mjs out/test/checkUnified.cjs"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "exceljs": "^4.4.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "playwright": "^1.63.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11"
+  }
+}
