@@ -601,10 +601,12 @@ export function postBatch(batchId: number, options: { allowDuplicate?: boolean }
   const upsertActual = db.prepare(`INSERT INTO fact_actual
     (import_batch_id, project_key, wbs_key, cost_element_key, vendor_key, currency_key,
      posting_date_key, document_date_key, period_key, document_no, document_line, document_type,
-     reference_no, po_no, fiscal_year, description, quantity, uom, amount, source_row_no, line_uid)
+     reference_no, po_no, fiscal_year, description, quantity, uom, amount, source_row_no, line_uid,
+     partner_object_type, partner_object, partner_object_name)
     VALUES (@batch, @project, @wbs, @ce, @vendor, @currency, @postingDateKey, @docDateKey,
             @period, @documentNo, @documentLine, @documentType, @referenceNo, @poNo, @fiscalYear,
-            @description, @quantity, @uom, @amount, @rowNo, @uid)
+            @description, @quantity, @uom, @amount, @rowNo, @uid,
+            @partnerObjectType, @partnerObject, @partnerObjectName)
     ON CONFLICT(line_uid) DO UPDATE SET
       import_batch_id = excluded.import_batch_id, project_key = excluded.project_key,
       wbs_key = excluded.wbs_key, cost_element_key = excluded.cost_element_key,
@@ -615,7 +617,9 @@ export function postBatch(batchId: number, options: { allowDuplicate?: boolean }
       reference_no = excluded.reference_no, po_no = excluded.po_no,
       fiscal_year = excluded.fiscal_year, description = excluded.description,
       quantity = excluded.quantity, uom = excluded.uom, amount = excluded.amount,
-      source_row_no = excluded.source_row_no`);
+      source_row_no = excluded.source_row_no,
+      partner_object_type = excluded.partner_object_type, partner_object = excluded.partner_object,
+      partner_object_name = excluded.partner_object_name`);
 
   const upsertService = db.prepare(`INSERT INTO fact_service_line
     (import_batch_id, project_key, wbs_key, cost_element_key, vendor_key, currency_key,
@@ -695,6 +699,9 @@ export function postBatch(batchId: number, options: { allowDuplicate?: boolean }
           amount: toNumber(mapped.amount) ?? 0,
           rowNo: s.row_no,
           uid,
+          partnerObjectType: toText(mapped.partner_object_type),
+          partnerObject: toText(mapped.partner_object),
+          partnerObjectName: toText(mapped.partner_object_name),
         });
         posted++;
       } else if (batch.module === 'BUDGET') {

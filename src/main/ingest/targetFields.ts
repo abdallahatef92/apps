@@ -32,7 +32,9 @@ const COMMON_DIMS: FieldDef[] = [
     synonyms: ['package', 'work package', 'wp', 'contract package'] },
   { field: 'csi_code', label: 'CSI code', type: 'text', required: false,
     description: 'CSI / standard classification code.',
-    synonyms: ['csi', 'csi code', 'class', 'classification'] },
+    // Deliberately no bare "class": SAP's "Partner Object Class" column contains it
+    // and would be mis-claimed for a settlement's receiver class, not a CSI code.
+    synonyms: ['csi', 'csi code', 'classification'] },
   { field: 'cost_element_code', label: 'Cost element', type: 'text', required: false,
     description: 'SAP cost element / GL account.',
     synonyms: ['cost element', 'cost elem', 'gl account', 'g/l account', 'g/l acct',
@@ -86,6 +88,18 @@ const ACTUAL_FIELDS: FieldDef[] = [
   { field: 'po_no', label: 'Purchase order', type: 'text', required: false,
     description: 'Purchasing document. This is what links a posting to its subcontractor service lines.',
     synonyms: ['purchasing document', 'purchase order', 'po', 'po no', 'pur. doc.', 'ebeln'] },
+  { field: 'partner_object_type', label: 'Partner object type', type: 'text', required: false,
+    description: 'What kind of object this posting settles into (e.g. "Order" for an internal order '
+      + 'settlement). Blank for an ordinary posting.',
+    synonyms: ['partner object type'] },
+  { field: 'partner_object', label: 'Partner object', type: 'text', required: false,
+    description: 'The settlement receiver\'s own number — an internal order number when the partner '
+      + 'object type is "Order". This is what will link a settlement posting to its own detail report, '
+      + 'the way a purchase order links to subcontractor service lines.',
+    synonyms: ['partner object'] },
+  { field: 'partner_object_name', label: 'Partner object description', type: 'text', required: false,
+    description: 'Free text describing the settlement, e.g. the timesheet or period it covers.',
+    synonyms: ['partner object name', 'partner obj. name'] },
   { field: 'description', label: 'Line description', type: 'text', required: false,
     description: 'Posting text.',
     synonyms: ['description', 'text', 'posting text', 'item text', 'narrative', 'remarks'] },

@@ -253,6 +253,12 @@ load a second PO-based detail report (equipment rental, materials reconciliation
 whatever the next category is) the same way, and it joins in with no new SQL —
 `Detail sources feeding the register` lists every report currently contributing.
 
+Not every category settles through a purchase order. An internal order settling
+into a WBS carries its own receiver right on the CJI3 line — `Partner Object Type`
+("Order") and `Partner Object` (the order number) — so `ORDER_SETTLEMENTS` can
+already show every such posting today, keyed the same way the PO case is keyed on
+`po_no`, just waiting for an order-level detail report to substitute in for it.
+
 *Governance* — data freshness, import register, mapping coverage.
 
 Each is a parameterised `SELECT` using named bindings (`:project_key`, `:period_to`, …).

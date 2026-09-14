@@ -101,6 +101,17 @@ and a second CTE in `UNIFIED_COST_REGISTER` keyed on the new field — the "PO w
 detail" exclusion in `direct_cost` needs to check the new key too, or a posting could
 be excluded from actuals without anything replacing it.
 
+An internal order settling into a WBS is one such non-PO case: CJI3 names the
+receiver directly on the posting via `partner_object_type` ("Order") and
+`partner_object` (the order number) — captured on `fact_actual` / exposed on
+`v_actual` since migration 008, and queryable today via `ORDER_SETTLEMENTS`. That
+migration only captures the identity; it does not exclude these postings from
+`v_actual`, because there is no order-level detail report loaded yet to substitute
+in for them. When one is loaded, key its new CTE on `partner_object` (not `po_no`)
+and extend the `direct_cost` exclusion in `UNIFIED_COST_REGISTER` to also drop a
+row when `partner_object_type = 'Order'` and its `partner_object` has detail —
+mirroring the PO exclusion exactly, just on a different column.
+
 ## Adding a source report
 
 Most new report shapes need no code — a `report_definition` row (including its

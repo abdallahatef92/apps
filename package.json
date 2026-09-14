@@ -23,7 +23,8 @@
     "demo:seed": "npm run demo:build && node scripts/run-under-electron.mjs out/test/seedDemo.cjs",
     "load:real": "esbuild tests/loadReal.ts --bundle --platform=node --format=cjs --target=node20 --outfile=out/test/loadReal.cjs --external:better-sqlite3 --external:exceljs --alias:electron=./tests/electron-stub.ts --loader:.sql=text && node scripts/run-under-electron.mjs out/test/loadReal.cjs",
     "check:split": "esbuild tests/splitScenario.ts --bundle --platform=node --format=cjs --target=node20 --outfile=out/test/splitScenario.cjs --external:better-sqlite3 --external:exceljs --alias:electron=./tests/electron-stub.ts --loader:.sql=text && node scripts/run-under-electron.mjs out/test/splitScenario.cjs",
-    "check:unified": "esbuild tests/checkUnified.ts --bundle --platform=node --format=cjs --target=node20 --outfile=out/test/checkUnified.cjs --external:better-sqlite3 --external:exceljs --alias:electron=./tests/electron-stub.ts --loader:.sql=text && node scripts/run-under-electron.mjs out/test/checkUnified.cjs"
+    "check:unified": "esbuild tests/checkUnified.ts --bundle --platform=node --format=cjs --target=node20 --outfile=out/test/checkUnified.cjs --external:better-sqlite3 --external:exceljs --alias:electron=./tests/electron-stub.ts --loader:.sql=text && node scripts/run-under-electron.mjs out/test/checkUnified.cjs",
+    "check:partner": "esbuild tests/checkPartnerObject.ts --bundle --platform=node --format=cjs --target=node20 --outfile=out/test/checkPartnerObject.cjs --external:better-sqlite3 --external:exceljs --alias:electron=./tests/electron-stub.ts --loader:.sql=text && node scripts/run-under-electron.mjs out/test/checkPartnerObject.cjs"
   },
   "dependencies": {
     "better-sqlite3": "^11.8.1",

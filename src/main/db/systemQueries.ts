@@ -160,7 +160,8 @@ LIMIT COALESCE(:top_n, 25)`,
 SELECT
   a.period_key, a.document_no, a.document_type, a.wbs_code, a.wbs_name,
   a.cost_element_code, a.cost_element_name, a.cost_type, a.vendor_name,
-  a.description, a.quantity, a.uom, a.amount, a.data_date
+  a.description, a.quantity, a.uom, a.amount, a.data_date,
+  a.partner_object_type, a.partner_object, a.partner_object_name
 FROM v_actual a
 WHERE a.project_key = :project_key
   AND (:period_from IS NULL OR a.period_key >= :period_from)
@@ -893,6 +894,31 @@ SELECT
 FROM v_service_line
 WHERE project_key = :project_key
 GROUP BY report_name
+ORDER BY amount DESC`,
+  },
+  {
+    code: 'ORDER_SETTLEMENTS',
+    name: 'Order settlements in CJI3',
+    module: 'ACTUAL',
+    category: 'Reconciliation',
+    description: 'Actual cost postings that settle from an internal order rather than a purchase '
+      + 'order or invoice — identified by CJI3\'s own "Partner Object Type" / "Partner Object" '
+      + 'columns, not a guess from a blank document type. Not yet excluded from actuals or merged '
+      + 'with anything: this is a checkpoint to confirm the right postings are being found before an '
+      + 'order-level detail report is loaded as its own Detail Substitution source.',
+    params: [P_PROJECT],
+    viz: { kind: 'bar', label: 'partner_object', value: 'amount' },
+    sql: `
+SELECT
+  a.partner_object_type, a.partner_object, a.partner_object_name,
+  a.cost_element_code, a.cost_element_name, a.cost_type,
+  a.wbs_code, a.wbs_name,
+  COUNT(*) AS lines, SUM(a.amount) AS amount
+FROM v_actual a
+WHERE a.project_key = :project_key
+  AND a.partner_object_type IS NOT NULL AND a.partner_object_type <> ''
+GROUP BY a.partner_object_type, a.partner_object, a.partner_object_name,
+         a.cost_element_code, a.cost_element_name, a.cost_type, a.wbs_code, a.wbs_name
 ORDER BY amount DESC`,
   },
   {
