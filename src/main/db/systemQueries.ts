@@ -759,6 +759,109 @@ GROUP BY COALESCE(cost_type,'UNMAPPED'), period_key
 ORDER BY cost_type, period_key`,
   },
   {
+    code: 'UNIFIED_COST_REGISTER',
+    name: 'Unified cost register (CJI3 + subcontract detail)',
+    module: 'CROSS',
+    category: 'Reconciliation',
+    description: 'Every cost line, once. Actual postings that carry no purchase order (direct '
+      + 'cost — material, labour, in-house equipment) plus the subcontractor service-line detail '
+      + 'for every PO. A PO\'s CJI3 posting is left out here because the service lines beneath it '
+      + 'are that same money at finer grain — vendor, service, quantity — so nothing is counted '
+      + 'twice. POs with no service detail loaded yet still show their CJI3 posting, flagged, so '
+      + 'the register never silently drops cost.',
+    params: [P_PROJECT,
+      { name: 'period_from', type: 'period', label: 'Period from' },
+      { name: 'period_to', type: 'period', label: 'Period to' }],
+    viz: { kind: 'table' },
+    sql: `
+WITH po_with_detail AS (
+  -- POs that have at least one service line loaded — their CJI3 posting is
+  -- superseded by that detail below, not by anything shown here.
+  SELECT DISTINCT po_no FROM v_service_line
+  WHERE project_key = :project_key AND po_no IS NOT NULL AND po_no <> ''
+),
+direct_cost AS (
+  -- CJI3 postings with no PO, or with a PO that has no service detail loaded yet
+  -- (kept so cost is never silently dropped, flagged so it's easy to spot).
+  SELECT
+    'ACTUAL'                                            AS source,
+    a.period_key,
+    a.wbs_code, a.wbs_name,
+    a.cost_element_code, a.cost_element_name, a.cost_type,
+    a.vendor_name,
+    a.po_no,
+    a.document_no                                       AS reference,
+    a.document_type,
+    NULL                                                 AS category,
+    a.description,
+    a.quantity,
+    a.uom,
+    a.amount,
+    CASE WHEN a.po_no IS NOT NULL AND a.po_no <> ''
+              AND a.po_no NOT IN (SELECT po_no FROM po_with_detail)
+         THEN 1 ELSE 0 END                               AS po_missing_detail
+  FROM v_actual a
+  WHERE a.project_key = :project_key
+    AND (a.po_no IS NULL OR a.po_no = '' OR a.po_no NOT IN (SELECT po_no FROM po_with_detail))
+    AND (:period_from IS NULL OR a.period_key >= :period_from)
+    AND (:period_to   IS NULL OR a.period_key <= :period_to)
+),
+subcontract_detail AS (
+  -- The certified service lines behind every PO — the finer-grained replacement
+  -- for that PO's CJI3 posting.
+  SELECT
+    'SERVICE'                                           AS source,
+    s.period_key,
+    s.wbs_code, s.wbs_name,
+    s.cost_element_code, s.cost_element_name, s.cost_type,
+    s.vendor_name,
+    s.po_no,
+    s.invoice_no                                        AS reference,
+    NULL                                                 AS document_type,
+    s.category,
+    s.service_text                                       AS description,
+    s.quantity_current                                    AS quantity,
+    s.uom,
+    s.amount_net                                          AS amount,
+    0                                                      AS po_missing_detail
+  FROM v_service_line s
+  WHERE s.project_key = :project_key
+    AND (:period_from IS NULL OR s.period_key >= :period_from)
+    AND (:period_to   IS NULL OR s.period_key <= :period_to)
+)
+SELECT * FROM direct_cost
+UNION ALL
+SELECT * FROM subcontract_detail
+ORDER BY period_key, source, po_no, reference`,
+  },
+  {
+    code: 'UNIFIED_COST_SUMMARY',
+    name: 'Unified cost register — monthly total',
+    module: 'CROSS',
+    category: 'Reconciliation',
+    description: 'The same merge as the unified cost register, totalled per month and per source, '
+      + 'so the two halves — direct cost and subcontract detail — can be checked against each '
+      + 'other and against the plain actual-cost total.',
+    params: [P_PROJECT],
+    viz: { kind: 'bar', label: 'period_key', value: 'total_amount', headline: 'KPI_PROJECT' },
+    sql: `
+WITH po_with_detail AS (
+  SELECT DISTINCT po_no FROM v_service_line
+  WHERE project_key = :project_key AND po_no IS NOT NULL AND po_no <> ''
+),
+merged AS (
+  SELECT period_key, amount FROM v_actual
+  WHERE project_key = :project_key
+    AND (po_no IS NULL OR po_no = '' OR po_no NOT IN (SELECT po_no FROM po_with_detail))
+  UNION ALL
+  SELECT period_key, amount_net FROM v_service_line WHERE project_key = :project_key
+)
+SELECT period_key, SUM(amount) AS total_amount, COUNT(*) AS lines
+FROM merged
+GROUP BY period_key
+ORDER BY period_key`,
+  },
+  {
     code: 'DATA_FRESHNESS',
     name: 'Data freshness by source',
     module: 'ADMIN',

@@ -228,6 +228,13 @@ S-curve, top overruns, portfolio summary, cost vs revenue with running margin.
 *Subcontract* — PO reconciliation (actuals against service lines), work by supplier,
 work by category, service-line detail, and coverage of actuals by loaded detail.
 
+*Reconciliation* — the unified cost register: every cost line once, merging
+direct-cost CJI3 postings (no purchase order) with subcontractor service-line
+detail for every PO, so a single list explains the whole actual-cost figure
+without double-counting the money a PO's postings and its service lines both
+describe. A PO with no service detail loaded yet still shows its CJI3 posting,
+flagged, so cost is never silently dropped.
+
 *Governance* — data freshness, import register, mapping coverage.
 
 Each is a parameterised `SELECT` using named bindings (`:project_key`, `:period_to`, …).

@@ -207,7 +207,14 @@ export function Analysis() {
               ) : tab === 'chart' ? (
                 <VizPanel result={result} viz={viz} />
               ) : tab === 'table' ? (
-                <DataTable result={result} maxHeight={520} signColumns={SIGN_COLUMNS} />
+                <DataTable
+                  result={result}
+                  maxHeight={520}
+                  signColumns={SIGN_COLUMNS}
+                  badgeColumn={result.columns.includes('source') ? 'source' : undefined}
+                  flagColumn={result.columns.includes('po_missing_detail') ? 'po_missing_detail' : undefined}
+                  flagLabel="This PO's CJI3 posting is shown because no service-line detail has been loaded for it yet."
+                />
               ) : (
                 <pre className="mono" style={{ margin: 0, whiteSpace: 'pre-wrap', lineHeight: 1.6,
                        color: 'var(--text-2)', maxHeight: 520, overflow: 'auto' }}>
