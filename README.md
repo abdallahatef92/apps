@@ -228,12 +228,17 @@ S-curve, top overruns, portfolio summary, cost vs revenue with running margin.
 *Subcontract* — PO reconciliation (actuals against service lines), work by supplier,
 work by category, service-line detail, and coverage of actuals by loaded detail.
 
-*Reconciliation* — the unified cost register: every cost line once, merging
-direct-cost CJI3 postings (no purchase order) with subcontractor service-line
-detail for every PO, so a single list explains the whole actual-cost figure
-without double-counting the money a PO's postings and its service lines both
-describe. A PO with no service detail loaded yet still shows its CJI3 posting,
-flagged, so cost is never silently dropped.
+*Reconciliation* — **Detail Substitution**: a summary posting in the actual-cost
+ledger is swapped for its own line-item detail from a secondary report, matched
+on a shared key. The unified cost register is this pattern applied to purchase
+orders — CJI3 postings with no PO, plus the PO-level detail loaded for every PO
+that has one, so a single list explains the whole actual-cost figure without
+double-counting the money a PO's summary posting and its detail both describe.
+A PO with no detail loaded yet still shows its CJI3 posting, flagged, so cost is
+never silently dropped. The mechanism has nothing subcontractor-specific in it:
+load a second PO-based detail report (equipment rental, materials reconciliation,
+whatever the next category is) the same way, and it joins in with no new SQL —
+`Detail sources feeding the register` lists every report currently contributing.
 
 *Governance* — data freshness, import register, mapping coverage.
 

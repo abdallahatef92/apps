@@ -7,7 +7,7 @@
  * Node. Run: npm run db:check
  */
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,9 +17,14 @@ const dir = mkdtempSync(join(tmpdir(), 'ci-selftest-'));
 const db = new DatabaseSync(join(dir, 'test.db'));
 db.exec('PRAGMA foreign_keys = ON');
 
-for (const m of ['001_core', '002_seed', '003_sap_reality']) {
-  db.exec(readFileSync(`src/main/db/migrations/${m}.sql`, 'utf8'));
+// Applied in filename order, same as MIGRATIONS in src/main/db/index.ts — read
+// straight off the directory so this never drifts behind a newly added migration.
+const MIGRATIONS_DIR = 'src/main/db/migrations';
+const migrations = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort();
+for (const m of migrations) {
+  db.exec(readFileSync(join(MIGRATIONS_DIR, m), 'utf8'));
 }
+console.log(`  applied ${migrations.length} migrations: ${migrations.join(', ')}`);
 if (db.prepare('PRAGMA foreign_key_check').all().length > 0) {
   console.error('  FAIL migrations left foreign key violations');
   process.exit(1);

@@ -759,32 +759,43 @@ GROUP BY COALESCE(cost_type,'UNMAPPED'), period_key
 ORDER BY cost_type, period_key`,
   },
   {
+    // "Detail Substitution": a summary posting in the actual-cost ledger is
+    // swapped for its own itemized detail from a secondary report, matched on a
+    // shared key. PO number is the key today because the first detail source
+    // (subcontractor certificates) is PO-based; fact_service_line itself carries
+    // nothing subcontractor-specific, so a second PO-based detail report — an
+    // equipment-rental reconciliation, a materials-delivery report, anything with
+    // a PO, a vendor, a description and an amount — loads into the same SERVICE
+    // module and joins in here with no new SQL. report_name on each SERVICE row
+    // is what keeps two such sources distinguishable once both are loaded.
     code: 'UNIFIED_COST_REGISTER',
-    name: 'Unified cost register (CJI3 + subcontract detail)',
+    name: 'Unified cost register (detail substitution)',
     module: 'CROSS',
     category: 'Reconciliation',
     description: 'Every cost line, once. Actual postings that carry no purchase order (direct '
-      + 'cost — material, labour, in-house equipment) plus the subcontractor service-line detail '
-      + 'for every PO. A PO\'s CJI3 posting is left out here because the service lines beneath it '
-      + 'are that same money at finer grain — vendor, service, quantity — so nothing is counted '
-      + 'twice. POs with no service detail loaded yet still show their CJI3 posting, flagged, so '
-      + 'the register never silently drops cost.',
+      + 'cost — material, labour, in-house equipment) plus the line-item detail loaded for every '
+      + 'PO — subcontractor certificates today, and any other PO-based detail report you load '
+      + 'alongside it. A PO\'s CJI3 posting is left out here because its detail lines are that '
+      + 'same money at finer grain — vendor, description, quantity — so nothing is counted twice. '
+      + 'POs with no detail loaded yet still show their CJI3 posting, flagged, so the register '
+      + 'never silently drops cost.',
     params: [P_PROJECT,
       { name: 'period_from', type: 'period', label: 'Period from' },
       { name: 'period_to', type: 'period', label: 'Period to' }],
     viz: { kind: 'table' },
     sql: `
 WITH po_with_detail AS (
-  -- POs that have at least one service line loaded — their CJI3 posting is
+  -- POs that have at least one detail line loaded — their CJI3 posting is
   -- superseded by that detail below, not by anything shown here.
   SELECT DISTINCT po_no FROM v_service_line
   WHERE project_key = :project_key AND po_no IS NOT NULL AND po_no <> ''
 ),
 direct_cost AS (
-  -- CJI3 postings with no PO, or with a PO that has no service detail loaded yet
+  -- CJI3 postings with no PO, or with a PO that has no detail loaded yet
   -- (kept so cost is never silently dropped, flagged so it's easy to spot).
   SELECT
     'ACTUAL'                                            AS source,
+    NULL                                                 AS report_name,
     a.period_key,
     a.wbs_code, a.wbs_name,
     a.cost_element_code, a.cost_element_name, a.cost_type,
@@ -806,11 +817,12 @@ direct_cost AS (
     AND (:period_from IS NULL OR a.period_key >= :period_from)
     AND (:period_to   IS NULL OR a.period_key <= :period_to)
 ),
-subcontract_detail AS (
-  -- The certified service lines behind every PO — the finer-grained replacement
-  -- for that PO's CJI3 posting.
+detail_lines AS (
+  -- The line-item detail behind every PO — the finer-grained replacement for
+  -- that PO's CJI3 posting, from whichever detail report(s) supplied it.
   SELECT
     'SERVICE'                                           AS source,
+    s.report_name,
     s.period_key,
     s.wbs_code, s.wbs_name,
     s.cost_element_code, s.cost_element_name, s.cost_type,
@@ -831,7 +843,7 @@ subcontract_detail AS (
 )
 SELECT * FROM direct_cost
 UNION ALL
-SELECT * FROM subcontract_detail
+SELECT * FROM detail_lines
 ORDER BY period_key, source, po_no, reference`,
   },
   {
@@ -839,9 +851,9 @@ ORDER BY period_key, source, po_no, reference`,
     name: 'Unified cost register — monthly total',
     module: 'CROSS',
     category: 'Reconciliation',
-    description: 'The same merge as the unified cost register, totalled per month and per source, '
-      + 'so the two halves — direct cost and subcontract detail — can be checked against each '
-      + 'other and against the plain actual-cost total.',
+    description: 'The same detail-substitution merge, totalled per month and per source, so the '
+      + 'two halves — direct cost and PO detail — can be checked against each other and against '
+      + 'the plain actual-cost total.',
     params: [P_PROJECT],
     viz: { kind: 'bar', label: 'period_key', value: 'total_amount', headline: 'KPI_PROJECT' },
     sql: `
@@ -860,6 +872,28 @@ SELECT period_key, SUM(amount) AS total_amount, COUNT(*) AS lines
 FROM merged
 GROUP BY period_key
 ORDER BY period_key`,
+  },
+  {
+    code: 'DETAIL_SOURCES',
+    name: 'Detail sources feeding the register',
+    module: 'CROSS',
+    category: 'Reconciliation',
+    description: 'Every report currently supplying PO-level detail for the unified cost register, '
+      + 'with how many purchase orders and how much value each contributes. Load a second detail '
+      + 'report — a different cost category, same PO-based shape — and it appears here on its own '
+      + 'row with no query changes.',
+    params: [P_PROJECT],
+    viz: { kind: 'bar', label: 'report_name', value: 'amount' },
+    sql: `
+SELECT
+  report_name,
+  COUNT(DISTINCT po_no) AS purchase_orders,
+  COUNT(*)              AS lines,
+  SUM(amount_net)        AS amount
+FROM v_service_line
+WHERE project_key = :project_key
+GROUP BY report_name
+ORDER BY amount DESC`,
   },
   {
     code: 'DATA_FRESHNESS',

@@ -9,6 +9,7 @@ import seedSql from './migrations/002_seed.sql?raw';
 import sapRealitySql from './migrations/003_sap_reality.sql?raw';
 import lineIdentitySql from './migrations/004_line_identity.sql?raw';
 import vizSpecSql from './migrations/005_viz_spec.sql?raw';
+import detailSubstitutionSql from './migrations/006_detail_substitution.sql?raw';
 import { SYSTEM_QUERIES } from './systemQueries';
 
 interface Migration {
@@ -28,6 +29,7 @@ const MIGRATIONS: Migration[] = [
   { version: 3, name: '003_sap_reality', sql: sapRealitySql, selfTransacting: true },
   { version: 4, name: '004_line_identity', sql: lineIdentitySql },
   { version: 5, name: '005_viz_spec', sql: vizSpecSql },
+  { version: 6, name: '006_detail_substitution', sql: detailSubstitutionSql },
 ];
 
 let db: DB | null = null;

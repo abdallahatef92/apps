@@ -20,6 +20,15 @@ Read `README.md` first for the data model and the reasoning behind it.
 - **Service lines are never actual cost.** `fact_service_line` is the sub-ledger behind
   a purchase order whose money is already in `fact_actual`. Reconcile the two, never
   add them.
+- **Detail Substitution is the general pattern, not a subcontractor special case.**
+  `fact_service_line` carries nothing subcontractor-specific (po_no, vendor, description,
+  quantities, amount) — a second PO-based detail report (equipment rental, materials
+  reconciliation, whatever the next category is) loads into the same SERVICE module and
+  joins into `UNIFIED_COST_REGISTER` with no new SQL, as long as it shares the PO key.
+  `v_service_line.report_name` is what keeps two such sources distinguishable once both
+  are loaded — never drop it when touching that view. A detail source with a different
+  join key (not PO number) or a genuinely different shape needs its own fact table, on
+  the same footing as `fact_service_line` — see "Adding a source report" below.
 - **Source reports interleave subtotal rows.** Anything that reads a spreadsheet must
   respect `report_definition.detail_key_fields`; rows with those fields blank are
   SKIPPED, and only rows with `stg_row.status = 'VALID'` may post.
@@ -67,6 +76,22 @@ have already run it.
 System queries are the exception: they live in `src/main/db/systemQueries.ts` and are
 upserted on every start, so fixing one is a normal code change. Queries with
 `is_system = 0` belong to the user and must never be modified or deleted by the app.
+
+## Adding a Detail Substitution source
+
+Before writing anything, check whether the new report is PO-based with the usual
+shape (a purchase order, a vendor, a description, an amount) — if so it is not a new
+report *kind*, it is another instance of `SERVICE`: map it via a new `report_definition`
+row and a column mapping, same as any upload, and it joins into
+`UNIFIED_COST_REGISTER` automatically. Confirm with `DETAIL_SOURCES` that it shows up
+as its own row.
+
+Only build a new fact table when the join key genuinely is not a PO number, or the
+shape has no sensible mapping onto `fact_service_line`'s columns. In that case: a new
+fact table alongside `fact_service_line`, a view exposing `report_name` the same way,
+and a second CTE in `UNIFIED_COST_REGISTER` keyed on the new field — the "PO with
+detail" exclusion in `direct_cost` needs to check the new key too, or a posting could
+be excluded from actuals without anything replacing it.
 
 ## Adding a source report
 
