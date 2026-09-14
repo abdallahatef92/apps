@@ -243,6 +243,105 @@ async function sapScenario(dir: string): Promise<void> {
   }
 }
 
+/**
+ * Cost type is a rule, not a constant.
+ *
+ * The account ranges that used to be written into importer.ts are seeded into
+ * cost_type_rule, so a file is classified exactly as before. What changes is
+ * where the decision happens: per posting row, inside v_posting. That is what
+ * lets a rule match on document type — which lives on the fact, not on the cost
+ * element — and lets a correction reach cost already loaded without re-importing.
+ */
+async function costTypeRules(dir: string): Promise<void> {
+  console.log('\n--- cost type mapping ---');
+  openDatabase(join(dir, 'costtype.db'));
+  const db = getDb();
+  const projectKey = Number(db.prepare('INSERT INTO dim_project (project_code, project_name) VALUES (?,?)')
+    .run('P-100', 'Test Plant').lastInsertRowid);
+
+  const cjiPath = join(dir, 'cji3_costtype.xlsx');
+  await makeCji3File(cjiPath);
+  await load(cjiPath, 'ACTUAL', 6, '2026-03-31', '2026-03', projectKey);
+
+  const byType = (): Record<string, number> => Object.fromEntries(
+    (db.prepare(`SELECT COALESCE(cost_type,'UNMAPPED') AS t, SUM(amount) AS a
+                 FROM v_actual WHERE project_key = ? GROUP BY 1`).all(projectKey) as any[])
+      .map((r) => [r.t, r.a]));
+
+  const seeded = byType();
+  near('305* reads as subcontract, as the hard-coded range did', seeded.SUBCONTRACT ?? 0, 1_500_000);
+  near('302* reads as material, as the hard-coded range did', seeded.MATERIAL ?? 0, 200_000);
+  check('no cost falls outside the rules', seeded.UNMAPPED === undefined, String(seeded.UNMAPPED));
+  check('revenue still carries no cost type',
+    (db.prepare(`SELECT COUNT(*) n FROM v_posting
+                 WHERE posting_nature = 'REVENUE' AND cost_type IS NOT NULL`).get() as any).n === 0);
+
+  // The point of the change: one account splits by how it was posted.
+  db.prepare(`INSERT INTO cost_type_rule (priority, cost_element_glob, document_type_glob, cost_type, note)
+              VALUES (1, '302*', 'WA', 'EQUIPMENT', 'Material on a WA document is plant hire here')`).run();
+
+  const after = byType();
+  near('a document-type rule moves that spend to equipment', after.EQUIPMENT ?? 0, 200_000);
+  check('and leaves nothing behind under material', (after.MATERIAL ?? 0) === 0, String(after.MATERIAL ?? 0));
+  near('spend on another account is untouched', after.SUBCONTRACT ?? 0, 1_500_000);
+  near('and the cost total never moved',
+    Object.values(after).reduce((sum, n) => sum + n, 0), 1_700_000);
+  check('the correction reached posted cost without a re-import',
+    (db.prepare('SELECT COUNT(*) n FROM import_batch').get() as any).n === 1);
+
+  // Order decides, not specificity — the account rule is still there, just above now.
+  db.prepare("UPDATE cost_type_rule SET priority = 999 WHERE document_type_glob = 'WA'").run();
+  near('demoting it below the account rule hands the spend back', byType().MATERIAL ?? 0, 200_000);
+
+  db.prepare('UPDATE cost_type_rule SET is_active = 0').run();
+  near('with every rule off the money is still there, only unmapped', byType().UNMAPPED ?? 0, 1_700_000);
+  db.prepare('UPDATE cost_type_rule SET is_active = 1').run();
+  db.prepare("DELETE FROM cost_type_rule WHERE document_type_glob = 'WA'").run();
+
+  // ---- allocating a named pair -------------------------------------------
+  // The combinations are derived from the postings, so the list is exactly what
+  // occurs: 305* arrives on SC, 302* on WA, and income on RV is not cost at all.
+  const combos = db.prepare(`
+    SELECT a.cost_element_code AS c, COALESCE(a.document_type,'') AS d,
+           COUNT(*) AS n, SUM(a.amount) AS amt, a.cost_type AS resolved,
+           (SELECT r.cost_type FROM cost_type_rule r
+             WHERE r.is_active = 1 AND r.cost_element_glob = a.cost_element_code
+               AND r.document_type_glob = COALESCE(a.document_type,'')
+             ORDER BY r.priority, r.rule_id LIMIT 1) AS assigned
+    FROM v_actual a
+    GROUP BY a.cost_element_code, COALESCE(a.document_type,''), a.cost_type
+    ORDER BY ABS(SUM(a.amount)) DESC`).all() as any[];
+
+  check('combinations are derived from the postings, not from the chart',
+    combos.length === 2, String(combos.length));
+  check('a pair carries its document type', combos.some((r) => r.c === '30501100' && r.d === 'SC'));
+  check('income is not offered as a cost combination',
+    !combos.some((r) => r.c.startsWith('4')));
+  check('nothing is allocated until the user says so',
+    combos.every((r) => r.assigned === null));
+
+  // Allocate one pair against the range it would otherwise inherit.
+  db.prepare(`INSERT INTO cost_type_rule (priority, cost_element_glob, document_type_glob, cost_type, note)
+              VALUES (1, '30501100', 'SC', 'LABOR', 'Allocated for document type SC')`).run();
+
+  const allocated = byType();
+  near('an allocation beats the account range it sits under', allocated.LABOR ?? 0, 1_500_000);
+  check('and the range no longer claims that spend', (allocated.SUBCONTRACT ?? 0) === 0,
+    String(allocated.SUBCONTRACT ?? 0));
+  near('cost elements it does not name are untouched', allocated.MATERIAL ?? 0, 200_000);
+  near('and the total is still the total',
+    Object.values(allocated).reduce((sum, n) => sum + n, 0), 1_700_000);
+
+  const reread = db.prepare(`SELECT (SELECT r.cost_type FROM cost_type_rule r
+      WHERE r.is_active = 1 AND r.cost_element_glob = '30501100' AND r.document_type_glob = 'SC'
+      LIMIT 1) AS assigned`).get() as any;
+  check('the screen can tell an allocation from an inherited guess', reread.assigned === 'LABOR');
+
+  // Clearing it hands the pair back to the patterns.
+  db.prepare("DELETE FROM cost_type_rule WHERE cost_element_glob = '30501100' AND document_type_glob = 'SC'").run();
+  near('clearing an allocation returns the pair to the patterns', byType().SUBCONTRACT ?? 0, 1_500_000);
+}
+
 async function main(): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), 'ci-e2e-'));
   openDatabase(join(dir, 'e2e.db'));
@@ -350,6 +449,7 @@ async function main(): Promise<void> {
   check('export carries a lineage sheet', !!wb.getWorksheet('Report info'));
 
   await sapScenario(dir);
+  await costTypeRules(dir);
   await lineIdentity(dir);
 
   rmSync(dir, { recursive: true, force: true });

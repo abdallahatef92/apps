@@ -158,6 +158,19 @@ elements are classified on import, `v_actual` holds cost alone, `v_revenue` hold
 income sign-flipped to positive, and `v_posting` holds both. The account pattern is a
 setting (Settings › Cost classification), because charts of accounts differ.
 
+**Cost type is a rule, not a constant.** Which postings count as labour, material or
+subcontract used to be decided from account ranges written into `importer.ts`, once per
+cost element, at import — and stored so stickily that nothing could later correct it.
+Those ranges are one particular operating chart, and the account alone cannot always
+answer: the same cost element carries different cost depending on the document it was
+posted with. So the mapping is data. `cost_type_rule` holds an ordered list matching on
+cost element and/or document type (SQL `GLOB`, first match wins), edited in
+Settings › Cost type mapping, and `v_posting` resolves it per posting row. A cost type
+stated by the source file still outranks a rule. Because the rules are read when a report
+runs, correcting one fixes history as well as the next import — there is nothing to
+reload. The seeded rules reproduce the former hard-coded ranges exactly, so upgrading an
+existing warehouse does not move a number.
+
 **A subcontractor report is a sub-ledger, not extra cost.** It is the service-line
 detail behind purchase orders already posted in CJI3, so adding it to actuals
 double-counts. It lands in `fact_service_line`, joined to `fact_actual` by purchase

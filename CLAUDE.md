@@ -29,6 +29,14 @@ Read `README.md` first for the data model and the reasoning behind it.
   are loaded — never drop it when touching that view. A detail source with a different
   join key (not PO number) or a genuinely different shape needs its own fact table, on
   the same footing as `fact_service_line` — see "Adding a source report" below.
+- **Cost type is resolved in the view, never baked into the dimension.** The mapping
+  lives in `cost_type_rule` (ordered, matching cost element and/or document type by
+  `GLOB`, first match wins) and `v_posting` applies it per posting row — because
+  `document_type` is on the fact, not on `dim_cost_element`, and because a rule change
+  must correct cost already loaded. `dim_cost_element.cost_type` holds only what a source
+  file explicitly stated, which still outranks a rule; never write an inferred value
+  there, and never re-introduce account ranges in `importer.ts`. Adding a seventh cost
+  type is a migration — the six are a CHECK constraint on two tables.
 - **Source reports interleave subtotal rows.** Anything that reads a spreadsheet must
   respect `report_definition.detail_key_fields`; rows with those fields blank are
   SKIPPED, and only rows with `stg_row.status = 'VALID'` may post.

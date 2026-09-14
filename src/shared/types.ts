@@ -215,3 +215,61 @@ export interface VizSpec {
   col?: string;
   headline?: string;
 }
+
+/**
+ * The six cost types. Enforced by a CHECK constraint on both dim_cost_element
+ * and cost_type_rule, so adding a seventh is a migration, not an edit here.
+ */
+export const COST_TYPE_VALUES = ['LABOR', 'MATERIAL', 'SUBCONTRACT', 'EQUIPMENT', 'INDIRECT', 'OTHER'] as const;
+export type CostType = typeof COST_TYPE_VALUES[number];
+
+/**
+ * One line of the cost type mapping. A NULL pattern means "any"; both NULL is
+ * rejected, because a rule matching everything would mask every rule below it.
+ * Patterns are SQL GLOB (`301*`), not regular expressions, so the match can
+ * happen inside the view.
+ */
+export interface CostTypeRule {
+  rule_id: number | null;
+  priority: number;
+  cost_element_glob: string | null;
+  document_type_glob: string | null;
+  cost_type: CostType;
+  note: string | null;
+  is_active: number;
+}
+
+export type CostTypeRuleInput = Omit<CostTypeRule, 'rule_id' | 'priority'>
+  & { rule_id?: number | null; priority?: number };
+
+export interface CostTypePreviewRow {
+  cost_type: string;
+  postings: number;
+  amount: number;
+}
+
+/**
+ * One (cost element, document type) pair that actually occurs in posted cost,
+ * with what the rules currently make of it. This is the allocation screen's
+ * unit of work: the combinations are derived from the data rather than typed in,
+ * so the list is exactly what needs an answer — nothing hypothetical.
+ */
+export interface CostTypeCombination {
+  cost_element_code: string;
+  cost_element_name: string | null;
+  /** '' when the posting carries no document type. */
+  document_type: string;
+  postings: number;
+  amount: number;
+  /** What v_posting resolves today, whether from an assignment or a pattern. */
+  resolved_cost_type: string | null;
+  /** Set only when an exact rule names this pair; null means inherited. */
+  assigned_cost_type: CostType | null;
+}
+
+/** `cost_type: null` removes the assignment and lets the patterns decide again. */
+export interface CostTypeAssignment {
+  cost_element_code: string;
+  document_type: string;
+  cost_type: CostType | null;
+}

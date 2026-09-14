@@ -10,6 +10,7 @@ import sapRealitySql from './migrations/003_sap_reality.sql?raw';
 import lineIdentitySql from './migrations/004_line_identity.sql?raw';
 import vizSpecSql from './migrations/005_viz_spec.sql?raw';
 import detailSubstitutionSql from './migrations/006_detail_substitution.sql?raw';
+import costTypeRulesSql from './migrations/007_cost_type_rules.sql?raw';
 import { SYSTEM_QUERIES } from './systemQueries';
 
 interface Migration {
@@ -30,6 +31,7 @@ const MIGRATIONS: Migration[] = [
   { version: 4, name: '004_line_identity', sql: lineIdentitySql },
   { version: 5, name: '005_viz_spec', sql: vizSpecSql },
   { version: 6, name: '006_detail_substitution', sql: detailSubstitutionSql },
+  { version: 7, name: '007_cost_type_rules', sql: costTypeRulesSql },
 ];
 
 let db: DB | null = null;

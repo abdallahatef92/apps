@@ -9,7 +9,8 @@ import { buildPivotSql, pivotMeta, type PivotRequest } from './services/pivot';
 import { readWorkbook } from './ingest/workbook';
 import { deleteBatch, loadColumnMapping, postBatch, revenueAccountPattern, saveColumnMapping, stageFile } from './ingest/importer';
 import { suggestMapping, targetFields } from './ingest/targetFields';
-import type { IpcResult, Module, QueryResult, StageRequest } from '../shared/types';
+import { COST_TYPE_VALUES } from '../shared/types';
+import type { CostTypeAssignment, CostTypeRuleInput, IpcResult, Module, QueryResult, StageRequest } from '../shared/types';
 
 /** Wrap a handler so the renderer always gets {ok,data} | {ok,error} instead of a rejection. */
 function handle<T>(channel: string, fn: (...args: any[]) => T | Promise<T>): void {
@@ -105,6 +106,122 @@ export function registerIpc(): void {
     });
     run();
     return { costElements: rows.length, updated: changed };
+  });
+
+  /**
+   * Cost type rules.
+   *
+   * Unlike the revenue pattern there is no "apply to history" step: the rules are
+   * read by v_posting when a report runs, so a save is visible everywhere at once.
+   */
+  handle('costTypes:list', () =>
+    getDb().prepare(`SELECT rule_id, priority, cost_element_glob, document_type_glob,
+                            cost_type, note, is_active
+                     FROM cost_type_rule ORDER BY priority, rule_id`).all());
+
+  handle('costTypes:save', (rules: CostTypeRuleInput[]) => {
+    const db = getDb();
+    for (const r of rules) {
+      if (!COST_TYPE_VALUES.includes(r.cost_type)) {
+        throw new Error(`"${r.cost_type}" is not a cost type. Expected one of ${COST_TYPE_VALUES.join(', ')}.`);
+      }
+      if (!r.cost_element_glob && !r.document_type_glob) {
+        throw new Error('A rule needs a cost element pattern, a document type pattern, or both — '
+          + 'one matching everything would mask every rule below it.');
+      }
+    }
+    const run = db.transaction(() => {
+      db.prepare('DELETE FROM cost_type_rule').run();
+      const ins = db.prepare(`INSERT INTO cost_type_rule
+        (rule_id, priority, cost_element_glob, document_type_glob, cost_type, note, is_active)
+        VALUES (?,?,?,?,?,?,?)`);
+      rules.forEach((r, i) => ins.run(
+        r.rule_id ?? null,
+        r.priority ?? (i + 1) * 10,
+        r.cost_element_glob?.trim() || null,
+        r.document_type_glob?.trim() || null,
+        r.cost_type,
+        r.note?.trim() || null,
+        r.is_active === 0 ? 0 : 1));
+    });
+    run();
+    return { rules: rules.length };
+  });
+
+  /**
+   * What the current rules actually produce, so the effect of an edit is visible
+   * before it is trusted. UNMAPPED is the number that matters: it means the chart
+   * of accounts does not match the rules and a breakdown will collapse to one bar.
+   */
+  handle('costTypes:preview', () =>
+    getDb().prepare(`SELECT COALESCE(cost_type,'UNMAPPED') AS cost_type,
+                            COUNT(*) AS postings, COALESCE(SUM(amount),0) AS amount
+                     FROM v_actual
+                     GROUP BY COALESCE(cost_type,'UNMAPPED')
+                     ORDER BY amount DESC`).all());
+
+  /**
+   * Every (cost element, document type) pair that actually occurs in posted cost.
+   *
+   * Derived from the data, not typed in, so the list is exactly what needs an
+   * answer. `assigned_cost_type` is filled only when a rule names the pair
+   * outright — anything else is inherited from a pattern and shown as such, so
+   * the user can see which answers they have given and which were guessed.
+   */
+  handle('costTypes:combinations', () =>
+    getDb().prepare(`
+      SELECT a.cost_element_code, a.cost_element_name,
+             COALESCE(a.document_type,'') AS document_type,
+             COUNT(*) AS postings, SUM(a.amount) AS amount,
+             a.cost_type AS resolved_cost_type,
+             (SELECT r.cost_type FROM cost_type_rule r
+               WHERE r.is_active = 1
+                 AND r.cost_element_glob = a.cost_element_code
+                 AND r.document_type_glob = COALESCE(a.document_type,'')
+               ORDER BY r.priority, r.rule_id LIMIT 1) AS assigned_cost_type
+      FROM v_actual a
+      GROUP BY a.cost_element_code, a.cost_element_name,
+               COALESCE(a.document_type,''), a.cost_type
+      ORDER BY ABS(SUM(a.amount)) DESC`).all());
+
+  /**
+   * Allocate a cost type to named pairs.
+   *
+   * Written as ordinary rules, so an allocation and a pattern are the same kind
+   * of thing and the rules table stays the single answer to "why is this line a
+   * subcontract?". They are exact — no wildcard — and sit at priority 1 so they
+   * always beat the account ranges. Two of them can never disagree, because a
+   * pair occurs once.
+   */
+  handle('costTypes:assign', (items: CostTypeAssignment[]) => {
+    const db = getDb();
+    for (const it of items) {
+      if (it.cost_type !== null && !COST_TYPE_VALUES.includes(it.cost_type)) {
+        throw new Error(`"${it.cost_type}" is not a cost type.`);
+      }
+      // A code or document type carrying a GLOB metacharacter would silently
+      // become a wildcard and capture pairs the user never looked at.
+      for (const v of [it.cost_element_code, it.document_type]) {
+        if (/[*?[\]]/.test(v)) throw new Error(`"${v}" contains a wildcard character and cannot be allocated directly.`);
+      }
+    }
+    const del = db.prepare(`DELETE FROM cost_type_rule
+                            WHERE cost_element_glob = ? AND document_type_glob = ?`);
+    const ins = db.prepare(`INSERT INTO cost_type_rule
+      (priority, cost_element_glob, document_type_glob, cost_type, note)
+      VALUES (1, ?, ?, ?, ?)`);
+    let assigned = 0, cleared = 0;
+    const run = db.transaction(() => {
+      for (const it of items) {
+        del.run(it.cost_element_code, it.document_type);
+        if (it.cost_type === null) { cleared++; continue; }
+        ins.run(it.cost_element_code, it.document_type, it.cost_type,
+          `Allocated for document type ${it.document_type || '(none)'}`);
+        assigned++;
+      }
+    });
+    run();
+    return { assigned, cleared };
   });
 
   handle('reports:list', () =>

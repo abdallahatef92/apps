@@ -23,6 +23,13 @@ const api = {
   reports: {
     list: () => invoke<any[]>('reports:list'),
   },
+  costTypes: {
+    list: () => invoke<any[]>('costTypes:list'),
+    save: (rules: unknown[]) => invoke<{ rules: number }>('costTypes:save', rules),
+    preview: () => invoke<any[]>('costTypes:preview'),
+    combinations: () => invoke<any[]>('costTypes:combinations'),
+    assign: (items: unknown[]) => invoke<{ assigned: number; cleared: number }>('costTypes:assign', items),
+  },
   settings: {
     list: () => invoke<{ key: string; value: string }[]>('settings:list'),
     set: (key: string, value: string) => invoke<void>('settings:set', key, value),

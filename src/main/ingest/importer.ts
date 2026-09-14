@@ -429,12 +429,17 @@ class DimCache {
     const row = db.prepare('SELECT cost_element_key FROM dim_cost_element WHERE cost_element_code = ?')
       .get(code) as any;
     const nature = classifyNature(code, name, this.revenue);
-    // A column such as SAP's "Object Type" reads as a cost type but says nothing
-    // useful, so a vague OTHER never beats what the account range tells us.
+    // Cost type is no longer decided here. It is resolved per posting row by
+    // cost_type_rule inside v_posting (migration 007), so it can depend on the
+    // document type — which lives on the fact, not on the cost element — and so
+    // that correcting a rule fixes history instead of only the next import.
+    //
+    // The dimension keeps only what the source file itself stated, which still
+    // outranks a rule. A column such as SAP's "Object Type" reads as a cost type
+    // but says nothing useful, so a vague OTHER is stored without winning: the
+    // view treats it as "no answer" and falls through to the rules.
     const stated = normaliseCostType(costType);
-    const type = nature === 'REVENUE'
-      ? null
-      : (stated && stated !== 'OTHER' ? stated : costTypeFromCode(code) ?? stated);
+    const type = nature === 'REVENUE' ? null : stated;
     const key = row?.cost_element_key ?? Number(
       db.prepare(`INSERT INTO dim_cost_element
         (cost_element_code, cost_element_name, cost_type, posting_nature) VALUES (?,?,?,?)`)
@@ -524,17 +529,6 @@ function classifyNature(code: string, name: string | null | undefined, revenue: 
   if (revenue.test(code)) return 'REVENUE';
   if (name && /\b(income|revenue|billing|turnover|sales)\b/i.test(name)) return 'REVENUE';
   return 'COST';
-}
-
-/** Cost type inferred from the SAP account range when the file does not say. */
-function costTypeFromCode(code: string): string | null {
-  if (/^301/.test(code)) return 'EQUIPMENT';   // equipment rent, spares, fuel, in-house plant
-  if (/^302/.test(code)) return 'MATERIAL';    // main and consumable material
-  if (/^303/.test(code)) return 'LABOR';       // salaries and wages
-  if (/^305/.test(code)) return 'SUBCONTRACT'; // subcontractor cost, casual labour
-  if (/^30[467]/.test(code)) return 'INDIRECT';// site overheads, fees, charges
-  if (/^3/.test(code)) return 'OTHER';
-  return null;
 }
 
 function ensurePeriod(periodKey: string): string {
