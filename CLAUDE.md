@@ -41,6 +41,23 @@ Read `README.md` first for the data model and the reasoning behind it.
 - **The renderer has no Node and no database access.** Everything crosses via a channel
   in `src/main/ipc.ts` and the bridge in `src/preload/index.ts`.
 
+## Charts
+
+Chart colours come from the validated palette in `styles.css`: eight categorical
+slots assigned in fixed order and never cycled, one sequential blue ramp for
+magnitude, a blue↔red diverging pair with a neutral midpoint for signed variance,
+and a reserved status set that must never double as a series. Before changing any
+of them, re-run the dataviz validator against `--surface #121822`.
+
+Never use a dual axis, never colour by rank (a filter must not repaint the
+survivors), and never let a null read as zero — an element with no budget is
+neutral on a diverging scale, not an overrun the size of its spend.
+
+How an analysis is drawn lives in `query_library.viz_json` beside its SQL, so a
+report is one object and a user-written query can describe its own chart. Headline
+KPIs come from a separate stored query named by `viz.headline` — never from summing
+the result table in the UI.
+
 ## Changing the schema
 
 Add a numbered file in `src/main/db/migrations/` and register it in the `MIGRATIONS`

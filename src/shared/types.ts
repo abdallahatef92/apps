@@ -17,6 +17,7 @@ export interface StoredQuery {
   description: string | null;
   sql_text: string;
   params_json: string;
+  viz_json: string;
   is_system: number;
   is_active: number;
 }
@@ -182,3 +183,33 @@ export interface BatchRow {
 }
 
 export type IpcResult<T> = { ok: true; data: T } | { ok: false; error: string };
+
+export interface PivotField { key: string; label: string; column: string }
+export interface PivotMeasure { key: string; label: string; expr: string; format?: 'money' | 'count' }
+export interface PivotSource {
+  key: string;
+  label: string;
+  view: string;
+  description: string;
+  dimensions: PivotField[];
+  measures: PivotMeasure[];
+  scope?: string;
+  periodColumn?: string;
+}
+
+/** How an analysis should be drawn; stored with the query in the library. */
+export interface VizSpec {
+  kind?: 'line' | 'bar' | 'treemap' | 'heatmap' | 'table';
+  x?: string;
+  series?: { column: string; label: string }[];
+  area?: boolean;
+  label?: string;
+  value?: string;
+  reference?: string;
+  referenceLabel?: string;
+  diverging?: boolean;
+  color?: string;
+  row?: string;
+  col?: string;
+  headline?: string;
+}

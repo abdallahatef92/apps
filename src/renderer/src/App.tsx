@@ -35,10 +35,10 @@ export const useApp = (): AppState => {
 type PageId = 'dashboard' | 'upload' | 'analysis' | 'queries' | 'register' | 'settings';
 
 const PAGES: { id: PageId; label: string; glyph: string; group: string; subtitle: string }[] = [
-  { id: 'dashboard', label: 'Dashboard', glyph: '◧', group: 'Overview', subtitle: 'Portfolio position and data freshness' },
+  { id: 'dashboard', label: 'Dashboard', glyph: '◈', group: 'Overview', subtitle: 'Portfolio position and data freshness' },
   { id: 'upload', label: 'Upload data', glyph: '↥', group: 'Data', subtitle: 'Bring a report in, map it, review it, post it' },
   { id: 'register', label: 'Data register', glyph: '▤', group: 'Data', subtitle: 'Every import, its data date and audit trail' },
-  { id: 'analysis', label: 'Analysis', glyph: '◫', group: 'Reporting', subtitle: 'Run a saved analysis and export it' },
+  { id: 'analysis', label: 'Analysis', glyph: '◨', group: 'Reporting', subtitle: 'Run a saved analysis and export it' },
   { id: 'queries', label: 'Query library', glyph: '⌗', group: 'Reporting', subtitle: 'The SQL behind every report, stored in the database' },
   { id: 'settings', label: 'Settings', glyph: '⚙', group: 'Admin', subtitle: 'Projects, database and backups' },
 ];
@@ -79,8 +79,11 @@ export default function App() {
       <div className="shell">
         <aside className="sidebar">
           <div className="brand">
-            <h1>Cost Intelligence</h1>
-            <span>Project cost control</span>
+            <div className="mark">CI</div>
+            <div>
+              <h1>Cost Intelligence</h1>
+              <span>Project cost control</span>
+            </div>
           </div>
 
           <nav className="nav">

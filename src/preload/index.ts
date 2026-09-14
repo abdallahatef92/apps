@@ -58,6 +58,10 @@ const api = {
     save: (q: unknown) => invoke<{ query_id: number }>('query:save', q),
     remove: (queryId: number) => invoke<number>('query:delete', queryId),
   },
+  pivot: {
+    meta: () => invoke<any[]>('pivot:meta'),
+    build: (req: unknown) => invoke<string>('pivot:build', req),
+  },
   exportResult: (result: unknown, meta: unknown) => invoke<string | null>('export:result', result, meta),
   showItem: (filePath: string) => invoke<void>('shell:showItem', filePath),
 };

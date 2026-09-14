@@ -18,6 +18,31 @@ export interface QueryParamDef {
   default?: string | number;
 }
 
+/**
+ * How to draw a result set. Held with the query so a report is one object, and so
+ * a user-written query can describe its own chart without a code change.
+ */
+export interface VizSpec {
+  kind?: 'line' | 'bar' | 'treemap' | 'heatmap' | 'table';
+  /** line */
+  x?: string;
+  series?: { column: string; label: string }[];
+  area?: boolean;
+  /** bar / treemap */
+  label?: string;
+  value?: string;
+  reference?: string;
+  referenceLabel?: string;
+  diverging?: boolean;
+  /** treemap fill */
+  color?: string;
+  /** heatmap */
+  row?: string;
+  col?: string;
+  /** Another stored query, run with the same parameters, supplying the KPI row. */
+  headline?: string;
+}
+
 export interface SystemQuery {
   code: string;
   name: string;
@@ -26,6 +51,7 @@ export interface SystemQuery {
   description: string;
   sql: string;
   params: QueryParamDef[];
+  viz?: VizSpec;
 }
 
 const P_PROJECT: QueryParamDef = { name: 'project_key', type: 'project', label: 'Project', required: true };
@@ -40,6 +66,7 @@ export const SYSTEM_QUERIES: SystemQuery[] = [
     params: [P_PROJECT,
       { name: 'period_from', type: 'period', label: 'Period from' },
       { name: 'period_to', type: 'period', label: 'Period to' }],
+    viz: { kind: 'bar', label: 'wbs_name', value: 'actual_amount', headline: 'KPI_PROJECT' },
     sql: `
 SELECT
   a.wbs_code,
@@ -63,6 +90,7 @@ ORDER BY actual_amount DESC`,
     category: 'Aggregation',
     description: 'Actual cost split by cost type (labor, material, subcontract, ...) with share of total.',
     params: [P_PROJECT, { name: 'period_to', type: 'period', label: 'Up to period' }],
+    viz: { kind: 'bar', label: 'cost_type', value: 'actual_amount', headline: 'KPI_PROJECT' },
     sql: `
 SELECT
   COALESCE(a.cost_type,'UNMAPPED') AS cost_type,
@@ -82,6 +110,9 @@ ORDER BY actual_amount DESC`,
     category: 'Trend',
     description: 'Actual spend per month with a running cumulative total.',
     params: [P_PROJECT],
+    viz: { kind: 'line', x: 'period_key', area: true,
+      series: [{ column: 'period_amount', label: 'Spend in period' }],
+      headline: 'KPI_PROJECT' },
     sql: `
 SELECT
   a.period_key,
@@ -100,6 +131,7 @@ ORDER BY a.period_key`,
     category: 'Aggregation',
     description: 'Top vendors by actual spend.',
     params: [P_PROJECT, { name: 'top_n', type: 'int', label: 'Top N', default: 25 }],
+    viz: { kind: 'bar', label: 'vendor_name', value: 'actual_amount' },
     sql: `
 SELECT
   COALESCE(a.vendor_name,'(no vendor)') AS vendor_name,
@@ -121,6 +153,7 @@ LIMIT COALESCE(:top_n, 25)`,
     params: [P_PROJECT,
       { name: 'period_from', type: 'period', label: 'Period from' },
       { name: 'period_to', type: 'period', label: 'Period to' }],
+    viz: { kind: 'table' },
     sql: `
 SELECT
   a.period_key, a.document_no, a.document_type, a.wbs_code, a.wbs_name,
@@ -139,6 +172,8 @@ ORDER BY a.period_key, a.wbs_code, a.document_no`,
     category: 'Variance',
     description: 'Current budget against actuals per WBS, with variance and a status flag. A WBS present on either side appears exactly once.',
     params: [P_PROJECT, { name: 'period_to', type: 'period', label: 'Actuals up to period' }],
+    viz: { kind: 'bar', label: 'wbs_name', value: 'actual_amount',
+      reference: 'budget_amount', referenceLabel: 'Budget', headline: 'KPI_PROJECT' },
     sql: `
 WITH bud AS (
   SELECT wbs_key, wbs_code, wbs_name, discipline, SUM(budget_amount) AS budget_amount
@@ -185,6 +220,8 @@ ORDER BY variance_amount ASC`,
     category: 'Variance',
     description: 'The same comparison at cost element grain — shows which accounts are eroding the budget.',
     params: [P_PROJECT],
+    viz: { kind: 'bar', label: 'cost_element_name', value: 'actual_amount',
+      reference: 'budget_amount', referenceLabel: 'Budget', headline: 'KPI_PROJECT' },
     sql: `
 WITH bud AS (
   SELECT cost_element_code, cost_element_name, cost_type, SUM(budget_amount) AS budget_amount
@@ -219,6 +256,8 @@ ORDER BY variance_amount ASC`,
     category: 'Variance',
     description: 'Budget, actual to date, ETC and EAC per WBS with variance at completion (VAC).',
     params: [P_PROJECT],
+    viz: { kind: 'bar', label: 'wbs_name', value: 'vac_amount', diverging: true,
+      headline: 'KPI_PROJECT' },
     sql: `
 WITH bud AS (
   SELECT wbs_key, wbs_code, wbs_name, SUM(budget_amount) AS budget_amount
@@ -258,6 +297,11 @@ ORDER BY vac_amount ASC`,
     description: 'Cumulative budget, actual and forecast by period — the cost S-curve. '
       + 'A budget that is not time-phased is shown as a flat budget-at-completion line.',
     params: [P_PROJECT],
+    viz: { kind: 'line', x: 'period_key',
+      series: [{ column: 'budget_cum', label: 'Budget' },
+               { column: 'actual_cum', label: 'Actual (cum.)' },
+               { column: 'forecast_cum', label: 'Actual + forecast' }],
+      headline: 'KPI_PROJECT' },
     sql: `
 WITH periods AS (
   SELECT period_key FROM v_budget   WHERE project_key = :project_key AND period_key IS NOT NULL
@@ -299,6 +343,7 @@ ORDER BY p.period_key`,
     category: 'Variance',
     description: 'WBS elements where actual cost has passed the current budget, worst first.',
     params: [P_PROJECT, { name: 'top_n', type: 'int', label: 'Top N', default: 20 }],
+    viz: { kind: 'bar', label: 'wbs_name', value: 'overrun_amount', diverging: true },
     sql: `
 WITH bud AS (
   SELECT wbs_key, wbs_code, wbs_name, SUM(budget_amount) AS budget_amount
@@ -328,6 +373,8 @@ LIMIT COALESCE(:top_n, 20)`,
     category: 'Overview',
     description: 'One row per project: budget, actual, EAC and VAC across the portfolio.',
     params: [],
+    viz: { kind: 'bar', label: 'project_name', value: 'actual_amount',
+      reference: 'budget_amount', referenceLabel: 'Budget' },
     sql: `
 SELECT
   p.project_code,
@@ -358,6 +405,11 @@ ORDER BY p.project_code`,
     description: 'Actual cost against revenue billed, per period, with the running margin. '
       + 'A CJI3 export carries income on 4xxxxxxx accounts as negative amounts; this keeps the two apart.',
     params: [P_PROJECT],
+    viz: { kind: 'line', x: 'period_key',
+      series: [{ column: 'revenue_cum', label: 'Revenue (cum.)' },
+               { column: 'cost_cum', label: 'Cost (cum.)' },
+               { column: 'margin_cum', label: 'Margin (cum.)' }],
+      headline: 'KPI_PROJECT' },
     sql: `
 WITH periods AS (
   SELECT period_key FROM v_actual  WHERE project_key = :project_key
@@ -391,6 +443,8 @@ ORDER BY p.period_key`,
     description: 'The cost breakdown structure down to a chosen level, with actual cost rolled up '
       + 'from every descendant. Uses the materialised path, so no recursion is needed.',
     params: [P_PROJECT, { name: 'max_level', type: 'int', label: 'Down to level', default: 3 }],
+    viz: { kind: 'bar', label: 'wbs_name', value: 'actual_rollup',
+      reference: 'budget_rollup', referenceLabel: 'Budget' },
     sql: `
 SELECT
   w.wbs_level,
@@ -419,6 +473,8 @@ ORDER BY w.wbs_path`,
       + 'lines behind it. A difference means the sub-ledger and the ledger disagree — or that a '
       + 'certificate has not been loaded yet.',
     params: [P_PROJECT, { name: 'tolerance', type: 'int', label: 'Tolerance', default: 1 }],
+    viz: { kind: 'bar', label: 'po_no', value: 'difference', diverging: true,
+      headline: 'KPI_SUBCONTRACT' },
     sql: `
 WITH act AS (
   SELECT po_no, SUM(amount) AS amount, COUNT(*) AS posting_lines
@@ -459,6 +515,7 @@ ORDER BY ABS(COALESCE(act.amount,0) - COALESCE(sl.amount,0)) DESC, k.po_no`,
     category: 'Aggregation',
     description: 'Certified work per subcontractor, net and gross, with the number of certificates.',
     params: [P_PROJECT],
+    viz: { kind: 'bar', label: 'supplier', value: 'work_done_net', headline: 'KPI_SUBCONTRACT' },
     sql: `
 SELECT
   COALESCE(vendor_name, vendor_code, '(unknown)') AS supplier,
@@ -482,6 +539,8 @@ ORDER BY work_done_net DESC`,
     description: 'Certified work grouped by the work category on the certificate (concrete, '
       + 'equipment rent, finishes …), with the WBS elements it touches.',
     params: [P_PROJECT],
+    viz: { kind: 'treemap', label: 'category', value: 'work_done_net',
+      headline: 'KPI_SUBCONTRACT' },
     sql: `
 SELECT
   COALESCE(category,'(uncategorised)') AS category,
@@ -503,6 +562,7 @@ ORDER BY work_done_net DESC`,
     description: 'Every certified service line. Filter by purchase order to drill from an actual '
       + 'cost posting into exactly what was certified against it.',
     params: [P_PROJECT, { name: 'po_no', type: 'text', label: 'Purchase order' }],
+    viz: { kind: 'table' },
     sql: `
 SELECT
   po_no, invoice_serial, invoice_no, period_key, vendor_name,
@@ -522,6 +582,7 @@ ORDER BY po_no, invoice_no, item_no, line_no`,
     description: 'How much of actual cost is explained by loaded service-line detail, split by '
       + 'whether the posting carries a purchase order at all.',
     params: [P_PROJECT],
+    viz: { kind: 'bar', label: 'bucket', value: 'amount' },
     sql: `
 WITH a AS (
   SELECT
@@ -543,6 +604,7 @@ ORDER BY amount DESC`,
     category: 'Overview',
     description: 'Income posted to the project, by WBS element and period.',
     params: [P_PROJECT],
+    viz: { kind: 'bar', label: 'wbs_name', value: 'revenue' },
     sql: `
 SELECT
   wbs_code, wbs_name, period_key,
@@ -562,6 +624,7 @@ ORDER BY revenue DESC`,
     description: 'Cost split by SAP document type — useful for spotting reversals and journal '
       + 'corrections hiding inside the actuals.',
     params: [P_PROJECT],
+    viz: { kind: 'bar', label: 'document_type', value: 'net_amount', diverging: true },
     sql: `
 SELECT
   COALESCE(NULLIF(document_type,''),'(none)') AS document_type,
@@ -575,12 +638,128 @@ GROUP BY COALESCE(NULLIF(document_type,''),'(none)')
 ORDER BY ABS(SUM(amount)) DESC`,
   },
   {
+    code: 'KPI_PROJECT',
+    name: 'Project headline figures',
+    module: 'CROSS',
+    category: 'Headline',
+    description: 'One row of totals for a project — budget, cost, revenue, EAC and variance. '
+      + 'Analyses point at this for their KPI strip, so headline numbers are SQL like everything else.',
+    params: [P_PROJECT],
+    viz: { kind: 'table' },
+    sql: `
+WITH b AS (SELECT SUM(budget_amount) AS total FROM v_budget
+           WHERE project_key = :project_key AND is_current = 1),
+     a AS (SELECT COALESCE(SUM(amount),0) AS total, COUNT(*) AS n, MAX(data_date) AS d
+           FROM v_actual WHERE project_key = :project_key),
+     r AS (SELECT COALESCE(SUM(amount),0) AS total FROM v_revenue WHERE project_key = :project_key),
+     f AS (SELECT COALESCE(SUM(forecast_amount),0) AS total FROM v_forecast
+           WHERE project_key = :project_key AND is_current = 1)
+-- budget and vac stay NULL when nothing is budgeted: a variance against a budget
+-- that does not exist would read as an overrun the size of the whole spend.
+SELECT
+  (SELECT total FROM b)                              AS budget,
+  (SELECT total FROM a)                              AS actual_cost,
+  (SELECT total FROM r)                              AS revenue,
+  (SELECT total FROM f)                              AS etc,
+  (SELECT total FROM a) + (SELECT total FROM f)      AS eac,
+  CASE WHEN (SELECT total FROM b) IS NULL THEN NULL
+       ELSE (SELECT total FROM b) - ((SELECT total FROM a) + (SELECT total FROM f)) END AS vac,
+  (SELECT total FROM r) - (SELECT total FROM a)      AS margin,
+  (SELECT n FROM a)                                  AS postings,
+  (SELECT d FROM a)                                  AS data_date`,
+  },
+  {
+    code: 'KPI_SUBCONTRACT',
+    name: 'Subcontract headline figures',
+    module: 'SERVICE',
+    category: 'Headline',
+    description: 'One row of subcontract totals — certified work, VAT, suppliers, and how many '
+      + 'purchase orders reconcile against actual cost.',
+    params: [P_PROJECT],
+    viz: { kind: 'table' },
+    sql: `
+WITH act AS (
+  SELECT po_no, SUM(amount) AS amount FROM v_actual
+  WHERE project_key = :project_key AND po_no IS NOT NULL AND po_no <> '' GROUP BY po_no
+),
+sl AS (
+  SELECT po_no, SUM(amount_net) AS amount FROM v_service_line
+  WHERE project_key = :project_key GROUP BY po_no
+)
+SELECT
+  (SELECT COALESCE(SUM(amount_net),0) FROM v_service_line WHERE project_key = :project_key) AS work_done_net,
+  (SELECT COALESCE(SUM(amount_vat),0) FROM v_service_line WHERE project_key = :project_key) AS vat,
+  (SELECT COUNT(DISTINCT vendor_name) FROM v_service_line WHERE project_key = :project_key) AS suppliers,
+  (SELECT COUNT(DISTINCT po_no) FROM v_service_line WHERE project_key = :project_key) AS purchase_orders,
+  (SELECT COUNT(*) FROM act JOIN sl ON sl.po_no = act.po_no
+     WHERE ABS(act.amount - sl.amount) <= 1) AS reconciled_pos,
+  (SELECT COUNT(*) FROM act JOIN sl ON sl.po_no = act.po_no
+     WHERE ABS(act.amount - sl.amount) > 1) AS differing_pos`,
+  },
+  {
+    code: 'WBS_TREEMAP',
+    name: 'Cost map by WBS',
+    module: 'CROSS',
+    category: 'Structure',
+    description: 'Every WBS element sized by actual cost and shaded by budget variance — red is '
+      + 'over budget, blue is under, grey where there is no budget to compare against. The whole '
+      + 'structure and its problem areas in one view.',
+    params: [P_PROJECT, { name: 'max_level', type: 'int', label: 'Level', default: 3 }],
+    viz: { kind: 'treemap', label: 'wbs_name', value: 'actual_amount', color: 'variance_amount',
+      headline: 'KPI_PROJECT' },
+    sql: `
+WITH act AS (
+  SELECT w.wbs_key, w.wbs_code, w.wbs_name, w.wbs_level,
+         COALESCE(SUM(a.amount),0) AS actual_amount
+  FROM dim_wbs w
+  LEFT JOIN v_actual a ON a.wbs_key = w.wbs_key
+  WHERE w.project_key = :project_key AND w.wbs_level <= COALESCE(:max_level, 3)
+  GROUP BY w.wbs_key, w.wbs_code, w.wbs_name, w.wbs_level
+),
+bud AS (
+  SELECT wbs_key, SUM(budget_amount) AS budget_amount FROM v_budget
+  WHERE project_key = :project_key AND is_current = 1 GROUP BY wbs_key
+)
+SELECT
+  act.wbs_code, act.wbs_name, act.wbs_level,
+  act.actual_amount,
+  bud.budget_amount,
+  -- NULL, not a negative: an element with no budget is uncoloured on the map
+  -- rather than shown as an overrun equal to everything spent on it.
+  CASE WHEN bud.budget_amount IS NULL THEN NULL
+       ELSE bud.budget_amount - act.actual_amount END AS variance_amount
+FROM act LEFT JOIN bud ON bud.wbs_key = act.wbs_key
+WHERE act.actual_amount <> 0
+ORDER BY act.actual_amount DESC`,
+  },
+  {
+    code: 'COST_HEATMAP',
+    name: 'Spend heatmap: cost type by month',
+    module: 'ACTUAL',
+    category: 'Trend',
+    description: 'Actual cost per cost type per month. Seasonality, ramp-up and one-off spikes '
+      + 'stand out immediately.',
+    params: [P_PROJECT],
+    viz: { kind: 'heatmap', row: 'cost_type', col: 'period_key', value: 'actual_amount',
+      headline: 'KPI_PROJECT' },
+    sql: `
+SELECT
+  COALESCE(cost_type,'UNMAPPED') AS cost_type,
+  period_key,
+  SUM(amount) AS actual_amount
+FROM v_actual
+WHERE project_key = :project_key
+GROUP BY COALESCE(cost_type,'UNMAPPED'), period_key
+ORDER BY cost_type, period_key`,
+  },
+  {
     code: 'DATA_FRESHNESS',
     name: 'Data freshness by source',
     module: 'ADMIN',
     category: 'Governance',
     description: 'Latest posted data date per source report, and whether it has gone stale.',
     params: [],
+    viz: { kind: 'table' },
     sql: `
 SELECT report_code, report_name, module, source_system,
        latest_data_date, latest_period, latest_rows, age_days, freshness_status,
@@ -595,6 +774,7 @@ ORDER BY CASE freshness_status WHEN 'NO_DATA' THEN 0 WHEN 'STALE' THEN 1 ELSE 2 
     category: 'Governance',
     description: 'Every upload with its data date, status and control totals — the audit trail.',
     params: [{ name: 'top_n', type: 'int', label: 'Rows', default: 200 }],
+    viz: { kind: 'table' },
     sql: `
 SELECT b.import_batch_id, rd.name AS report_name, b.module, b.data_date, b.period_key,
        b.file_name, b.status, b.row_count_file, b.row_count_posted, b.row_count_rejected,
@@ -611,6 +791,7 @@ LIMIT COALESCE(:top_n, 200)`,
     category: 'Data quality',
     description: 'Actual rows that did not resolve to a WBS or cost element — these need mapping.',
     params: [P_PROJECT],
+    viz: { kind: 'table' },
     sql: `
 SELECT
   COUNT(*)                                                    AS total_rows,

@@ -99,6 +99,22 @@ npm run build       # production bundles
 
 ---
 
+## The interface
+
+Three surfaces, all reading the same warehouse:
+
+**Dashboard** — the position at a glance: headline figures with a spend sparkline,
+the cost S-curve, a treemap of the breakdown structure sized by spend and shaded by
+variance, a cost-type × month heatmap, and the freshness board.
+
+**Analysis** — a searchable rail of analyses grouped by subject, each rendering as a
+report: KPI strip, chart, and Chart / Table / SQL tabs, with one-click export. The
+chart is not guessed — it comes from the visualisation spec stored beside the query.
+
+**Pivot builder** — pick a source, a grouping and a measure; the SQL is generated
+against the reporting views, shown in full, and savable into the library as a normal
+analysis. Ad-hoc exploration produces the same kind of artefact as a curated report.
+
 ## Working flow
 
 **Upload → map → review → post.**

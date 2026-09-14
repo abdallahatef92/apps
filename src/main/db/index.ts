@@ -8,6 +8,7 @@ import coreSql from './migrations/001_core.sql?raw';
 import seedSql from './migrations/002_seed.sql?raw';
 import sapRealitySql from './migrations/003_sap_reality.sql?raw';
 import lineIdentitySql from './migrations/004_line_identity.sql?raw';
+import vizSpecSql from './migrations/005_viz_spec.sql?raw';
 import { SYSTEM_QUERIES } from './systemQueries';
 
 interface Migration {
@@ -26,6 +27,7 @@ const MIGRATIONS: Migration[] = [
   { version: 2, name: '002_seed', sql: seedSql },
   { version: 3, name: '003_sap_reality', sql: sapRealitySql, selfTransacting: true },
   { version: 4, name: '004_line_identity', sql: lineIdentitySql },
+  { version: 5, name: '005_viz_spec', sql: vizSpecSql },
 ];
 
 let db: DB | null = null;
@@ -104,12 +106,14 @@ function migrate(conn: DB): void {
  */
 function seedSystemQueries(conn: DB): void {
   const upsert = conn.prepare(`
-    INSERT INTO query_library (code, name, module, category, description, sql_text, params_json, is_system)
-    VALUES (@code, @name, @module, @category, @description, @sql_text, @params_json, 1)
+    INSERT INTO query_library
+      (code, name, module, category, description, sql_text, params_json, viz_json, is_system)
+    VALUES (@code, @name, @module, @category, @description, @sql_text, @params_json, @viz_json, 1)
     ON CONFLICT(code) DO UPDATE SET
       name = excluded.name, module = excluded.module, category = excluded.category,
       description = excluded.description, sql_text = excluded.sql_text,
-      params_json = excluded.params_json, updated_at = datetime('now')
+      params_json = excluded.params_json, viz_json = excluded.viz_json,
+      updated_at = datetime('now')
     WHERE query_library.is_system = 1`);
 
   const run = conn.transaction(() => {
@@ -122,6 +126,7 @@ function seedSystemQueries(conn: DB): void {
         description: q.description,
         sql_text: q.sql.trim(),
         params_json: JSON.stringify(q.params),
+        viz_json: JSON.stringify(q.viz ?? {}),
       });
     }
   });

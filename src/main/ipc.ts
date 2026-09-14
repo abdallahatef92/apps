@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { closeDatabase, currentDbPath, defaultDbPath, getDb, openDatabase } from './db';
 import { runSelect, runStoredQuery } from './services/queryRunner';
 import { exportResult } from './services/exportExcel';
+import { buildPivotSql, pivotMeta, type PivotRequest } from './services/pivot';
 import { readWorkbook } from './ingest/workbook';
 import { deleteBatch, loadColumnMapping, postBatch, revenueAccountPattern, saveColumnMapping, stageFile } from './ingest/importer';
 import { suggestMapping, targetFields } from './ingest/targetFields';
@@ -177,6 +178,10 @@ export function registerIpc(): void {
 
   handle('query:delete', (queryId: number) =>
     getDb().prepare('DELETE FROM query_library WHERE query_id = ? AND is_system = 0').run(queryId).changes);
+
+  // --- pivot ---------------------------------------------------------------
+  handle('pivot:meta', () => pivotMeta());
+  handle('pivot:build', (req: PivotRequest) => buildPivotSql(req));
 
   // --- export --------------------------------------------------------------
   handle('export:result', async (result: QueryResult, meta: { title: string; subtitle?: string;

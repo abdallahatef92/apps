@@ -1,4 +1,4 @@
-import type { IpcResult } from '@shared/types';
+import type { IpcResult, PivotSource } from '@shared/types';
 
 // Shape exposed by the preload bridge.
 type Bridge = {
@@ -31,6 +31,10 @@ type Bridge = {
     runSql(sql: string, params: Record<string, unknown>): Promise<IpcResult<any>>;
     save(q: unknown): Promise<IpcResult<{ query_id: number }>>;
     remove(id: number): Promise<IpcResult<number>>;
+  };
+  pivot: {
+    meta(): Promise<IpcResult<PivotSource[]>>;
+    build(req: unknown): Promise<IpcResult<string>>;
   };
   exportResult(result: unknown, meta: unknown): Promise<IpcResult<string | null>>;
   showItem(p: string): Promise<IpcResult<void>>;
