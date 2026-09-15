@@ -9,6 +9,81 @@ import {
 const money = (n: number) =>
   n.toLocaleString(undefined, { maximumFractionDigits: 0 });
 
+/**
+ * One icon and colour per cost type, used only for this picker's buttons and
+ * badges — deliberately not the chart series palette (styles.css --series-*),
+ * which is reserved for encoding data in a chart and must never double as a
+ * UI control colour.
+ */
+const COST_TYPE_META: Record<CostType, { icon: string; color: string; label: string }> = {
+  LABOR:       { icon: '👷', color: '#e08fd0', label: 'Labor' },
+  MATERIAL:    { icon: '📦', color: '#5ac8fa', label: 'Material' },
+  SUBCONTRACT: { icon: '🔨', color: '#f5c15a', label: 'Subcontract' },
+  EQUIPMENT:   { icon: '🔧', color: '#ff9f5a', label: 'Equipment' },
+  INDIRECT:    { icon: '💼', color: '#7fd9c4', label: 'Indirect' },
+  OTHER:       { icon: '❓', color: '#9aa5b1', label: 'Other' },
+};
+
+/**
+ * Assign a cost type with one click instead of a dropdown: a row of icon
+ * buttons, filled in that type's colour when selected. `value` of '' or
+ * undefined means "not set" — nothing is filled, and no clear button shows.
+ */
+function CostTypePicker({ value, onChange, clearLabel = 'inherit', required = false }: {
+  value: CostType | '';
+  onChange: (v: CostType | '') => void;
+  clearLabel?: string;
+  /** A rule's cost type can never be blank — clicking the selected icon again keeps it. */
+  required?: boolean;
+}) {
+  return (
+    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+      {COST_TYPE_VALUES.map((t) => {
+        const meta = COST_TYPE_META[t];
+        const selected = value === t;
+        return (
+          <button key={t} type="button" title={meta.label}
+                  onClick={() => { if (!selected || !required) onChange(selected ? '' : t); }}
+                  style={{
+                    fontSize: 13, lineHeight: 1, padding: '4px 7px', borderRadius: 6,
+                    cursor: 'pointer', fontFamily: 'inherit',
+                    background: selected ? meta.color : 'var(--surface-3)',
+                    border: `1px solid ${selected ? meta.color : 'var(--border)'}`,
+                    filter: selected ? 'none' : 'grayscale(0.4) opacity(0.75)',
+                  }}>
+            {meta.icon}
+          </button>
+        );
+      })}
+      {!required && value !== '' && (
+        <button type="button" title={`Clear — ${clearLabel}`} onClick={() => onChange('')}
+                style={{ fontSize: 10, padding: '4px 6px', borderRadius: 6, cursor: 'pointer',
+                         fontFamily: 'inherit', background: 'transparent', color: 'var(--text-3)',
+                         border: '1px solid var(--border)' }}>
+          ✕
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Small icon + label badge for showing a resolved cost type, not picking one. */
+function CostTypeBadge({ type }: { type: string }) {
+  const meta = COST_TYPE_META[type as CostType];
+  if (!meta) {
+    return <span className="faint mono">{type}</span>;
+  }
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600,
+      color: meta.color, background: `${meta.color}22`, border: `1px solid ${meta.color}55`,
+      borderRadius: 5, padding: '2px 8px', whiteSpace: 'nowrap',
+    }}>
+      <span>{meta.icon}</span>{meta.label}
+    </span>
+  );
+}
+
 export function Settings() {
   const { projects, refresh } = useApp();
   const [info, setInfo] = useState<{ version: string; dbPath: string; userData: string } | null>(null);
@@ -171,8 +246,8 @@ export function Settings() {
                 <th>Doc type</th>
                 <th style={{ textAlign: 'right' }}>Postings</th>
                 <th style={{ textAlign: 'right' }}>Amount</th>
-                <th>Now</th>
-                <th style={{ width: 150 }}>Allocate</th>
+                <th style={{ width: 150 }}>Now</th>
+                <th style={{ width: 240 }}>Allocate</th>
               </tr>
             </thead>
             <tbody>
@@ -192,18 +267,21 @@ export function Settings() {
                     <td className="mono">{c.document_type || <span className="faint">(none)</span>}</td>
                     <td className="mono" style={{ textAlign: 'right' }}>{c.postings.toLocaleString()}</td>
                     <td className="mono" style={{ textAlign: 'right' }}>{money(c.amount)}</td>
-                    <td className={c.assigned_cost_type ? undefined : 'faint'}>
-                      {c.resolved_cost_type ?? 'UNMAPPED'}
-                      {!c.assigned_cost_type && <span className="faint"> (pattern)</span>}
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        {c.resolved_cost_type
+                          ? <CostTypeBadge type={c.resolved_cost_type} />
+                          : <span className="faint mono">UNMAPPED</span>}
+                        {!c.assigned_cost_type && c.resolved_cost_type && (
+                          <span className="faint" style={{ fontSize: 10 }}>(pattern)</span>
+                        )}
+                      </div>
                     </td>
                     <td>
-                      <select value={current} style={changed ? { borderColor: 'var(--accent)' } : undefined}
-                              onChange={(e) => setPending((p) => ({
-                                ...p, [key]: e.target.value as CostType | '',
-                              }))}>
-                        <option value="">inherit</option>
-                        {COST_TYPE_VALUES.map((t) => <option key={t} value={t}>{t}</option>)}
-                      </select>
+                      <div style={changed ? { outline: '1px solid var(--accent)', borderRadius: 8, padding: 2 } : undefined}>
+                        <CostTypePicker value={current}
+                          onChange={(v) => setPending((p) => ({ ...p, [key]: v }))} />
+                      </div>
                     </td>
                   </tr>
                 );
@@ -272,10 +350,8 @@ export function Settings() {
                            onChange={(e) => editRule(i, { document_type_glob: e.target.value })} />
                   </td>
                   <td>
-                    <select value={r.cost_type}
-                            onChange={(e) => editRule(i, { cost_type: e.target.value as CostTypeRule['cost_type'] })}>
-                      {COST_TYPE_VALUES.map((c) => <option key={c} value={c}>{c}</option>)}
-                    </select>
+                    <CostTypePicker value={r.cost_type} required
+                      onChange={(v) => editRule(i, { cost_type: (v || 'OTHER') as CostTypeRule['cost_type'] })} />
                   </td>
                   <td>
                     <input style={{ width: '100%', minWidth: 160 }} placeholder="why this rule exists"
@@ -321,7 +397,7 @@ export function Settings() {
               {preview.length === 0 && <tr><td colSpan={3}><div className="empty">No actual cost loaded yet.</div></td></tr>}
               {preview.map((p) => (
                 <tr key={p.cost_type}>
-                  <td className={p.cost_type === 'UNMAPPED' ? 'mono' : undefined}>{p.cost_type}</td>
+                  <td><CostTypeBadge type={p.cost_type} /></td>
                   <td className="mono" style={{ textAlign: 'right' }}>{p.postings.toLocaleString()}</td>
                   <td className="mono" style={{ textAlign: 'right' }}>{money(p.amount)}</td>
                 </tr>
