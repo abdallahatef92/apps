@@ -99,6 +99,88 @@ function typeMeta(types: CostTypeDef[], code: string) {
     ?? { code, label: code === 'UNMAPPED' ? 'Unmapped' : code, icon: '❓', color: '#9aa5b1', sort_order: 999, is_system: 0 };
 }
 
+interface Filters { search: string; types: Set<string>; periodFrom: string; periodTo: string }
+const EMPTY_FILTERS: Filters = { search: '', types: new Set(), periodFrom: '', periodTo: '' };
+
+/**
+ * Shared by the on-screen tree and the Excel export, so "what you filtered to
+ * is what you get in the file" — operates on raw query rows (cost_type,
+ * cost_element_code/name and period_key are common to both the monthly and
+ * the transaction-level result sets). An empty `types` set means "no filter".
+ */
+function filterRows(rows: Record<string, unknown>[], f: Filters): Record<string, unknown>[] {
+  const q = f.search.trim().toLowerCase();
+  return rows.filter((r) => {
+    if (f.types.size > 0 && !f.types.has(String(r.cost_type ?? ''))) return false;
+    const pk = String(r.period_key ?? '');
+    if (f.periodFrom && pk < f.periodFrom) return false;
+    if (f.periodTo && pk > f.periodTo) return false;
+    if (q && !`${r.cost_element_code ?? ''} ${r.cost_element_name ?? ''}`.toLowerCase().includes(q)) return false;
+    return true;
+  });
+}
+
+/**
+ * One filter bar shared by both tabs: free-text search over the GL code and
+ * description, a cost-type pill toggle (reusing the same icons as the
+ * picker in Settings), and a period range. Filtering happens client-side —
+ * the whole month's worth of rows is already in memory — so results update
+ * as you type or click, with no round trip.
+ */
+function FilterBar({ filters, onChange, types, periods, matched, total }: {
+  filters: Filters; onChange: (f: Filters) => void; types: CostTypeDef[]; periods: string[];
+  matched: number; total: number;
+}) {
+  const present = [...types.map((t) => t.code), 'UNMAPPED'].filter((c, i, a) => a.indexOf(c) === i);
+  const toggleType = (code: string) => {
+    const next = new Set(filters.types);
+    if (next.has(code)) next.delete(code); else next.add(code);
+    onChange({ ...filters, types: next });
+  };
+  const active = filters.search || filters.types.size > 0 || filters.periodFrom || filters.periodTo;
+
+  return (
+    <div className="row" style={{ flexWrap: 'wrap', gap: 10, marginBottom: 14, alignItems: 'center' }}>
+      <input placeholder="Search GL code or name…" value={filters.search} style={{ width: 220 }}
+             onChange={(e) => onChange({ ...filters, search: e.target.value })} />
+      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+        {present.map((code) => {
+          const meta = typeMeta(types, code);
+          const on = filters.types.has(code);
+          return (
+            <button key={code} type="button" title={meta.label} onClick={() => toggleType(code)}
+                    style={{
+                      fontSize: 12, padding: '4px 9px', borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit',
+                      background: on ? meta.color : 'var(--surface-3)', color: on ? '#0b0f14' : 'var(--text-2)',
+                      border: `1px solid ${on ? meta.color : 'var(--border)'}`, fontWeight: on ? 700 : 400,
+                    }}>
+              {meta.icon} {meta.label}
+            </button>
+          );
+        })}
+      </div>
+      <label className="field" style={{ margin: 0 }}>
+        <select value={filters.periodFrom} onChange={(e) => onChange({ ...filters, periodFrom: e.target.value })}>
+          <option value="">From…</option>
+          {periods.map((p) => <option key={p} value={p}>{periodLabel(p)}</option>)}
+        </select>
+      </label>
+      <label className="field" style={{ margin: 0 }}>
+        <select value={filters.periodTo} onChange={(e) => onChange({ ...filters, periodTo: e.target.value })}>
+          <option value="">To…</option>
+          {periods.map((p) => <option key={p} value={p}>{periodLabel(p)}</option>)}
+        </select>
+      </label>
+      {active && (
+        <button className="btn sm ghost" onClick={() => onChange(EMPTY_FILTERS)}>Clear filters</button>
+      )}
+      {active && (
+        <span className="faint" style={{ fontSize: 11 }}>{matched.toLocaleString()} of {total.toLocaleString()} rows match</span>
+      )}
+    </div>
+  );
+}
+
 /**
  * A sticky cell needs a fully opaque background — it visually sits on top of
  * whatever has scrolled underneath it, and a translucent tint (color + alpha)
@@ -267,14 +349,25 @@ function groupByPeriod(rows: Record<string, unknown>[]): { period: string; rows:
     }));
 }
 
-function TransactionTree({ rows, types }: { rows: MonthRow[]; types: CostTypeDef[] }) {
+function TransactionTree({ rows, types, filters }: { rows: MonthRow[]; types: CostTypeDef[]; filters: Filters }) {
   const { types: tree, grandTotal, grandPostings } = useMemo(() => buildTree(rows), [rows]);
   const [collapsedType, setCollapsedType] = useState<Record<string, boolean>>({});
   const [openGl, setOpenGl] = useState<Record<string, boolean>>({});
   const [collapsedPeriod, setCollapsedPeriod] = useState<Record<string, boolean>>({});
   const [txns, setTxns] = useState<Record<string, QueryResult>>({});
   const [loadingGl, setLoadingGl] = useState<string | null>(null);
+  const [sortKey, setSortKey] = useState<'txn' | 'total' | null>(null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const { projectKey } = useApp();
+
+  const sortBy = (key: 'txn' | 'total') => {
+    if (key === sortKey) setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'));
+    else { setSortKey(key); setSortDir('desc'); }
+  };
+  const sortedTree = useMemo(
+    () => sortNodes(tree, sortKey, sortDir).map((g) => ({ ...g, gls: sortNodes(g.gls, sortKey, sortDir) })),
+    [tree, sortKey, sortDir],
+  );
 
   const toggleType = (t: string) => setCollapsedType((c) => ({ ...c, [t]: !c[t] }));
   const togglePeriod = (key: string) => setCollapsedPeriod((c) => ({ ...c, [key]: !c[key] }));
@@ -300,8 +393,8 @@ function TransactionTree({ rows, types }: { rows: MonthRow[]; types: CostTypeDef
             <th>Doc type</th>
             <th>Period</th>
             <th>Vendor</th>
-            <th style={{ textAlign: 'right' }}>Txn</th>
-            <th style={{ textAlign: 'right' }}>Amount</th>
+            <SortableTh label="Txn" active={sortKey === 'txn'} dir={sortDir} onClick={() => sortBy('txn')} style={{ textAlign: 'right' }} />
+            <SortableTh label="Amount" active={sortKey === null || sortKey === 'total'} dir={sortDir} onClick={() => sortBy('total')} style={{ textAlign: 'right' }} />
             <th style={{ width: 140 }}>Share</th>
           </tr>
         </thead>
@@ -309,7 +402,7 @@ function TransactionTree({ rows, types }: { rows: MonthRow[]; types: CostTypeDef
           {tree.length === 0 && (
             <tr><td colSpan={8}><div className="empty">No actual cost loaded yet.</div></td></tr>
           )}
-          {tree.map((g) => {
+          {sortedTree.map((g) => {
             const meta = typeMeta(types, g.type);
             const open = !collapsedType[g.type];
             return (
@@ -340,7 +433,7 @@ function TransactionTree({ rows, types }: { rows: MonthRow[]; types: CostTypeDef
                       {glOpen && loadingGl === gl.code && (
                         <tr><td></td><td colSpan={7}><div className="empty">Loading…</div></td></tr>
                       )}
-                      {glOpen && txns[gl.code] && groupByPeriod(txns[gl.code].rows).map((pg) => {
+                      {glOpen && txns[gl.code] && groupByPeriod(filterRows(txns[gl.code].rows, filters)).map((pg) => {
                         const periodKey = `${gl.code}::${pg.period}`;
                         const periodOpen = !collapsedPeriod[periodKey];
                         return (
@@ -405,6 +498,7 @@ export function Reports() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedTo, setSavedTo] = useState<string | null>(null);
+  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
 
   useEffect(() => {
     api.costTypes.types().then((r) => { if (r.ok) setTypes(r.data); });
@@ -420,14 +514,17 @@ export function Reports() {
   }, [projectKey, dataVersion]);
 
   const rows = (monthly?.rows ?? []) as unknown as MonthRow[];
+  const periods = useMemo(() => [...new Set(rows.map((r) => r.period_key))].sort(), [rows]);
+  const filteredRows = useMemo(() => filterRows(monthly?.rows ?? [], filters) as unknown as MonthRow[], [monthly, filters]);
 
-  /** Exports whichever tab is actually on screen, not always the monthly pivot. */
+  /** Exports whichever tab is actually on screen, filtered the same way it's shown. */
   const exportXlsx = async () => {
     setBusy(true); setError(null); setSavedTo(null);
     try {
       if (tab === 'month') {
         if (!monthly) return;
-        setSavedTo(await call(api.exportResult(monthly, {
+        const filtered = filterRows(monthly.rows, filters);
+        setSavedTo(await call(api.exportResult({ ...monthly, rows: filtered, rowCount: filtered.length }, {
           title: 'Actuals by cost type, GL and month',
           subtitle: 'One row per cost type / GL / month — pivot and group in Excel as needed.',
           context: { Project: project?.project_code },
@@ -435,7 +532,8 @@ export function Reports() {
       } else {
         if (!projectKey) return;
         const all = await call(api.queries.run('COST_BY_TYPE_GL_TXN', { project_key: projectKey, cost_element_code: null }));
-        setSavedTo(await call(api.exportResult(all, {
+        const filtered = filterRows(all.rows, filters);
+        setSavedTo(await call(api.exportResult({ ...all, rows: filtered, rowCount: filtered.length }, {
           title: 'Actual postings by cost type and GL',
           subtitle: 'Every individual posting behind Reports → Transactions, one row each.',
           context: { Project: project?.project_code },
@@ -460,7 +558,7 @@ export function Reports() {
             <button className={tab === 'month' ? 'on' : ''} onClick={() => setTab('month')}>By month</button>
             <button className={tab === 'txn' ? 'on' : ''} onClick={() => setTab('txn')}>Transactions</button>
           </div>
-          <button className="btn" onClick={exportXlsx} disabled={busy || !rows.length}>⤓ Excel</button>
+          <button className="btn" onClick={exportXlsx} disabled={busy || !filteredRows.length}>⤓ Excel</button>
         </div>
 
         <p className="hint">
@@ -469,12 +567,15 @@ export function Reports() {
             : 'The same grouping down to individual postings — expand a GL to load its transactions.'}
         </p>
 
+        <FilterBar filters={filters} onChange={setFilters} types={types} periods={periods}
+                   matched={filteredRows.length} total={rows.length} />
+
         {busy && !monthly ? (
           <div className="empty">Loading…</div>
         ) : tab === 'month' ? (
-          <MonthlyPivot rows={rows} types={types} />
+          <MonthlyPivot rows={filteredRows} types={types} />
         ) : (
-          <TransactionTree rows={rows} types={types} />
+          <TransactionTree rows={filteredRows} types={types} filters={filters} />
         )}
       </div>
     </>
