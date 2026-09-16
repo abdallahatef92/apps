@@ -85,34 +85,45 @@ function CostTypeBadge({ type }: { type: string }) {
   );
 }
 
-interface GlGroup {
-  code: string;
-  name: string | null;
+interface CostTypeGroup {
+  type: CostType | 'UNMAPPED';
   rows: CostTypeCombination[];
   postings: number;
   amount: number;
 }
 
-/** Group combinations by GL, sorted by GL code — the shape a pivot table groups on. */
-function groupByGl(combos: CostTypeCombination[]): GlGroup[] {
-  const map = new Map<string, GlGroup>();
+/** GL description if the file gave one, falling back to the code alone. */
+const glLabel = (c: { cost_element_code: string; cost_element_name?: string | null }) =>
+  c.cost_element_name ? `${c.cost_element_name} (${c.cost_element_code})` : c.cost_element_code;
+
+/**
+ * Group combinations by their current cost type — UNMAPPED first, since that
+ * is the group needing attention — with the GL + document-type combinations
+ * inside each sorted by GL description, not GL code.
+ */
+function groupByCostType(combos: CostTypeCombination[]): CostTypeGroup[] {
+  const map = new Map<string, CostTypeGroup>();
   for (const c of combos) {
-    const g = map.get(c.cost_element_code)
-      ?? { code: c.cost_element_code, name: c.cost_element_name, rows: [], postings: 0, amount: 0 };
+    const key = c.resolved_cost_type ?? 'UNMAPPED';
+    const g = map.get(key) ?? { type: key as CostType | 'UNMAPPED', rows: [], postings: 0, amount: 0 };
     g.rows.push(c);
     g.postings += c.postings;
     g.amount += c.amount;
-    map.set(c.cost_element_code, g);
+    map.set(key, g);
   }
-  for (const g of map.values()) g.rows.sort((a, b) => a.document_type.localeCompare(b.document_type));
-  return [...map.values()].sort((a, b) => a.code.localeCompare(b.code));
+  for (const g of map.values()) {
+    g.rows.sort((a, b) =>
+      glLabel(a).localeCompare(glLabel(b)) || a.document_type.localeCompare(b.document_type));
+  }
+  const order = ['UNMAPPED', ...COST_TYPE_VALUES];
+  return [...map.values()].sort((a, b) => order.indexOf(a.type) - order.indexOf(b.type));
 }
 
 /**
- * The allocation grid as a pivot: one collapsible row per GL, sorted by GL,
- * its document-type combinations nested beneath. A GL row's own picker
- * allocates every combination under it at once — the fast path for a GL that
- * is entirely one cost type regardless of document type.
+ * The allocation grid as a pivot: one collapsible row per cost type, its GL +
+ * document-type combinations nested beneath, sorted by GL description so the
+ * list reads by what the account means rather than its number. A cost type's
+ * own picker re-allocates every combination under it at once.
  */
 function GroupedAllocationTable({ combos, pending, setPending, comboKey }: {
   combos: CostTypeCombination[];
@@ -120,16 +131,16 @@ function GroupedAllocationTable({ combos, pending, setPending, comboKey }: {
   setPending: (fn: (p: Record<string, CostType | ''>) => Record<string, CostType | ''>) => void;
   comboKey: (c: { cost_element_code: string; document_type: string }) => string;
 }) {
-  const groups = useMemo(() => groupByGl(combos), [combos]);
+  const groups = useMemo(() => groupByCostType(combos), [combos]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [allCollapsed, setAllCollapsed] = useState(true);
 
-  const isOpen = (code: string) => collapsed[code] !== undefined ? !collapsed[code] : !allCollapsed;
-  const toggle = (code: string) => setCollapsed((c) => ({ ...c, [code]: isOpen(code) }));
+  const isOpen = (type: string) => collapsed[type] !== undefined ? !collapsed[type] : !allCollapsed;
+  const toggle = (type: string) => setCollapsed((c) => ({ ...c, [type]: isOpen(type) }));
   const expandAll = () => { setAllCollapsed(false); setCollapsed({}); };
   const collapseAll = () => { setAllCollapsed(true); setCollapsed({}); };
 
-  const bulkAllocate = (group: GlGroup, v: CostType | '') =>
+  const bulkAllocate = (group: CostTypeGroup, v: CostType | '') =>
     setPending((p) => {
       const next = { ...p };
       for (const r of group.rows) next[comboKey(r)] = v;
@@ -142,15 +153,15 @@ function GroupedAllocationTable({ combos, pending, setPending, comboKey }: {
         <button className="btn sm" onClick={expandAll}>Expand all</button>
         <button className="btn sm" onClick={collapseAll}>Collapse all</button>
         <span className="faint" style={{ fontSize: 11, alignSelf: 'center' }}>
-          {groups.length} GL code{groups.length === 1 ? '' : 's'}, sorted by GL
+          {combos.length} combination{combos.length === 1 ? '' : 's'} across {groups.length} cost type{groups.length === 1 ? '' : 's'}
         </span>
       </div>
       <table>
         <thead>
           <tr>
             <th style={{ width: 24 }}></th>
-            <th>GL / Doc type</th>
-            <th>Description</th>
+            <th>Cost type / GL</th>
+            <th>Doc type</th>
             <th style={{ textAlign: 'right' }}>Postings</th>
             <th style={{ textAlign: 'right' }}>Amount</th>
             <th style={{ width: 150 }}>Now</th>
@@ -162,25 +173,25 @@ function GroupedAllocationTable({ combos, pending, setPending, comboKey }: {
             <tr><td colSpan={7}><div className="empty">No actual cost loaded yet.</div></td></tr>
           )}
           {groups.map((g) => {
-            const open = isOpen(g.code);
-            const glTypes = new Set(g.rows.map((r) => r.resolved_cost_type ?? 'UNMAPPED'));
-            const glCurrent = glTypes.size === 1 ? [...glTypes][0] as CostType : '';
+            const open = isOpen(g.type);
             return (
-              <Fragment key={g.code}>
+              <Fragment key={g.type}>
                 <tr style={{ background: 'var(--surface-2)', cursor: 'pointer' }}
-                    onClick={() => toggle(g.code)}>
+                    onClick={() => toggle(g.type)}>
                   <td className="faint" style={{ textAlign: 'center' }}>{open ? '▾' : '▸'}</td>
-                  <td className="mono" style={{ fontWeight: 700 }}>{g.code}</td>
-                  <td>{g.name ?? '—'}</td>
+                  <td colSpan={2}>
+                    {g.type === 'UNMAPPED'
+                      ? <span className="faint mono" style={{ fontWeight: 700 }}>UNMAPPED</span>
+                      : <CostTypeBadge type={g.type} />}
+                    <span className="faint" style={{ fontSize: 11, marginLeft: 8 }}>
+                      {g.rows.length} GL/doc-type combination{g.rows.length === 1 ? '' : 's'}
+                    </span>
+                  </td>
                   <td className="mono" style={{ textAlign: 'right' }}>{g.postings.toLocaleString()}</td>
                   <td className="mono" style={{ textAlign: 'right' }}>{money(g.amount)}</td>
-                  <td>
-                    {glTypes.size === 1
-                      ? <CostTypeBadge type={[...glTypes][0]} />
-                      : <span className="faint" style={{ fontSize: 10 }}>{glTypes.size} types — expand</span>}
-                  </td>
+                  <td></td>
                   <td onClick={(e) => e.stopPropagation()}>
-                    <CostTypePicker value={glCurrent as CostType | ''} clearLabel="per-row"
+                    <CostTypePicker value={g.type === 'UNMAPPED' ? '' : g.type} clearLabel="per-row"
                       onChange={(v) => bulkAllocate(g, v)} />
                   </td>
                 </tr>
@@ -191,10 +202,10 @@ function GroupedAllocationTable({ combos, pending, setPending, comboKey }: {
                   return (
                     <tr key={key}>
                       <td></td>
-                      <td className="mono faint" style={{ paddingLeft: 20 }}>
-                        {c.document_type || '(none)'}
+                      <td className="mono" style={{ paddingLeft: 20 }} title={c.cost_element_code}>
+                        {glLabel(c)}
                       </td>
-                      <td></td>
+                      <td className="mono faint">{c.document_type || '(none)'}</td>
                       <td className="mono" style={{ textAlign: 'right' }}>{c.postings.toLocaleString()}</td>
                       <td className="mono" style={{ textAlign: 'right' }}>{money(c.amount)}</td>
                       <td>
@@ -232,21 +243,38 @@ function GroupedAllocationTable({ combos, pending, setPending, comboKey }: {
  */
 function GlDocTypeMatrix({ combos, maxGl = 12 }: { combos: CostTypeCombination[]; maxGl?: number }) {
   const result: QueryResult = useMemo(() => {
-    const totals = new Map<string, number>();
-    for (const c of combos) totals.set(c.cost_element_code, (totals.get(c.cost_element_code) ?? 0) + c.amount);
-    const top = new Set([...totals.entries()].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
-      .slice(0, maxGl).map(([code]) => code));
-    const rows = combos
-      .filter((c) => top.has(c.cost_element_code))
-      .map((c) => ({
-        cost_element_code: c.cost_element_code,
-        document_type: c.document_type || '(none)',
-        postings: c.postings,
-      }));
-    return { columns: ['cost_element_code', 'document_type', 'postings'], rows, rowCount: rows.length, ms: 0, truncated: false };
+    const totals = new Map<string, { label: string; amount: number }>();
+    for (const c of combos) {
+      const t = totals.get(c.cost_element_code) ?? { label: glLabel(c), amount: 0 };
+      t.amount += c.amount;
+      totals.set(c.cost_element_code, t);
+    }
+    const top = [...totals.entries()]
+      .sort((a, b) => Math.abs(b[1].amount) - Math.abs(a[1].amount))
+      .slice(0, maxGl);
+    const topCodes = new Map(top.map(([code, t]) => [code, t.label]));
+
+    // Same GL + document type can appear as more than one combo (split by
+    // cost type), so amounts are summed rather than the last one winning.
+    const cells = new Map<string, number>();
+    for (const c of combos) {
+      const label = topCodes.get(c.cost_element_code);
+      if (!label) continue;
+      const key = `${label}|${c.document_type || '(none)'}`;
+      cells.set(key, (cells.get(key) ?? 0) + c.amount);
+    }
+    const rows = [...top].flatMap(([, t]) =>
+      [...cells.entries()]
+        .filter(([key]) => key.startsWith(`${t.label}|`))
+        .map(([key, amount]) => ({
+          cost_element: t.label,
+          document_type: key.slice(t.label.length + 1),
+          amount,
+        })));
+    return { columns: ['cost_element', 'document_type', 'amount'], rows, rowCount: rows.length, ms: 0, truncated: false };
   }, [combos, maxGl]);
 
-  return <Heatmap result={result} rowColumn="cost_element_code" colColumn="document_type" valueColumn="postings" />;
+  return <Heatmap result={result} rowColumn="cost_element" colColumn="document_type" valueColumn="amount" />;
 }
 
 export function Settings() {
@@ -293,7 +321,7 @@ export function Settings() {
 
   const exportMapping = () => guard(async () => {
     const path = await call(api.costTypes.exportMapping());
-    setNote(path ? `Exported to ${path} — grouped by GL, expand/collapse in Excel's own outline.`
+    setNote(path ? `Exported to ${path} — grouped by cost type, expand/collapse in Excel's own outline.`
       : 'Export cancelled.');
   });
 
@@ -401,11 +429,12 @@ export function Settings() {
       <div className="card">
         <h3>Allocate cost types</h3>
         <p className="hint">
-          Every combination of cost element and document type that actually occurs in the
-          cost already loaded — {combos.length} of them, biggest first. Set one and it is
-          answered outright; leave it on <em>inherit</em> and the patterns below decide.
-          An allocation is written as an exact rule, so it always wins over a pattern, and
-          it takes effect immediately — no re-import.
+          Every combination of cost element and document type that actually occurs in the cost
+          already loaded — {combos.length} of them, grouped by their current cost type (UNMAPPED
+          first) with each GL listed by description, not code. Set one and it is answered
+          outright; leave it on <em>inherit</em> and the patterns below decide. An allocation is
+          written as an exact rule, so it always wins over a pattern, and it takes effect
+          immediately — no re-import.
         </p>
 
         <GroupedAllocationTable combos={combos} pending={pending} setPending={setPending} comboKey={comboKey} />
@@ -427,8 +456,8 @@ export function Settings() {
           <>
             <h4 style={{ marginTop: 18, marginBottom: 6 }}>GL × document type</h4>
             <p className="hint">
-              Which document types actually post against the biggest GLs — an illustration, not a
-              full report, capped to the 12 largest by spend.
+              Spend by document type against the biggest GLs, by description — an illustration, not
+              a full report, capped to the 12 largest by spend.
             </p>
             <GlDocTypeMatrix combos={combos} />
           </>
