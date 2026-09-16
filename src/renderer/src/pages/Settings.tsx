@@ -1,10 +1,9 @@
 import { Fragment, useMemo, useEffect, useState } from 'react';
 import { useApp } from '../App';
 import { api, call } from '../lib/api';
-import { Heatmap } from '../charts/Heatmap';
 import {
   COST_TYPE_VALUES,
-  type CostType, type CostTypeCombination, type QueryResult,
+  type CostType, type CostTypeCombination,
 } from '@shared/types';
 
 const money = (n: number) =>
@@ -239,47 +238,6 @@ function GroupedAllocationTable({ combos, savingKeys, allocate, comboKey }: {
   );
 }
 
-/**
- * A small GL x document-type matrix — not a full report, just enough to show
- * which document types actually post against which GLs. Capped to the
- * biggest GLs by spend so it stays a quick illustration, not another table.
- */
-function GlDocTypeMatrix({ combos, maxGl = 12 }: { combos: CostTypeCombination[]; maxGl?: number }) {
-  const result: QueryResult = useMemo(() => {
-    const totals = new Map<string, { label: string; amount: number }>();
-    for (const c of combos) {
-      const t = totals.get(c.cost_element_code) ?? { label: glLabel(c), amount: 0 };
-      t.amount += c.amount;
-      totals.set(c.cost_element_code, t);
-    }
-    const top = [...totals.entries()]
-      .sort((a, b) => Math.abs(b[1].amount) - Math.abs(a[1].amount))
-      .slice(0, maxGl);
-    const topCodes = new Map(top.map(([code, t]) => [code, t.label]));
-
-    // Same GL + document type can appear as more than one combo (split by
-    // cost type), so amounts are summed rather than the last one winning.
-    const cells = new Map<string, number>();
-    for (const c of combos) {
-      const label = topCodes.get(c.cost_element_code);
-      if (!label) continue;
-      const key = `${label}|${c.document_type || '(none)'}`;
-      cells.set(key, (cells.get(key) ?? 0) + c.amount);
-    }
-    const rows = [...top].flatMap(([, t]) =>
-      [...cells.entries()]
-        .filter(([key]) => key.startsWith(`${t.label}|`))
-        .map(([key, amount]) => ({
-          cost_element: t.label,
-          document_type: key.slice(t.label.length + 1),
-          amount,
-        })));
-    return { columns: ['cost_element', 'document_type', 'amount'], rows, rowCount: rows.length, ms: 0, truncated: false };
-  }, [combos, maxGl]);
-
-  return <Heatmap result={result} rowColumn="cost_element" colColumn="document_type" valueColumn="amount" />;
-}
-
 export function Settings() {
   const { projects, refresh } = useApp();
   const [info, setInfo] = useState<{ version: string; dbPath: string; userData: string } | null>(null);
@@ -423,17 +381,6 @@ export function Settings() {
             ⤓ Export to Excel
           </button>
         </div>
-
-        {combos.length > 0 && (
-          <>
-            <h4 style={{ marginTop: 18, marginBottom: 6 }}>GL × document type</h4>
-            <p className="hint">
-              Spend by document type against the biggest GLs, by description — an illustration, not
-              a full report, capped to the 12 largest by spend.
-            </p>
-            <GlDocTypeMatrix combos={combos} />
-          </>
-        )}
       </div>
 
       <div className="card">

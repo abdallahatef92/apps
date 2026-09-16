@@ -645,6 +645,43 @@ GROUP BY COALESCE(NULLIF(document_type,''),'(none)')
 ORDER BY ABS(SUM(amount)) DESC`,
   },
   {
+    code: 'GL_DOC_TYPE_MATRIX',
+    name: 'GL × document type',
+    module: 'ACTUAL',
+    category: 'Data quality',
+    description: 'Spend by document type against the biggest cost elements, by description — an '
+      + 'illustration of which document types actually post against which GLs, not a full report.',
+    params: [P_PROJECT, { name: 'top_n', type: 'int', label: 'Top N GLs', default: 12 }],
+    viz: { kind: 'heatmap', row: 'cost_element', col: 'document_type', value: 'amount' },
+    sql: `
+WITH gl_totals AS (
+  SELECT
+    cost_element_code,
+    CASE WHEN cost_element_name IS NOT NULL AND cost_element_name <> ''
+         THEN cost_element_name || ' (' || cost_element_code || ')'
+         ELSE cost_element_code END AS gl_label,
+    SUM(amount) AS total_amount
+  FROM v_actual
+  WHERE project_key = :project_key
+  GROUP BY cost_element_code, gl_label
+),
+top_gl AS (
+  SELECT cost_element_code, gl_label
+  FROM gl_totals
+  ORDER BY ABS(total_amount) DESC
+  LIMIT COALESCE(:top_n, 12)
+)
+SELECT
+  t.gl_label                                    AS cost_element,
+  COALESCE(NULLIF(a.document_type,''),'(none)') AS document_type,
+  SUM(a.amount)                                  AS amount
+FROM v_actual a
+JOIN top_gl t ON t.cost_element_code = a.cost_element_code
+WHERE a.project_key = :project_key
+GROUP BY t.gl_label, COALESCE(NULLIF(a.document_type,''),'(none)')
+ORDER BY t.gl_label`,
+  },
+  {
     code: 'KPI_PROJECT',
     name: 'Project headline figures',
     module: 'CROSS',
