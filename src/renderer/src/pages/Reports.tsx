@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useApp } from '../App';
 import { api, call } from '../lib/api';
 import { money, pct } from '../lib/format';
@@ -31,7 +31,7 @@ interface TypeNode {
  * two-level tree with periods folded into columns — a display transform, not
  * aggregation: every number in it is still a straight sum from the query.
  */
-function buildTree(rows: MonthRow[]): { periods: string[]; types: TypeNode[]; grandTotal: number } {
+function buildTree(rows: MonthRow[]): { periods: string[]; types: TypeNode[]; grandTotal: number; grandPostings: number } {
   const periods = [...new Set(rows.map((r) => r.period_key))].sort();
   const byType = new Map<string, Map<string, GlNode>>();
   for (const r of rows) {
@@ -46,9 +46,9 @@ function buildTree(rows: MonthRow[]): { periods: string[]; types: TypeNode[]; gr
     gl.amount += r.amount;
     gl.byPeriod.set(r.period_key, (gl.byPeriod.get(r.period_key) ?? 0) + r.amount);
   }
-  let grandTotal = 0;
+  let grandTotal = 0, grandPostings = 0;
   const types: TypeNode[] = [...byType.entries()].map(([type, gls]) => {
-    const glList = [...gls.values()].sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+    const glList = [...gls.values()];
     const byPeriod = new Map<string, number>();
     let postings = 0, amount = 0;
     for (const gl of glList) {
@@ -57,13 +57,29 @@ function buildTree(rows: MonthRow[]): { periods: string[]; types: TypeNode[]; gr
       for (const [pk, amt] of gl.byPeriod) byPeriod.set(pk, (byPeriod.get(pk) ?? 0) + amt);
     }
     grandTotal += amount;
+    grandPostings += postings;
     return { type, postings, amount, gls: glList, byPeriod };
   });
-  types.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
-  return { periods, types, grandTotal };
+  return { periods, types, grandTotal, grandPostings };
 }
 
-const LABEL_W = 240, CODE_W = 90, TXN_W = 64, SHARE_W = 140, MONTH_W = 96;
+/** Sort key shared by both the group and GL rows: a period, or one of the fixed columns. */
+type SortKey = 'txn' | 'total' | string;
+
+function sortValue(n: { postings: number; amount: number; byPeriod: Map<string, number> }, key: SortKey | null): number {
+  if (!key || key === 'total') return Math.abs(n.amount);
+  if (key === 'txn') return n.postings;
+  return Math.abs(n.byPeriod.get(key) ?? 0);
+}
+
+function sortNodes<T extends { postings: number; amount: number; byPeriod: Map<string, number> }>(
+  nodes: T[], key: SortKey | null, dir: 'asc' | 'desc',
+): T[] {
+  const sign = dir === 'asc' ? 1 : -1;
+  return [...nodes].sort((a, b) => (sortValue(a, key) - sortValue(b, key)) * sign);
+}
+
+const LABEL_W = 240, CODE_W = 90, TXN_W = 64, SHARE_W = 140, MONTH_W = 96, TOTAL_W = 100;
 
 /** A small horizontal share-of-total bar, coloured by the row's cost type. */
 function ShareBar({ pctValue, color }: { pctValue: number; color: string }) {
@@ -84,15 +100,50 @@ function typeMeta(types: CostTypeDef[], code: string) {
 }
 
 /**
+ * A sticky cell needs a fully opaque background — it visually sits on top of
+ * whatever has scrolled underneath it, and a translucent tint (color + alpha)
+ * lets that scrolled content bleed through as a ghosting artefact. color-mix
+ * pre-blends the tint against the real surface colour into one opaque value.
+ */
+const rowTint = (color: string) => `color-mix(in srgb, ${color} 12%, var(--surface))`;
+
+function SortableTh({ label, active, dir, onClick, style }: {
+  label: string; active: boolean; dir: 'asc' | 'desc'; onClick: () => void; style?: CSSProperties;
+}) {
+  return (
+    <th onClick={onClick} style={{ cursor: 'pointer', userSelect: 'none', ...style }} title="Click to sort">
+      {label}{active && <span className="faint" style={{ marginLeft: 4 }}>{dir === 'desc' ? '▾' : '▴'}</span>}
+    </th>
+  );
+}
+
+/**
  * Cost type → GL, sorted by spend, months as columns. Same shape as the
  * Settings allocation table's grouping, but the leaf here is a month's worth
- * of postings rather than an icon picker.
+ * of postings rather than an icon picker. A totals row and a totals column
+ * close the pivot off on both axes, and any column header can be clicked to
+ * re-sort both the groups and the GLs within them by that column.
  */
 function MonthlyPivot({ rows, types }: { rows: MonthRow[]; types: CostTypeDef[] }) {
-  const { periods, types: tree, grandTotal } = useMemo(() => buildTree(rows), [rows]);
+  const { periods, types: tree, grandTotal, grandPostings } = useMemo(() => buildTree(rows), [rows]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [sortKey, setSortKey] = useState<SortKey | null>(null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const isOpen = (t: string) => !collapsed[t];
   const toggle = (t: string) => setCollapsed((c) => ({ ...c, [t]: isOpen(t) }));
+
+  const sortBy = (key: SortKey) => {
+    if (key === sortKey) setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'));
+    else { setSortKey(key); setSortDir('desc'); }
+  };
+
+  const sortedTree = useMemo(
+    () => sortNodes(tree, sortKey, sortDir).map((g) => ({ ...g, gls: sortNodes(g.gls, sortKey, sortDir) })),
+    [tree, sortKey, sortDir],
+  );
+
+  const periodTotal = (p: string) => tree.reduce((s, g) => s + (g.byPeriod.get(p) ?? 0), 0);
+  const thBase = { position: 'sticky' as const, top: 0, background: 'var(--surface-2)', zIndex: 3 };
 
   return (
     <div className="table-wrap" style={{ overflowX: 'auto' }}>
@@ -103,36 +154,44 @@ function MonthlyPivot({ rows, types }: { rows: MonthRow[]; types: CostTypeDef[] 
           <col style={{ width: TXN_W }} />
           <col style={{ width: SHARE_W }} />
           {periods.map((p) => <col key={p} style={{ width: MONTH_W }} />)}
+          <col style={{ width: TOTAL_W }} />
         </colgroup>
         <thead>
           <tr>
-            <th style={{ position: 'sticky', left: 0, zIndex: 2, background: 'var(--surface-2)' }}>Category / cost element</th>
-            <th style={{ position: 'sticky', left: LABEL_W, zIndex: 2, background: 'var(--surface-2)' }}>G/L account</th>
-            <th style={{ position: 'sticky', left: LABEL_W + CODE_W, zIndex: 2, background: 'var(--surface-2)', textAlign: 'right' }}>Txn</th>
-            <th style={{ position: 'sticky', left: LABEL_W + CODE_W + TXN_W, zIndex: 2, background: 'var(--surface-2)' }}>Share</th>
-            {periods.map((p) => <th key={p} style={{ textAlign: 'right' }}>{periodLabel(p)}</th>)}
+            <th style={{ ...thBase, position: 'sticky', left: 0, zIndex: 4 }}>Category / cost element</th>
+            <th style={{ ...thBase, position: 'sticky', left: LABEL_W, zIndex: 4 }}>G/L account</th>
+            <SortableTh label="Txn" active={sortKey === 'txn'} dir={sortDir} onClick={() => sortBy('txn')}
+              style={{ ...thBase, position: 'sticky', left: LABEL_W + CODE_W, zIndex: 4, textAlign: 'right' }} />
+            <SortableTh label="Share" active={sortKey === null || sortKey === 'total'} dir={sortDir} onClick={() => sortBy('total')}
+              style={{ ...thBase, position: 'sticky', left: LABEL_W + CODE_W + TXN_W, zIndex: 4 }} />
+            {periods.map((p) => (
+              <SortableTh key={p} label={periodLabel(p)} active={sortKey === p} dir={sortDir} onClick={() => sortBy(p)}
+                style={{ ...thBase, textAlign: 'right' }} />
+            ))}
+            <th style={{ ...thBase, textAlign: 'right' }}>Total</th>
           </tr>
         </thead>
         <tbody>
           {tree.length === 0 && (
-            <tr><td colSpan={4 + periods.length}><div className="empty">No actual cost loaded yet.</div></td></tr>
+            <tr><td colSpan={5 + periods.length}><div className="empty">No actual cost loaded yet.</div></td></tr>
           )}
-          {tree.map((g) => {
+          {sortedTree.map((g) => {
             const meta = typeMeta(types, g.type);
             const open = isOpen(g.type);
+            const tint = rowTint(meta.color);
             return (
               <Fragment key={g.type}>
-                <tr style={{ background: `${meta.color}18`, cursor: 'pointer' }} onClick={() => toggle(g.type)}>
-                  <td style={{ position: 'sticky', left: 0, zIndex: 1, background: 'inherit', fontWeight: 700 }}>
+                <tr style={{ background: tint, cursor: 'pointer' }} onClick={() => toggle(g.type)}>
+                  <td style={{ position: 'sticky', left: 0, zIndex: 1, background: tint, fontWeight: 700 }}>
                     <span className="faint" style={{ marginRight: 6 }}>{open ? '▾' : '▸'}</span>
                     <span style={{ marginRight: 6 }}>{meta.icon}</span>
                     <span style={{ color: meta.color }}>{meta.label}</span>
                   </td>
-                  <td style={{ position: 'sticky', left: LABEL_W, zIndex: 1, background: 'inherit' }}></td>
-                  <td className="mono" style={{ position: 'sticky', left: LABEL_W + CODE_W, zIndex: 1, background: 'inherit', textAlign: 'right' }}>
+                  <td style={{ position: 'sticky', left: LABEL_W, zIndex: 1, background: tint }}></td>
+                  <td className="mono" style={{ position: 'sticky', left: LABEL_W + CODE_W, zIndex: 1, background: tint, textAlign: 'right' }}>
                     {g.postings.toLocaleString()}
                   </td>
-                  <td style={{ position: 'sticky', left: LABEL_W + CODE_W + TXN_W, zIndex: 1, background: 'inherit' }}>
+                  <td style={{ position: 'sticky', left: LABEL_W + CODE_W + TXN_W, zIndex: 1, background: tint }}>
                     <ShareBar pctValue={grandTotal ? (g.amount / grandTotal) * 100 : 0} color={meta.color} />
                   </td>
                   {periods.map((p) => (
@@ -140,6 +199,7 @@ function MonthlyPivot({ rows, types }: { rows: MonthRow[]; types: CostTypeDef[] 
                       {g.byPeriod.has(p) ? money(g.byPeriod.get(p)) : '–'}
                     </td>
                   ))}
+                  <td className="mono" style={{ textAlign: 'right', fontWeight: 700 }}>{money(g.amount)}</td>
                 </tr>
                 {open && g.gls.map((gl) => (
                   <tr key={gl.code}>
@@ -161,11 +221,26 @@ function MonthlyPivot({ rows, types }: { rows: MonthRow[]; types: CostTypeDef[] 
                         {gl.byPeriod.has(p) ? money(gl.byPeriod.get(p)) : '–'}
                       </td>
                     ))}
+                    <td className="mono faint" style={{ textAlign: 'right' }}>{money(gl.amount)}</td>
                   </tr>
                 ))}
               </Fragment>
             );
           })}
+          {tree.length > 0 && (
+            <tr style={{ borderTop: '2px solid var(--border)' }}>
+              <td style={{ position: 'sticky', left: 0, zIndex: 1, background: 'var(--surface-2)', fontWeight: 700 }}>Total</td>
+              <td style={{ position: 'sticky', left: LABEL_W, zIndex: 1, background: 'var(--surface-2)' }}></td>
+              <td className="mono" style={{ position: 'sticky', left: LABEL_W + CODE_W, zIndex: 1, background: 'var(--surface-2)', textAlign: 'right', fontWeight: 700 }}>
+                {grandPostings.toLocaleString()}
+              </td>
+              <td style={{ position: 'sticky', left: LABEL_W + CODE_W + TXN_W, zIndex: 1, background: 'var(--surface-2)', fontWeight: 700 }}>100.0%</td>
+              {periods.map((p) => (
+                <td key={p} className="mono" style={{ textAlign: 'right', fontWeight: 700 }}>{money(periodTotal(p))}</td>
+              ))}
+              <td className="mono" style={{ textAlign: 'right', fontWeight: 700 }}>{money(grandTotal)}</td>
+            </tr>
+          )}
         </tbody>
       </table>
     </div>
@@ -174,10 +249,11 @@ function MonthlyPivot({ rows, types }: { rows: MonthRow[]; types: CostTypeDef[] 
 
 /**
  * Same tree, one level deeper: a GL's transactions are fetched only once it
- * is expanded, so opening the page never pulls every posting up front.
+ * is expanded, so opening the page never pulls every posting up front. Closed
+ * off the same way as the monthly pivot, with a totals row at the bottom.
  */
 function TransactionTree({ rows, types }: { rows: MonthRow[]; types: CostTypeDef[] }) {
-  const { types: tree, grandTotal } = useMemo(() => buildTree(rows), [rows]);
+  const { types: tree, grandTotal, grandPostings } = useMemo(() => buildTree(rows), [rows]);
   const [collapsedType, setCollapsedType] = useState<Record<string, boolean>>({});
   const [openGl, setOpenGl] = useState<Record<string, boolean>>({});
   const [txns, setTxns] = useState<Record<string, QueryResult>>({});
@@ -221,7 +297,7 @@ function TransactionTree({ rows, types }: { rows: MonthRow[]; types: CostTypeDef
             const open = !collapsedType[g.type];
             return (
               <Fragment key={g.type}>
-                <tr style={{ background: `${meta.color}18`, cursor: 'pointer' }} onClick={() => toggleType(g.type)}>
+                <tr style={{ background: rowTint(meta.color), cursor: 'pointer' }} onClick={() => toggleType(g.type)}>
                   <td className="faint" style={{ textAlign: 'center' }}>{open ? '▾' : '▸'}</td>
                   <td colSpan={4} style={{ fontWeight: 700 }}>
                     <span style={{ marginRight: 6 }}>{meta.icon}</span>
@@ -269,6 +345,15 @@ function TransactionTree({ rows, types }: { rows: MonthRow[]; types: CostTypeDef
               </Fragment>
             );
           })}
+          {tree.length > 0 && (
+            <tr style={{ borderTop: '2px solid var(--border)' }}>
+              <td></td>
+              <td colSpan={4} style={{ fontWeight: 700 }}>Total</td>
+              <td className="mono" style={{ textAlign: 'right', fontWeight: 700 }}>{grandPostings.toLocaleString()}</td>
+              <td className="mono" style={{ textAlign: 'right', fontWeight: 700 }}>{money(grandTotal)}</td>
+              <td style={{ fontWeight: 700 }}>100.0%</td>
+            </tr>
+          )}
         </tbody>
       </table>
     </div>
@@ -299,15 +384,26 @@ export function Reports() {
 
   const rows = (monthly?.rows ?? []) as unknown as MonthRow[];
 
+  /** Exports whichever tab is actually on screen, not always the monthly pivot. */
   const exportXlsx = async () => {
-    if (!monthly) return;
     setBusy(true); setError(null); setSavedTo(null);
     try {
-      setSavedTo(await call(api.exportResult(monthly, {
-        title: 'Actuals by cost type, GL and month',
-        subtitle: 'One row per cost type / GL / month — pivot and group in Excel as needed.',
-        context: { Project: project?.project_code },
-      })));
+      if (tab === 'month') {
+        if (!monthly) return;
+        setSavedTo(await call(api.exportResult(monthly, {
+          title: 'Actuals by cost type, GL and month',
+          subtitle: 'One row per cost type / GL / month — pivot and group in Excel as needed.',
+          context: { Project: project?.project_code },
+        })));
+      } else {
+        if (!projectKey) return;
+        const all = await call(api.queries.run('COST_BY_TYPE_GL_TXN', { project_key: projectKey, cost_element_code: null }));
+        setSavedTo(await call(api.exportResult(all, {
+          title: 'Actual postings by cost type and GL',
+          subtitle: 'Every individual posting behind Reports → Transactions, one row each.',
+          context: { Project: project?.project_code },
+        })));
+      }
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   };
 
@@ -327,12 +423,12 @@ export function Reports() {
             <button className={tab === 'month' ? 'on' : ''} onClick={() => setTab('month')}>By month</button>
             <button className={tab === 'txn' ? 'on' : ''} onClick={() => setTab('txn')}>Transactions</button>
           </div>
-          <button className="btn" onClick={exportXlsx} disabled={busy || !monthly?.rowCount}>⤓ Excel</button>
+          <button className="btn" onClick={exportXlsx} disabled={busy || !rows.length}>⤓ Excel</button>
         </div>
 
         <p className="hint">
           {tab === 'month'
-            ? 'Actual cost by cost type and GL account, month by month. Share is each row\'s slice of total actual cost.'
+            ? 'Actual cost by cost type and GL account, month by month. Share is each row\'s slice of total actual cost — click a column header to sort by it.'
             : 'The same grouping down to individual postings — expand a GL to load its transactions.'}
         </p>
 

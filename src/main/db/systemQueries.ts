@@ -714,6 +714,7 @@ ORDER BY cost_type, cost_element_code, period_key`,
     viz: { kind: 'table' },
     sql: `
 SELECT
+  cost_type, cost_element_code, cost_element_name,
   document_no, document_type, period_key, data_date,
   vendor_name, description, quantity, uom, amount
 FROM v_actual
