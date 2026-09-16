@@ -9,8 +9,7 @@ import { buildPivotSql, pivotMeta, type PivotRequest } from './services/pivot';
 import { readWorkbook } from './ingest/workbook';
 import { deleteBatch, loadColumnMapping, postBatch, revenueAccountPattern, saveColumnMapping, stageFile } from './ingest/importer';
 import { suggestMapping, targetFields } from './ingest/targetFields';
-import { COST_TYPE_VALUES } from '../shared/types';
-import type { CostTypeAssignment, CostTypeCombination, IpcResult, Module, QueryResult, StageRequest } from '../shared/types';
+import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, IpcResult, Module, QueryResult, StageRequest } from '../shared/types';
 
 /** Wrap a handler so the renderer always gets {ok,data} | {ok,error} instead of a rejection. */
 function handle<T>(channel: string, fn: (...args: any[]) => T | Promise<T>): void {
@@ -40,6 +39,17 @@ function loadCostTypeCombinations(): CostTypeCombination[] {
     GROUP BY a.cost_element_code, a.cost_element_name,
              COALESCE(a.document_type,''), a.cost_type
     ORDER BY ABS(SUM(a.amount)) DESC`).all() as CostTypeCombination[];
+}
+
+function loadCostTypeDefs(): CostTypeDef[] {
+  return getDb().prepare(
+    `SELECT code, label, icon, color, sort_order, is_system FROM dim_cost_type ORDER BY sort_order, code`,
+  ).all() as CostTypeDef[];
+}
+
+/** A₋Z 0-9 upper-snake code from a display name, e.g. "Asset Depreciation" → ASSET_DEPRECIATION. */
+function slugifyCostType(label: string): string {
+  return label.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
 
 export function registerIpc(): void {
@@ -136,6 +146,57 @@ export function registerIpc(): void {
    */
   handle('costTypes:combinations', () => loadCostTypeCombinations());
 
+  /** The cost types available to pick from, in display order. */
+  handle('costTypes:types', () => loadCostTypeDefs());
+
+  /**
+   * Add a cost type. The code is derived from the name and fixed from then on
+   * — everything else (rules, exports) stores the code, so letting it change
+   * after the fact would silently orphan history. Renaming is a separate call.
+   */
+  handle('costTypes:typeCreate', (input: { label: string; icon: string; color: string }) => {
+    const db = getDb();
+    const label = (input.label ?? '').trim();
+    if (!label) throw new Error('A cost type needs a name.');
+    const code = slugifyCostType(label);
+    if (!code) throw new Error('That name has no usable letters or numbers.');
+    if (db.prepare('SELECT 1 FROM dim_cost_type WHERE code = ?').get(code)) {
+      throw new Error(`A cost type named "${label}" already exists.`);
+    }
+    const { m } = db.prepare('SELECT COALESCE(MAX(sort_order),0) AS m FROM dim_cost_type').get() as { m: number };
+    db.prepare(`INSERT INTO dim_cost_type (code, label, icon, color, sort_order, is_system)
+                VALUES (?, ?, ?, ?, ?, 0)`)
+      .run(code, label, input.icon || '❓', input.color || '#9aa5b1', m + 10);
+    return loadCostTypeDefs();
+  });
+
+  /** Rename a cost type or change its icon/colour — the code never changes. */
+  handle('costTypes:typeUpdate', (input: { code: string; label: string; icon: string; color: string }) => {
+    const db = getDb();
+    const row = db.prepare('SELECT code FROM dim_cost_type WHERE code = ?').get(input.code);
+    if (!row) throw new Error('That cost type no longer exists.');
+    const label = (input.label ?? '').trim();
+    if (!label) throw new Error('A cost type needs a name.');
+    db.prepare('UPDATE dim_cost_type SET label = ?, icon = ?, color = ? WHERE code = ?')
+      .run(label, input.icon || '❓', input.color || '#9aa5b1', input.code);
+    return loadCostTypeDefs();
+  });
+
+  /** Only a user-added cost type can be deleted, and only once nothing points at it. */
+  handle('costTypes:typeDelete', (code: string) => {
+    const db = getDb();
+    const row = db.prepare('SELECT is_system FROM dim_cost_type WHERE code = ?').get(code) as
+      { is_system: number } | undefined;
+    if (!row) return loadCostTypeDefs();
+    if (row.is_system) throw new Error('This is one of the built-in cost types and cannot be deleted.');
+    try {
+      db.prepare('DELETE FROM dim_cost_type WHERE code = ?').run(code);
+    } catch {
+      throw new Error('This cost type is still assigned to some cost — clear those allocations first.');
+    }
+    return loadCostTypeDefs();
+  });
+
   handle('costTypes:exportMapping', async () => {
     const res = await dialog.showSaveDialog({
       title: 'Export cost type mapping',
@@ -143,7 +204,7 @@ export function registerIpc(): void {
       filters: [{ name: 'Excel workbook', extensions: ['xlsx'] }],
     });
     if (res.canceled || !res.filePath) return null;
-    await exportCostTypeMapping(res.filePath, loadCostTypeCombinations());
+    await exportCostTypeMapping(res.filePath, loadCostTypeCombinations(), loadCostTypeDefs().map((t) => t.code));
     return res.filePath;
   });
 
@@ -158,8 +219,9 @@ export function registerIpc(): void {
    */
   handle('costTypes:assign', (items: CostTypeAssignment[]) => {
     const db = getDb();
+    const knownTypes = new Set(loadCostTypeDefs().map((t) => t.code));
     for (const it of items) {
-      if (it.cost_type !== null && !COST_TYPE_VALUES.includes(it.cost_type)) {
+      if (it.cost_type !== null && !knownTypes.has(it.cost_type)) {
         throw new Error(`"${it.cost_type}" is not a cost type.`);
       }
       // A code or document type carrying a GLOB metacharacter would silently

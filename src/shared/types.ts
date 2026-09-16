@@ -217,11 +217,21 @@ export interface VizSpec {
 }
 
 /**
- * The six cost types. Enforced by a CHECK constraint on both dim_cost_element
- * and cost_type_rule, so adding a seventh is a migration, not an edit here.
+ * A cost type is a row in dim_cost_type, not a fixed union — the user adds and
+ * renames them from the Allocate cost types screen. The code (e.g. 'LABOR') is
+ * what everything else stores; label/icon/color are display only.
  */
-export const COST_TYPE_VALUES = ['LABOR', 'MATERIAL', 'SUBCONTRACT', 'EQUIPMENT', 'INDIRECT', 'OTHER'] as const;
-export type CostType = typeof COST_TYPE_VALUES[number];
+export type CostType = string;
+
+export interface CostTypeDef {
+  code: string;
+  label: string;
+  icon: string;
+  color: string;
+  sort_order: number;
+  /** Built-in types (the original six) can be renamed but not deleted. */
+  is_system: number;
+}
 
 /**
  * One (cost element, document type) pair that actually occurs in posted cost,

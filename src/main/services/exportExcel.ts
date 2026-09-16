@@ -77,8 +77,6 @@ export async function exportResult(
   return filePath;
 }
 
-const COST_TYPE_ORDER = ['UNMAPPED', 'LABOR', 'MATERIAL', 'SUBCONTRACT', 'EQUIPMENT', 'INDIRECT', 'OTHER'];
-
 /** GL description if the file gave one, falling back to the code alone. */
 const glLabel = (c: { cost_element_code: string; cost_element_name?: string | null }) =>
   c.cost_element_name ? `${c.cost_element_name} (${c.cost_element_code})` : c.cost_element_code;
@@ -92,7 +90,9 @@ const glLabel = (c: { cost_element_code: string; cost_element_name?: string | nu
  * than simulating collapse with indentation, so the file is genuinely
  * expand/collapse-able in Excel itself, not just a flat dump.
  */
-export async function exportCostTypeMapping(filePath: string, combos: CostTypeCombination[]): Promise<string> {
+export async function exportCostTypeMapping(
+  filePath: string, combos: CostTypeCombination[], typeOrder: string[],
+): Promise<string> {
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Cost Intelligence';
   wb.created = new Date();
@@ -122,7 +122,8 @@ export async function exportCostTypeMapping(filePath: string, combos: CostTypeCo
     list.push(c);
     byType.set(key, list);
   }
-  const types = [...byType.keys()].sort((a, b) => COST_TYPE_ORDER.indexOf(a) - COST_TYPE_ORDER.indexOf(b));
+  const order = ['UNMAPPED', ...typeOrder];
+  const types = [...byType.keys()].sort((a, b) => order.indexOf(a) - order.indexOf(b));
 
   for (const type of types) {
     const rows = [...byType.get(type)!].sort((a, b) =>

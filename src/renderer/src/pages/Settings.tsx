@@ -1,55 +1,41 @@
 import { Fragment, useMemo, useEffect, useState } from 'react';
 import { useApp } from '../App';
 import { api, call } from '../lib/api';
-import {
-  COST_TYPE_VALUES,
-  type CostType, type CostTypeCombination,
-} from '@shared/types';
+import type { CostType, CostTypeCombination, CostTypeDef } from '@shared/types';
 
 const money = (n: number) =>
   n.toLocaleString(undefined, { maximumFractionDigits: 0 });
 
-/**
- * One icon and colour per cost type, used only for this picker's buttons and
- * badges — deliberately not the chart series palette (styles.css --series-*),
- * which is reserved for encoding data in a chart and must never double as a
- * UI control colour.
- */
-const COST_TYPE_META: Record<CostType, { icon: string; color: string; label: string }> = {
-  LABOR:       { icon: '👷', color: '#e08fd0', label: 'Labor' },
-  MATERIAL:    { icon: '📦', color: '#5ac8fa', label: 'Material' },
-  SUBCONTRACT: { icon: '🔨', color: '#f5c15a', label: 'Subcontract' },
-  EQUIPMENT:   { icon: '🔧', color: '#ff9f5a', label: 'Equipment' },
-  INDIRECT:    { icon: '💼', color: '#7fd9c4', label: 'Indirect' },
-  OTHER:       { icon: '❓', color: '#9aa5b1', label: 'Other' },
-};
+const lookupType = (types: CostTypeDef[], code: string) => types.find((t) => t.code === code);
 
 /**
  * Assign a cost type with one click instead of a dropdown: a row of icon
  * buttons, filled in that type's colour when selected. `value` of '' or
  * undefined means "not set" — nothing is filled, and no clear button shows.
+ * The buttons themselves come from dim_cost_type, not a hard-coded list, so a
+ * type added from the manager above shows up here immediately.
  */
-function CostTypePicker({ value, onChange, clearLabel = 'inherit' }: {
+function CostTypePicker({ types, value, onChange, clearLabel = 'inherit' }: {
+  types: CostTypeDef[];
   value: CostType | '';
   onChange: (v: CostType | '') => void;
   clearLabel?: string;
 }) {
   return (
     <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
-      {COST_TYPE_VALUES.map((t) => {
-        const meta = COST_TYPE_META[t];
-        const selected = value === t;
+      {types.map((t) => {
+        const selected = value === t.code;
         return (
-          <button key={t} type="button" title={meta.label}
-                  onClick={() => onChange(selected ? '' : t)}
+          <button key={t.code} type="button" title={t.label}
+                  onClick={() => onChange(selected ? '' : t.code)}
                   style={{
                     fontSize: 13, lineHeight: 1, padding: '4px 7px', borderRadius: 6,
                     cursor: 'pointer', fontFamily: 'inherit',
-                    background: selected ? meta.color : 'var(--surface-3)',
-                    border: `1px solid ${selected ? meta.color : 'var(--border)'}`,
+                    background: selected ? t.color : 'var(--surface-3)',
+                    border: `1px solid ${selected ? t.color : 'var(--border)'}`,
                     filter: selected ? 'none' : 'grayscale(0.4) opacity(0.75)',
                   }}>
-            {meta.icon}
+            {t.icon}
           </button>
         );
       })}
@@ -66,8 +52,8 @@ function CostTypePicker({ value, onChange, clearLabel = 'inherit' }: {
 }
 
 /** Small icon + label badge for showing a resolved cost type, not picking one. */
-function CostTypeBadge({ type }: { type: string }) {
-  const meta = COST_TYPE_META[type as CostType];
+function CostTypeBadge({ types, type }: { types: CostTypeDef[]; type: string }) {
+  const meta = lookupType(types, type);
   if (!meta) {
     return <span className="faint mono">{type}</span>;
   }
@@ -100,11 +86,11 @@ const glLabel = (c: { cost_element_code: string; cost_element_name?: string | nu
  * server's own truth: every allocation here is saved the moment it is made,
  * so there is no separate "pending" state to also account for.
  */
-function groupByCostType(combos: CostTypeCombination[]): CostTypeGroup[] {
+function groupByCostType(combos: CostTypeCombination[], types: CostTypeDef[]): CostTypeGroup[] {
   const map = new Map<string, CostTypeGroup>();
   for (const c of combos) {
     const key = c.resolved_cost_type ?? 'UNMAPPED';
-    const g = map.get(key) ?? { type: key as CostType | 'UNMAPPED', rows: [], postings: 0, amount: 0 };
+    const g = map.get(key) ?? { type: key, rows: [], postings: 0, amount: 0 };
     g.rows.push(c);
     g.postings += c.postings;
     g.amount += c.amount;
@@ -114,7 +100,7 @@ function groupByCostType(combos: CostTypeCombination[]): CostTypeGroup[] {
     g.rows.sort((a, b) =>
       glLabel(a).localeCompare(glLabel(b)) || a.document_type.localeCompare(b.document_type));
   }
-  const order = ['UNMAPPED', ...COST_TYPE_VALUES];
+  const order = ['UNMAPPED', ...types.map((t) => t.code)];
   return [...map.values()].sort((a, b) => order.indexOf(a.type) - order.indexOf(b.type));
 }
 
@@ -127,13 +113,14 @@ type AllocateFn = (items: { cost_element_code: string; document_type: string; co
  * here — a single row's or a whole group's — saves the instant it is clicked;
  * the row reappears under its new group as soon as the save round-trips.
  */
-function GroupedAllocationTable({ combos, savingKeys, allocate, comboKey }: {
+function GroupedAllocationTable({ combos, types, savingKeys, allocate, comboKey }: {
   combos: CostTypeCombination[];
+  types: CostTypeDef[];
   savingKeys: Set<string>;
   allocate: AllocateFn;
   comboKey: (c: { cost_element_code: string; document_type: string }) => string;
 }) {
-  const groups = useMemo(() => groupByCostType(combos), [combos]);
+  const groups = useMemo(() => groupByCostType(combos, types), [combos, types]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [allCollapsed, setAllCollapsed] = useState(true);
 
@@ -178,7 +165,7 @@ function GroupedAllocationTable({ combos, savingKeys, allocate, comboKey }: {
                   <td colSpan={2}>
                     {g.type === 'UNMAPPED'
                       ? <span className="faint mono" style={{ fontWeight: 700 }}>UNMAPPED</span>
-                      : <CostTypeBadge type={g.type} />}
+                      : <CostTypeBadge types={types} type={g.type} />}
                     <span className="faint" style={{ fontSize: 11, marginLeft: 8 }}>
                       {g.rows.length} GL/doc-type combination{g.rows.length === 1 ? '' : 's'}
                     </span>
@@ -189,7 +176,7 @@ function GroupedAllocationTable({ combos, savingKeys, allocate, comboKey }: {
                   <td></td>
                   <td onClick={(e) => e.stopPropagation()}
                       style={groupSaving ? { opacity: .5, pointerEvents: 'none' } : undefined}>
-                    <CostTypePicker value={g.type === 'UNMAPPED' ? '' : g.type} clearLabel="per-row"
+                    <CostTypePicker types={types} value={g.type === 'UNMAPPED' ? '' : g.type} clearLabel="per-row"
                       onChange={(v) => allocate(g.rows.map((r) => ({
                         cost_element_code: r.cost_element_code, document_type: r.document_type,
                         cost_type: v || null,
@@ -211,7 +198,7 @@ function GroupedAllocationTable({ combos, savingKeys, allocate, comboKey }: {
                       <td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                           {c.resolved_cost_type
-                            ? <CostTypeBadge type={c.resolved_cost_type} />
+                            ? <CostTypeBadge types={types} type={c.resolved_cost_type} />
                             : <span className="faint mono">UNMAPPED</span>}
                           {!c.assigned_cost_type && c.resolved_cost_type && (
                             <span className="faint" style={{ fontSize: 10 }}>(pattern)</span>
@@ -220,7 +207,7 @@ function GroupedAllocationTable({ combos, savingKeys, allocate, comboKey }: {
                         </div>
                       </td>
                       <td style={saving ? { opacity: .5, pointerEvents: 'none' } : undefined}>
-                        <CostTypePicker value={c.assigned_cost_type ?? ''}
+                        <CostTypePicker types={types} value={c.assigned_cost_type ?? ''}
                           onChange={(v) => allocate([{
                             cost_element_code: c.cost_element_code, document_type: c.document_type,
                             cost_type: v || null,
@@ -238,6 +225,115 @@ function GroupedAllocationTable({ combos, savingKeys, allocate, comboKey }: {
   );
 }
 
+/**
+ * Manage the cost types themselves — rename, re-icon, re-colour, add, or (for
+ * anything the user added) delete. The six built-in types can be edited but
+ * not removed: the account-range rules and a lot of history name them by
+ * code, and OTHER is the resolver's catch-all.
+ */
+function CostTypeManager({ types, onCreate, onUpdate, onDelete, busy }: {
+  types: CostTypeDef[];
+  onCreate: (input: { label: string; icon: string; color: string }) => void;
+  onUpdate: (input: { code: string; label: string; icon: string; color: string }) => void;
+  onDelete: (code: string) => void;
+  busy: boolean;
+}) {
+  const [editingCode, setEditingCode] = useState<string | null>(null);
+  const [draft, setDraft] = useState({ label: '', icon: '', color: '' });
+  const [newType, setNewType] = useState({ label: '', icon: '🏷️', color: '#8fa8f0' });
+
+  const startEdit = (t: CostTypeDef) => {
+    setEditingCode(t.code);
+    setDraft({ label: t.label, icon: t.icon, color: t.color });
+  };
+  const saveEdit = () => {
+    if (!editingCode) return;
+    onUpdate({ code: editingCode, ...draft });
+    setEditingCode(null);
+  };
+
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style={{ width: 60 }}>Icon</th>
+            <th>Name</th>
+            <th style={{ width: 90 }}>Colour</th>
+            <th style={{ width: 90 }}>Kind</th>
+            <th style={{ width: 170 }}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {types.map((t) => {
+            const editing = editingCode === t.code;
+            return (
+              <tr key={t.code}>
+                <td style={{ textAlign: 'center', fontSize: 16 }}>
+                  {editing
+                    ? <input value={draft.icon} style={{ width: 44, textAlign: 'center' }}
+                             onChange={(e) => setDraft((d) => ({ ...d, icon: e.target.value }))} />
+                    : t.icon}
+                </td>
+                <td>
+                  {editing
+                    ? <input value={draft.label} style={{ width: '100%' }}
+                             onChange={(e) => setDraft((d) => ({ ...d, label: e.target.value }))} />
+                    : <CostTypeBadge types={types} type={t.code} />}
+                </td>
+                <td>
+                  {editing
+                    ? <input type="color" value={draft.color}
+                             onChange={(e) => setDraft((d) => ({ ...d, color: e.target.value }))} />
+                    : <span style={{ display: 'inline-block', width: 18, height: 18, borderRadius: 4,
+                                      background: t.color, verticalAlign: 'middle' }} />}
+                </td>
+                <td className="faint" style={{ fontSize: 11 }}>{t.is_system ? 'Built-in' : 'Custom'}</td>
+                <td>
+                  {editing ? (
+                    <div className="row" style={{ gap: 6 }}>
+                      <button className="btn sm primary" onClick={saveEdit} disabled={busy}>Save</button>
+                      <button className="btn sm ghost" onClick={() => setEditingCode(null)} disabled={busy}>Cancel</button>
+                    </div>
+                  ) : (
+                    <div className="row" style={{ gap: 6 }}>
+                      <button className="btn sm" onClick={() => startEdit(t)} disabled={busy}>Edit</button>
+                      {!t.is_system && (
+                        <button className="btn sm ghost" onClick={() => onDelete(t.code)} disabled={busy}>Delete</button>
+                      )}
+                    </div>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+          <tr>
+            <td style={{ textAlign: 'center' }}>
+              <input value={newType.icon} style={{ width: 44, textAlign: 'center' }}
+                     onChange={(e) => setNewType((s) => ({ ...s, icon: e.target.value }))} />
+            </td>
+            <td>
+              <input placeholder="New cost type name" style={{ width: '100%' }} value={newType.label}
+                     onChange={(e) => setNewType((s) => ({ ...s, label: e.target.value }))} />
+            </td>
+            <td>
+              <input type="color" value={newType.color}
+                     onChange={(e) => setNewType((s) => ({ ...s, color: e.target.value }))} />
+            </td>
+            <td className="faint" style={{ fontSize: 11 }}>Custom</td>
+            <td>
+              <button className="btn sm primary" disabled={busy || !newType.label.trim()}
+                      onClick={() => { onCreate(newType); setNewType({ label: '', icon: '🏷️', color: '#8fa8f0' }); }}>
+                + Add
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function Settings() {
   const { projects, refresh } = useApp();
   const [info, setInfo] = useState<{ version: string; dbPath: string; userData: string } | null>(null);
@@ -245,8 +341,8 @@ export function Settings() {
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ project_code: '', project_name: '', client_name: '', currency_code: 'USD', contract_value: '' });
-  const [revenuePattern, setRevenuePattern] = useState('^4');
 
+  const [types, setTypes] = useState<CostTypeDef[]>([]);
   const [combos, setCombos] = useState<CostTypeCombination[]>([]);
   const [savingKeys, setSavingKeys] = useState<Set<string>>(new Set());
 
@@ -256,6 +352,10 @@ export function Settings() {
   const loadCostTypes = async () => {
     const c = await api.costTypes.combinations();
     if (c.ok) setCombos(c.data);
+  };
+  const loadTypes = async () => {
+    const r = await api.costTypes.types();
+    if (r.ok) setTypes(r.data);
   };
 
   /**
@@ -280,6 +380,19 @@ export function Settings() {
     })();
   };
 
+  const createType = (input: { label: string; icon: string; color: string }) => guard(async () => {
+    setTypes(await call(api.costTypes.typeCreate(input)));
+    setNote(`Added "${input.label}" as a cost type.`);
+  });
+  const updateType = (input: { code: string; label: string; icon: string; color: string }) => guard(async () => {
+    setTypes(await call(api.costTypes.typeUpdate(input)));
+    setNote(`"${input.label}" updated.`);
+  });
+  const deleteType = (code: string) => guard(async () => {
+    setTypes(await call(api.costTypes.typeDelete(code)));
+    setNote('Cost type removed.');
+  });
+
   const exportMapping = () => guard(async () => {
     const path = await call(api.costTypes.exportMapping());
     setNote(path ? `Exported to ${path} — grouped by cost type, expand/collapse in Excel's own outline.`
@@ -288,17 +401,9 @@ export function Settings() {
 
   useEffect(() => {
     api.app.info().then((r) => { if (r.ok) setInfo(r.data); });
-    api.settings.list().then((r) => {
-      if (r.ok) setRevenuePattern(r.data.find((x) => x.key === 'revenue_account_pattern')?.value ?? '^4');
-    });
+    loadTypes();
     loadCostTypes();
   }, []);
-
-  const saveClassification = () => guard(async () => {
-    await call(api.settings.set('revenue_account_pattern', revenuePattern));
-    const res = await call(api.settings.reclassify());
-    setNote(`Rule saved and applied to ${res.costElements} cost elements already loaded.`);
-  });
 
   const guard = async (fn: () => Promise<void>) => {
     setBusy(true); setError(null); setNote(null);
@@ -344,23 +449,14 @@ export function Settings() {
       </div>
 
       <div className="card">
-        <h3>Cost classification</h3>
+        <h3>Cost types</h3>
         <p className="hint">
-          A CJI3 export carries income as well as cost, posted as negative amounts. Cost elements
-          whose account matches this pattern are treated as revenue and kept out of actual cost —
-          otherwise billing would silently cancel out spend. The default <code className="mono">^4</code>
-          {' '}suits the usual SAP operating chart, where 4xxxxxxx is income and 3xxxxxxx is expense.
+          The categories offered below in Allocate cost types. Rename or re-colour any of them, or
+          add a new one — it shows up in the picker immediately, nothing to reload. The six built-in
+          types can be edited but not deleted; anything added here can be removed once nothing is
+          allocated to it.
         </p>
-        <div className="row">
-          <label className="field">
-            <span>Revenue account pattern (regular expression)</span>
-            <input value={revenuePattern} style={{ width: 200 }} className="mono"
-                   onChange={(e) => setRevenuePattern(e.target.value)} />
-          </label>
-          <button className="btn" onClick={saveClassification} disabled={busy}>
-            Save and reclassify
-          </button>
-        </div>
+        <CostTypeManager types={types} onCreate={createType} onUpdate={updateType} onDelete={deleteType} busy={busy} />
       </div>
 
       <div className="card">
@@ -374,7 +470,7 @@ export function Settings() {
           already resolves to.
         </p>
 
-        <GroupedAllocationTable combos={combos} savingKeys={savingKeys} allocate={allocate} comboKey={comboKey} />
+        <GroupedAllocationTable combos={combos} types={types} savingKeys={savingKeys} allocate={allocate} comboKey={comboKey} />
 
         <div className="row" style={{ marginTop: 10 }}>
           <button className="btn" style={{ marginLeft: 'auto' }} onClick={exportMapping} disabled={busy}>

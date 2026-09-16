@@ -156,22 +156,28 @@ as negative amounts against the same WBS. In the sample, summing the file gives
 102.5M — but that is cost *net of* 83.1M of billing. Actual cost is 185.6M. Cost
 elements are classified on import, `v_actual` holds cost alone, `v_revenue` holds
 income sign-flipped to positive, and `v_posting` holds both. The account pattern is a
-setting (Settings › Cost classification), because charts of accounts differ.
+setting (`revenue_account_pattern`), read at import time, because charts of accounts
+differ — there is currently no screen for editing it; it defaults to `^4`.
 
-**Cost type is a rule, not a constant.** Which postings count as labour, material or
-subcontract used to be decided from account ranges written into `importer.ts`, once per
-cost element, at import — and stored so stickily that nothing could later correct it.
-Those ranges are one particular operating chart, and the account alone cannot always
-answer: the same cost element carries different cost depending on the document it was
-posted with. So the mapping is data. `cost_type_rule` holds an ordered list matching on
-cost element and/or document type (SQL `GLOB`, first match wins), seeded once with the
-former hard-coded ranges so upgrading an existing warehouse never moves a number, and
-`v_posting` resolves it per posting row. A cost type stated by the source file still
-outranks a rule. There is no screen for editing a pattern directly — Settings › Allocate
-cost types writes an exact-pair rule at priority 1 instead, which always wins over a
-pattern and is what a cost controller actually needs: an answer for this GL and this
-document type, not a regular expression. Because rules are read when a report runs,
-an allocation fixes history as well as the next import — there is nothing to reload.
+**Cost type is a rule, not a constant — and the types themselves are data.** Which
+postings count as labour, material or subcontract used to be decided from account
+ranges written into `importer.ts`, once per cost element, at import — and stored so
+stickily that nothing could later correct it. Those ranges are one particular operating
+chart, and the account alone cannot always answer: the same cost element carries
+different cost depending on the document it was posted with. So the mapping is data.
+`cost_type_rule` holds an ordered list matching on cost element and/or document type
+(SQL `GLOB`, first match wins), seeded once with the former hard-coded ranges so
+upgrading an existing warehouse never moves a number, and `v_posting` resolves it per
+posting row. A cost type stated by the source file still outranks a rule. There is no
+screen for editing a pattern directly — Settings › Allocate cost types writes an
+exact-pair rule at priority 1 instead, which always wins over a pattern and is what a
+cost controller actually needs: an answer for this GL and this document type, not a
+regular expression. Because rules are read when a report runs, an allocation fixes
+history as well as the next import — there is nothing to reload.
+The cost types on offer are themselves a table, `dim_cost_type` (code, label, icon,
+colour), not a CHECK constraint — Settings › Cost types lets a user rename one, re-icon
+it, or add a new one on the spot, and it appears in the allocation picker immediately.
+The original six ship seeded as `is_system = 1` and can be renamed but not deleted.
 
 **A subcontractor report is a sub-ledger, not extra cost.** It is the service-line
 detail behind purchase orders already posted in CJI3, so adding it to actuals

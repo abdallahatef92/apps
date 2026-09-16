@@ -35,8 +35,13 @@ Read `README.md` first for the data model and the reasoning behind it.
   `document_type` is on the fact, not on `dim_cost_element`, and because a rule change
   must correct cost already loaded. `dim_cost_element.cost_type` holds only what a source
   file explicitly stated, which still outranks a rule; never write an inferred value
-  there, and never re-introduce account ranges in `importer.ts`. Adding a seventh cost
-  type is a migration — the six are a CHECK constraint on two tables.
+  there, and never re-introduce account ranges in `importer.ts`. The set of cost types
+  itself is data, not a CHECK constraint: `dim_cost_type` holds the code, label, icon
+  and colour for each one, and `dim_cost_element.cost_type` / `cost_type_rule.cost_type`
+  are a foreign key into it. Settings › Cost types lets the user add, rename or re-icon
+  a type; the original six (`LABOR`, `MATERIAL`, `SUBCONTRACT`, `EQUIPMENT`, `INDIRECT`,
+  `OTHER`) are seeded with `is_system = 1` and can be renamed but never deleted — the
+  account-range rules and `OTHER`'s role as the resolver's catch-all name them by code.
 - **Source reports interleave subtotal rows.** Anything that reads a spreadsheet must
   respect `report_definition.detail_key_fields`; rows with those fields blank are
   SKIPPED, and only rows with `stg_row.status = 'VALID'` may post.

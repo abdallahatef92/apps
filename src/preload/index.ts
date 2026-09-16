@@ -27,6 +27,10 @@ const api = {
     combinations: () => invoke<any[]>('costTypes:combinations'),
     assign: (items: unknown[]) => invoke<{ assigned: number; cleared: number }>('costTypes:assign', items),
     exportMapping: () => invoke<string | null>('costTypes:exportMapping'),
+    types: () => invoke<any[]>('costTypes:types'),
+    typeCreate: (input: unknown) => invoke<any[]>('costTypes:typeCreate', input),
+    typeUpdate: (input: unknown) => invoke<any[]>('costTypes:typeUpdate', input),
+    typeDelete: (code: string) => invoke<any[]>('costTypes:typeDelete', code),
   },
   settings: {
     list: () => invoke<{ key: string; value: string }[]>('settings:list'),

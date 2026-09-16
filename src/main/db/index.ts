@@ -13,6 +13,7 @@ import detailSubstitutionSql from './migrations/006_detail_substitution.sql?raw'
 import costTypeRulesSql from './migrations/007_cost_type_rules.sql?raw';
 import partnerObjectSql from './migrations/008_partner_object.sql?raw';
 import orderSettlementSql from './migrations/009_order_settlement.sql?raw';
+import costTypeRegistrySql from './migrations/010_cost_type_registry.sql?raw';
 import { SYSTEM_QUERIES } from './systemQueries';
 
 interface Migration {
@@ -36,6 +37,7 @@ const MIGRATIONS: Migration[] = [
   { version: 7, name: '007_cost_type_rules', sql: costTypeRulesSql },
   { version: 8, name: '008_partner_object', sql: partnerObjectSql },
   { version: 9, name: '009_order_settlement', sql: orderSettlementSql },
+  { version: 10, name: '010_cost_type_registry', sql: costTypeRegistrySql, selfTransacting: true },
 ];
 
 let db: DB | null = null;
