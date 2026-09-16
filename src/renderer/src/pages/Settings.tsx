@@ -95,26 +95,16 @@ const glLabel = (c: { cost_element_code: string; cost_element_name?: string | nu
   c.cost_element_name ? `${c.cost_element_name} (${c.cost_element_code})` : c.cost_element_code;
 
 /**
- * Group combinations by cost type — UNMAPPED first, since that is the group
- * needing attention — with the GL + document-type combinations inside each
- * sorted by GL description, not GL code.
- *
- * A row picked to a new type moves here immediately, before Save: `pending`
- * is a live choice, not just a note attached to the old row, so the group it
- * sits under is the group it will land in once saved. Clearing an allocation
- * (an explicit '' in `pending`) is the one case that cannot be predicted this
- * way — which pattern would then apply is only known on the server — so a
- * cleared row stays where the server currently has it until the next reload.
+ * Group combinations by their current cost type — UNMAPPED first, since that
+ * is the group needing attention — with the GL + document-type combinations
+ * inside each sorted by GL description, not GL code. Purely a view of the
+ * server's own truth: every allocation here is saved the moment it is made,
+ * so there is no separate "pending" state to also account for.
  */
-function groupByCostType(
-  combos: CostTypeCombination[],
-  pending: Record<string, CostType | ''>,
-  comboKey: (c: { cost_element_code: string; document_type: string }) => string,
-): CostTypeGroup[] {
+function groupByCostType(combos: CostTypeCombination[]): CostTypeGroup[] {
   const map = new Map<string, CostTypeGroup>();
   for (const c of combos) {
-    const p = pending[comboKey(c)];
-    const key = (p ? p : c.resolved_cost_type) ?? 'UNMAPPED';
+    const key = c.resolved_cost_type ?? 'UNMAPPED';
     const g = map.get(key) ?? { type: key as CostType | 'UNMAPPED', rows: [], postings: 0, amount: 0 };
     g.rows.push(c);
     g.postings += c.postings;
@@ -129,19 +119,22 @@ function groupByCostType(
   return [...map.values()].sort((a, b) => order.indexOf(a.type) - order.indexOf(b.type));
 }
 
+type AllocateFn = (items: { cost_element_code: string; document_type: string; cost_type: CostType | null }[]) => void;
+
 /**
  * The allocation grid as a pivot: one collapsible row per cost type, its GL +
  * document-type combinations nested beneath, sorted by GL description so the
- * list reads by what the account means rather than its number. A cost type's
- * own picker re-allocates every combination under it at once.
+ * list reads by what the account means rather than its number. Every picker
+ * here — a single row's or a whole group's — saves the instant it is clicked;
+ * the row reappears under its new group as soon as the save round-trips.
  */
-function GroupedAllocationTable({ combos, pending, setPending, comboKey }: {
+function GroupedAllocationTable({ combos, savingKeys, allocate, comboKey }: {
   combos: CostTypeCombination[];
-  pending: Record<string, CostType | ''>;
-  setPending: (fn: (p: Record<string, CostType | ''>) => Record<string, CostType | ''>) => void;
+  savingKeys: Set<string>;
+  allocate: AllocateFn;
   comboKey: (c: { cost_element_code: string; document_type: string }) => string;
 }) {
-  const groups = useMemo(() => groupByCostType(combos, pending, comboKey), [combos, pending, comboKey]);
+  const groups = useMemo(() => groupByCostType(combos), [combos]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [allCollapsed, setAllCollapsed] = useState(true);
 
@@ -149,13 +142,6 @@ function GroupedAllocationTable({ combos, pending, setPending, comboKey }: {
   const toggle = (type: string) => setCollapsed((c) => ({ ...c, [type]: isOpen(type) }));
   const expandAll = () => { setAllCollapsed(false); setCollapsed({}); };
   const collapseAll = () => { setAllCollapsed(true); setCollapsed({}); };
-
-  const bulkAllocate = (group: CostTypeGroup, v: CostType | '') =>
-    setPending((p) => {
-      const next = { ...p };
-      for (const r of group.rows) next[comboKey(r)] = v;
-      return next;
-    });
 
   return (
     <div className="table-wrap">
@@ -184,6 +170,7 @@ function GroupedAllocationTable({ combos, pending, setPending, comboKey }: {
           )}
           {groups.map((g) => {
             const open = isOpen(g.type);
+            const groupSaving = g.rows.some((r) => savingKeys.has(comboKey(r)));
             return (
               <Fragment key={g.type}>
                 <tr style={{ background: 'var(--surface-2)', cursor: 'pointer' }}
@@ -196,24 +183,25 @@ function GroupedAllocationTable({ combos, pending, setPending, comboKey }: {
                     <span className="faint" style={{ fontSize: 11, marginLeft: 8 }}>
                       {g.rows.length} GL/doc-type combination{g.rows.length === 1 ? '' : 's'}
                     </span>
+                    {groupSaving && <span className="faint" style={{ fontSize: 10, marginLeft: 8 }}>saving…</span>}
                   </td>
                   <td className="mono" style={{ textAlign: 'right' }}>{g.postings.toLocaleString()}</td>
                   <td className="mono" style={{ textAlign: 'right' }}>{money(g.amount)}</td>
                   <td></td>
-                  <td onClick={(e) => e.stopPropagation()}>
+                  <td onClick={(e) => e.stopPropagation()}
+                      style={groupSaving ? { opacity: .5, pointerEvents: 'none' } : undefined}>
                     <CostTypePicker value={g.type === 'UNMAPPED' ? '' : g.type} clearLabel="per-row"
-                      onChange={(v) => bulkAllocate(g, v)} />
+                      onChange={(v) => allocate(g.rows.map((r) => ({
+                        cost_element_code: r.cost_element_code, document_type: r.document_type,
+                        cost_type: v || null,
+                      })))} />
                   </td>
                 </tr>
                 {open && g.rows.map((c) => {
                   const key = comboKey(c);
-                  const current = key in pending ? pending[key] : (c.assigned_cost_type ?? '');
-                  const changed = key in pending;
-                  // A non-empty pending value already moved this row into a new group above —
-                  // the highlight makes that move visible even while collapsed elsewhere.
-                  const moved = !!pending[key];
+                  const saving = savingKeys.has(key);
                   return (
-                    <tr key={key} style={moved ? { background: 'rgba(57,135,229,.08)' } : undefined}>
+                    <tr key={key}>
                       <td></td>
                       <td className="mono" style={{ paddingLeft: 20 }} title={c.cost_element_code}>
                         {glLabel(c)}
@@ -226,17 +214,18 @@ function GroupedAllocationTable({ combos, pending, setPending, comboKey }: {
                           {c.resolved_cost_type
                             ? <CostTypeBadge type={c.resolved_cost_type} />
                             : <span className="faint mono">UNMAPPED</span>}
-                          {!c.assigned_cost_type && c.resolved_cost_type && !moved && (
+                          {!c.assigned_cost_type && c.resolved_cost_type && (
                             <span className="faint" style={{ fontSize: 10 }}>(pattern)</span>
                           )}
-                          {moved && <span className="faint" style={{ fontSize: 10 }}>(still saved as this — moved above, unsaved)</span>}
+                          {saving && <span className="faint" style={{ fontSize: 10 }}>saving…</span>}
                         </div>
                       </td>
-                      <td>
-                        <div style={changed ? { outline: '1px solid var(--accent)', borderRadius: 8, padding: 2 } : undefined}>
-                          <CostTypePicker value={current}
-                            onChange={(v) => setPending((p) => ({ ...p, [key]: v }))} />
-                        </div>
+                      <td style={saving ? { opacity: .5, pointerEvents: 'none' } : undefined}>
+                        <CostTypePicker value={c.assigned_cost_type ?? ''}
+                          onChange={(v) => allocate([{
+                            cost_element_code: c.cost_element_code, document_type: c.document_type,
+                            cost_type: v || null,
+                          }])} />
                       </td>
                     </tr>
                   );
@@ -301,8 +290,7 @@ export function Settings() {
   const [revenuePattern, setRevenuePattern] = useState('^4');
 
   const [combos, setCombos] = useState<CostTypeCombination[]>([]);
-  // Only what the user has actually changed, keyed "code doctype".
-  const [pending, setPending] = useState<Record<string, CostType | ''>>({});
+  const [savingKeys, setSavingKeys] = useState<Set<string>>(new Set());
 
   const comboKey = (c: { cost_element_code: string; document_type: string }) =>
     `${c.cost_element_code} ${c.document_type}`;
@@ -310,22 +298,29 @@ export function Settings() {
   const loadCostTypes = async () => {
     const c = await api.costTypes.combinations();
     if (c.ok) setCombos(c.data);
-    setPending({});
   };
 
-  const saveAllocations = () => guard(async () => {
-    const items = Object.entries(pending).map(([k, v]) => {
-      // An account code carries no space; a document type conceivably could, so
-      // only the first space separates the two halves of the key.
-      const [cost_element_code, ...rest] = k.split(' ');
-      return { cost_element_code, document_type: rest.join(' '), cost_type: v === '' ? null : v };
-    });
-    if (items.length === 0) throw new Error('Nothing to save — no allocation was changed.');
-    const res = await call(api.costTypes.assign(items));
-    await loadCostTypes();
-    setNote(`${res.assigned} allocated, ${res.cleared} returned to the patterns. `
-      + 'Every report reflects this now.');
-  });
+  /**
+   * Every allocation saves the instant it is picked — no separate save step.
+   * Combinations reload from the server afterwards rather than being patched
+   * in place, so the "Now" badge and which pattern a cleared row falls back
+   * to are always the server's real answer, not a guess made in the browser.
+   */
+  const allocate: AllocateFn = (items) => {
+    const keys = items.map(comboKey);
+    setSavingKeys((s) => new Set([...s, ...keys]));
+    setError(null);
+    (async () => {
+      try {
+        await call(api.costTypes.assign(items));
+        await loadCostTypes();
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setSavingKeys((s) => { const n = new Set(s); keys.forEach((k) => n.delete(k)); return n; });
+      }
+    })();
+  };
 
   const exportMapping = () => guard(async () => {
     const path = await call(api.costTypes.exportMapping());
@@ -415,22 +410,15 @@ export function Settings() {
         <p className="hint">
           Every combination of cost element and document type that actually occurs in the cost
           already loaded — {combos.length} of them, grouped by their current cost type (UNMAPPED
-          first) with each GL listed by description, not code. Pick a new one and the row moves
-          here immediately, before you save, so you can see where it will land; <em>inherit</em>
-          {' '}leaves it to whatever the account's own pattern already resolves to. Saving takes
-          effect immediately — no re-import.
+          first) with each GL listed by description, not code. Pick one and it saves immediately —
+          no re-import, nothing else to click — and the row moves into its new group as soon as
+          the save comes back; <em>inherit</em> leaves it to whatever the account's own pattern
+          already resolves to.
         </p>
 
-        <GroupedAllocationTable combos={combos} pending={pending} setPending={setPending} comboKey={comboKey} />
+        <GroupedAllocationTable combos={combos} savingKeys={savingKeys} allocate={allocate} comboKey={comboKey} />
 
         <div className="row" style={{ marginTop: 10 }}>
-          <button className="btn primary" onClick={saveAllocations}
-                  disabled={busy || Object.keys(pending).length === 0}>
-            Save {Object.keys(pending).length || ''} allocation{Object.keys(pending).length === 1 ? '' : 's'}
-          </button>
-          {Object.keys(pending).length > 0 && (
-            <button className="btn" onClick={() => setPending({})} disabled={busy}>Discard changes</button>
-          )}
           <button className="btn" style={{ marginLeft: 'auto' }} onClick={exportMapping} disabled={busy}>
             ⤓ Export to Excel
           </button>
