@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useMemo, useEffect, useState } from 'react';
 import { useApp } from '../App';
 import { api, call } from '../lib/api';
+import { Heatmap } from '../charts/Heatmap';
 import {
   COST_TYPE_VALUES,
-  type CostType, type CostTypeCombination, type CostTypePreviewRow, type CostTypeRule,
+  type CostType, type CostTypeCombination, type CostTypePreviewRow, type CostTypeRule, type QueryResult,
 } from '@shared/types';
 
 const money = (n: number) =>
@@ -84,6 +85,170 @@ function CostTypeBadge({ type }: { type: string }) {
   );
 }
 
+interface GlGroup {
+  code: string;
+  name: string | null;
+  rows: CostTypeCombination[];
+  postings: number;
+  amount: number;
+}
+
+/** Group combinations by GL, sorted by GL code — the shape a pivot table groups on. */
+function groupByGl(combos: CostTypeCombination[]): GlGroup[] {
+  const map = new Map<string, GlGroup>();
+  for (const c of combos) {
+    const g = map.get(c.cost_element_code)
+      ?? { code: c.cost_element_code, name: c.cost_element_name, rows: [], postings: 0, amount: 0 };
+    g.rows.push(c);
+    g.postings += c.postings;
+    g.amount += c.amount;
+    map.set(c.cost_element_code, g);
+  }
+  for (const g of map.values()) g.rows.sort((a, b) => a.document_type.localeCompare(b.document_type));
+  return [...map.values()].sort((a, b) => a.code.localeCompare(b.code));
+}
+
+/**
+ * The allocation grid as a pivot: one collapsible row per GL, sorted by GL,
+ * its document-type combinations nested beneath. A GL row's own picker
+ * allocates every combination under it at once — the fast path for a GL that
+ * is entirely one cost type regardless of document type.
+ */
+function GroupedAllocationTable({ combos, pending, setPending, comboKey }: {
+  combos: CostTypeCombination[];
+  pending: Record<string, CostType | ''>;
+  setPending: (fn: (p: Record<string, CostType | ''>) => Record<string, CostType | ''>) => void;
+  comboKey: (c: { cost_element_code: string; document_type: string }) => string;
+}) {
+  const groups = useMemo(() => groupByGl(combos), [combos]);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [allCollapsed, setAllCollapsed] = useState(true);
+
+  const isOpen = (code: string) => collapsed[code] !== undefined ? !collapsed[code] : !allCollapsed;
+  const toggle = (code: string) => setCollapsed((c) => ({ ...c, [code]: isOpen(code) }));
+  const expandAll = () => { setAllCollapsed(false); setCollapsed({}); };
+  const collapseAll = () => { setAllCollapsed(true); setCollapsed({}); };
+
+  const bulkAllocate = (group: GlGroup, v: CostType | '') =>
+    setPending((p) => {
+      const next = { ...p };
+      for (const r of group.rows) next[comboKey(r)] = v;
+      return next;
+    });
+
+  return (
+    <div className="table-wrap">
+      <div className="row" style={{ marginBottom: 8, gap: 8 }}>
+        <button className="btn sm" onClick={expandAll}>Expand all</button>
+        <button className="btn sm" onClick={collapseAll}>Collapse all</button>
+        <span className="faint" style={{ fontSize: 11, alignSelf: 'center' }}>
+          {groups.length} GL code{groups.length === 1 ? '' : 's'}, sorted by GL
+        </span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th style={{ width: 24 }}></th>
+            <th>GL / Doc type</th>
+            <th>Description</th>
+            <th style={{ textAlign: 'right' }}>Postings</th>
+            <th style={{ textAlign: 'right' }}>Amount</th>
+            <th style={{ width: 150 }}>Now</th>
+            <th style={{ width: 240 }}>Allocate</th>
+          </tr>
+        </thead>
+        <tbody>
+          {groups.length === 0 && (
+            <tr><td colSpan={7}><div className="empty">No actual cost loaded yet.</div></td></tr>
+          )}
+          {groups.map((g) => {
+            const open = isOpen(g.code);
+            const glTypes = new Set(g.rows.map((r) => r.resolved_cost_type ?? 'UNMAPPED'));
+            const glCurrent = glTypes.size === 1 ? [...glTypes][0] as CostType : '';
+            return (
+              <Fragment key={g.code}>
+                <tr style={{ background: 'var(--surface-2)', cursor: 'pointer' }}
+                    onClick={() => toggle(g.code)}>
+                  <td className="faint" style={{ textAlign: 'center' }}>{open ? '▾' : '▸'}</td>
+                  <td className="mono" style={{ fontWeight: 700 }}>{g.code}</td>
+                  <td>{g.name ?? '—'}</td>
+                  <td className="mono" style={{ textAlign: 'right' }}>{g.postings.toLocaleString()}</td>
+                  <td className="mono" style={{ textAlign: 'right' }}>{money(g.amount)}</td>
+                  <td>
+                    {glTypes.size === 1
+                      ? <CostTypeBadge type={[...glTypes][0]} />
+                      : <span className="faint" style={{ fontSize: 10 }}>{glTypes.size} types — expand</span>}
+                  </td>
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <CostTypePicker value={glCurrent as CostType | ''} clearLabel="per-row"
+                      onChange={(v) => bulkAllocate(g, v)} />
+                  </td>
+                </tr>
+                {open && g.rows.map((c) => {
+                  const key = comboKey(c);
+                  const current = key in pending ? pending[key] : (c.assigned_cost_type ?? '');
+                  const changed = key in pending;
+                  return (
+                    <tr key={key}>
+                      <td></td>
+                      <td className="mono faint" style={{ paddingLeft: 20 }}>
+                        {c.document_type || '(none)'}
+                      </td>
+                      <td></td>
+                      <td className="mono" style={{ textAlign: 'right' }}>{c.postings.toLocaleString()}</td>
+                      <td className="mono" style={{ textAlign: 'right' }}>{money(c.amount)}</td>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          {c.resolved_cost_type
+                            ? <CostTypeBadge type={c.resolved_cost_type} />
+                            : <span className="faint mono">UNMAPPED</span>}
+                          {!c.assigned_cost_type && c.resolved_cost_type && (
+                            <span className="faint" style={{ fontSize: 10 }}>(pattern)</span>
+                          )}
+                        </div>
+                      </td>
+                      <td>
+                        <div style={changed ? { outline: '1px solid var(--accent)', borderRadius: 8, padding: 2 } : undefined}>
+                          <CostTypePicker value={current}
+                            onChange={(v) => setPending((p) => ({ ...p, [key]: v }))} />
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </Fragment>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * A small GL x document-type matrix — not a full report, just enough to show
+ * which document types actually post against which GLs. Capped to the
+ * biggest GLs by spend so it stays a quick illustration, not another table.
+ */
+function GlDocTypeMatrix({ combos, maxGl = 12 }: { combos: CostTypeCombination[]; maxGl?: number }) {
+  const result: QueryResult = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const c of combos) totals.set(c.cost_element_code, (totals.get(c.cost_element_code) ?? 0) + c.amount);
+    const top = new Set([...totals.entries()].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+      .slice(0, maxGl).map(([code]) => code));
+    const rows = combos
+      .filter((c) => top.has(c.cost_element_code))
+      .map((c) => ({
+        cost_element_code: c.cost_element_code,
+        document_type: c.document_type || '(none)',
+        postings: c.postings,
+      }));
+    return { columns: ['cost_element_code', 'document_type', 'postings'], rows, rowCount: rows.length, ms: 0, truncated: false };
+  }, [combos, maxGl]);
+
+  return <Heatmap result={result} rowColumn="cost_element_code" colColumn="document_type" valueColumn="postings" />;
+}
+
 export function Settings() {
   const { projects, refresh } = useApp();
   const [info, setInfo] = useState<{ version: string; dbPath: string; userData: string } | null>(null);
@@ -124,6 +289,12 @@ export function Settings() {
     await loadCostTypes();
     setNote(`${res.assigned} allocated, ${res.cleared} returned to the patterns. `
       + 'Every report reflects this now.');
+  });
+
+  const exportMapping = () => guard(async () => {
+    const path = await call(api.costTypes.exportMapping());
+    setNote(path ? `Exported to ${path} — grouped by GL, expand/collapse in Excel's own outline.`
+      : 'Export cancelled.');
   });
 
   useEffect(() => {
@@ -237,58 +408,7 @@ export function Settings() {
           it takes effect immediately — no re-import.
         </p>
 
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Cost element</th>
-                <th>Description</th>
-                <th>Doc type</th>
-                <th style={{ textAlign: 'right' }}>Postings</th>
-                <th style={{ textAlign: 'right' }}>Amount</th>
-                <th style={{ width: 150 }}>Now</th>
-                <th style={{ width: 240 }}>Allocate</th>
-              </tr>
-            </thead>
-            <tbody>
-              {combos.length === 0 && (
-                <tr><td colSpan={7}><div className="empty">No actual cost loaded yet.</div></td></tr>
-              )}
-              {combos.map((c) => {
-                const key = comboKey(c);
-                const current = key in pending
-                  ? pending[key]
-                  : (c.assigned_cost_type ?? '');
-                const changed = key in pending;
-                return (
-                  <tr key={key}>
-                    <td className="mono">{c.cost_element_code}</td>
-                    <td>{c.cost_element_name ?? '—'}</td>
-                    <td className="mono">{c.document_type || <span className="faint">(none)</span>}</td>
-                    <td className="mono" style={{ textAlign: 'right' }}>{c.postings.toLocaleString()}</td>
-                    <td className="mono" style={{ textAlign: 'right' }}>{money(c.amount)}</td>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        {c.resolved_cost_type
-                          ? <CostTypeBadge type={c.resolved_cost_type} />
-                          : <span className="faint mono">UNMAPPED</span>}
-                        {!c.assigned_cost_type && c.resolved_cost_type && (
-                          <span className="faint" style={{ fontSize: 10 }}>(pattern)</span>
-                        )}
-                      </div>
-                    </td>
-                    <td>
-                      <div style={changed ? { outline: '1px solid var(--accent)', borderRadius: 8, padding: 2 } : undefined}>
-                        <CostTypePicker value={current}
-                          onChange={(v) => setPending((p) => ({ ...p, [key]: v }))} />
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <GroupedAllocationTable combos={combos} pending={pending} setPending={setPending} comboKey={comboKey} />
 
         <div className="row" style={{ marginTop: 10 }}>
           <button className="btn primary" onClick={saveAllocations}
@@ -298,7 +418,21 @@ export function Settings() {
           {Object.keys(pending).length > 0 && (
             <button className="btn" onClick={() => setPending({})} disabled={busy}>Discard changes</button>
           )}
+          <button className="btn" style={{ marginLeft: 'auto' }} onClick={exportMapping} disabled={busy}>
+            ⤓ Export to Excel
+          </button>
         </div>
+
+        {combos.length > 0 && (
+          <>
+            <h4 style={{ marginTop: 18, marginBottom: 6 }}>GL × document type</h4>
+            <p className="hint">
+              Which document types actually post against the biggest GLs — an illustration, not a
+              full report, capped to the 12 largest by spend.
+            </p>
+            <GlDocTypeMatrix combos={combos} />
+          </>
+        )}
       </div>
 
       <div className="card">

@@ -12,6 +12,7 @@ type Bridge = {
     preview(): Promise<IpcResult<CostTypePreviewRow[]>>;
     combinations(): Promise<IpcResult<CostTypeCombination[]>>;
     assign(items: CostTypeAssignment[]): Promise<IpcResult<{ assigned: number; cleared: number }>>;
+    exportMapping(): Promise<IpcResult<string | null>>;
   };
   settings: {
     list(): Promise<IpcResult<{ key: string; value: string }[]>>;

@@ -29,6 +29,7 @@ const api = {
     preview: () => invoke<any[]>('costTypes:preview'),
     combinations: () => invoke<any[]>('costTypes:combinations'),
     assign: (items: unknown[]) => invoke<{ assigned: number; cleared: number }>('costTypes:assign', items),
+    exportMapping: () => invoke<string | null>('costTypes:exportMapping'),
   },
   settings: {
     list: () => invoke<{ key: string; value: string }[]>('settings:list'),

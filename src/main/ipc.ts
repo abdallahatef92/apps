@@ -4,13 +4,13 @@ import { join } from 'node:path';
 
 import { closeDatabase, currentDbPath, defaultDbPath, getDb, openDatabase } from './db';
 import { runSelect, runStoredQuery } from './services/queryRunner';
-import { exportResult } from './services/exportExcel';
+import { exportCostTypeMapping, exportResult } from './services/exportExcel';
 import { buildPivotSql, pivotMeta, type PivotRequest } from './services/pivot';
 import { readWorkbook } from './ingest/workbook';
 import { deleteBatch, loadColumnMapping, postBatch, revenueAccountPattern, saveColumnMapping, stageFile } from './ingest/importer';
 import { suggestMapping, targetFields } from './ingest/targetFields';
 import { COST_TYPE_VALUES } from '../shared/types';
-import type { CostTypeAssignment, CostTypeRuleInput, IpcResult, Module, QueryResult, StageRequest } from '../shared/types';
+import type { CostTypeAssignment, CostTypeCombination, CostTypeRuleInput, IpcResult, Module, QueryResult, StageRequest } from '../shared/types';
 
 /** Wrap a handler so the renderer always gets {ok,data} | {ok,error} instead of a rejection. */
 function handle<T>(channel: string, fn: (...args: any[]) => T | Promise<T>): void {
@@ -22,6 +22,24 @@ function handle<T>(channel: string, fn: (...args: any[]) => T | Promise<T>): voi
       return { ok: false, error: (err as Error).message ?? String(err) };
     }
   });
+}
+
+/** Shared by the combinations list and its Excel export, so the two never drift apart. */
+function loadCostTypeCombinations(): CostTypeCombination[] {
+  return getDb().prepare(`
+    SELECT a.cost_element_code, a.cost_element_name,
+           COALESCE(a.document_type,'') AS document_type,
+           COUNT(*) AS postings, SUM(a.amount) AS amount,
+           a.cost_type AS resolved_cost_type,
+           (SELECT r.cost_type FROM cost_type_rule r
+             WHERE r.is_active = 1
+               AND r.cost_element_glob = a.cost_element_code
+               AND r.document_type_glob = COALESCE(a.document_type,'')
+             ORDER BY r.priority, r.rule_id LIMIT 1) AS assigned_cost_type
+    FROM v_actual a
+    GROUP BY a.cost_element_code, a.cost_element_name,
+             COALESCE(a.document_type,''), a.cost_type
+    ORDER BY ABS(SUM(a.amount)) DESC`).all() as CostTypeCombination[];
 }
 
 export function registerIpc(): void {
@@ -168,21 +186,18 @@ export function registerIpc(): void {
    * outright — anything else is inherited from a pattern and shown as such, so
    * the user can see which answers they have given and which were guessed.
    */
-  handle('costTypes:combinations', () =>
-    getDb().prepare(`
-      SELECT a.cost_element_code, a.cost_element_name,
-             COALESCE(a.document_type,'') AS document_type,
-             COUNT(*) AS postings, SUM(a.amount) AS amount,
-             a.cost_type AS resolved_cost_type,
-             (SELECT r.cost_type FROM cost_type_rule r
-               WHERE r.is_active = 1
-                 AND r.cost_element_glob = a.cost_element_code
-                 AND r.document_type_glob = COALESCE(a.document_type,'')
-               ORDER BY r.priority, r.rule_id LIMIT 1) AS assigned_cost_type
-      FROM v_actual a
-      GROUP BY a.cost_element_code, a.cost_element_name,
-               COALESCE(a.document_type,''), a.cost_type
-      ORDER BY ABS(SUM(a.amount)) DESC`).all());
+  handle('costTypes:combinations', () => loadCostTypeCombinations());
+
+  handle('costTypes:exportMapping', async () => {
+    const res = await dialog.showSaveDialog({
+      title: 'Export cost type mapping',
+      defaultPath: join(app.getPath('documents'), `Cost type mapping ${new Date().toISOString().slice(0, 10)}.xlsx`),
+      filters: [{ name: 'Excel workbook', extensions: ['xlsx'] }],
+    });
+    if (res.canceled || !res.filePath) return null;
+    await exportCostTypeMapping(res.filePath, loadCostTypeCombinations());
+    return res.filePath;
+  });
 
   /**
    * Allocate a cost type to named pairs.
