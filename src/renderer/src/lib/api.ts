@@ -1,4 +1,4 @@
-import type { CostTypeAssignment, CostTypeCombination, CostTypePreviewRow, CostTypeRule, IpcResult, PivotSource } from '@shared/types';
+import type { CostTypeAssignment, CostTypeCombination, IpcResult, PivotSource } from '@shared/types';
 
 // Shape exposed by the preload bridge.
 type Bridge = {
@@ -7,9 +7,6 @@ type Bridge = {
   projects: { list(): Promise<IpcResult<any[]>>; create(p: unknown): Promise<IpcResult<{ project_key: number }>> };
   reports: { list(): Promise<IpcResult<any[]>> };
   costTypes: {
-    list(): Promise<IpcResult<CostTypeRule[]>>;
-    save(rules: CostTypeRule[]): Promise<IpcResult<{ rules: number }>>;
-    preview(): Promise<IpcResult<CostTypePreviewRow[]>>;
     combinations(): Promise<IpcResult<CostTypeCombination[]>>;
     assign(items: CostTypeAssignment[]): Promise<IpcResult<{ assigned: number; cleared: number }>>;
     exportMapping(): Promise<IpcResult<string | null>>;

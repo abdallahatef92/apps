@@ -24,9 +24,6 @@ const api = {
     list: () => invoke<any[]>('reports:list'),
   },
   costTypes: {
-    list: () => invoke<any[]>('costTypes:list'),
-    save: (rules: unknown[]) => invoke<{ rules: number }>('costTypes:save', rules),
-    preview: () => invoke<any[]>('costTypes:preview'),
     combinations: () => invoke<any[]>('costTypes:combinations'),
     assign: (items: unknown[]) => invoke<{ assigned: number; cleared: number }>('costTypes:assign', items),
     exportMapping: () => invoke<string | null>('costTypes:exportMapping'),

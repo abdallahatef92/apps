@@ -4,7 +4,7 @@ import { api, call } from '../lib/api';
 import { Heatmap } from '../charts/Heatmap';
 import {
   COST_TYPE_VALUES,
-  type CostType, type CostTypeCombination, type CostTypePreviewRow, type CostTypeRule, type QueryResult,
+  type CostType, type CostTypeCombination, type QueryResult,
 } from '@shared/types';
 
 const money = (n: number) =>
@@ -30,12 +30,10 @@ const COST_TYPE_META: Record<CostType, { icon: string; color: string; label: str
  * buttons, filled in that type's colour when selected. `value` of '' or
  * undefined means "not set" — nothing is filled, and no clear button shows.
  */
-function CostTypePicker({ value, onChange, clearLabel = 'inherit', required = false }: {
+function CostTypePicker({ value, onChange, clearLabel = 'inherit' }: {
   value: CostType | '';
   onChange: (v: CostType | '') => void;
   clearLabel?: string;
-  /** A rule's cost type can never be blank — clicking the selected icon again keeps it. */
-  required?: boolean;
 }) {
   return (
     <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -44,7 +42,7 @@ function CostTypePicker({ value, onChange, clearLabel = 'inherit', required = fa
         const selected = value === t;
         return (
           <button key={t} type="button" title={meta.label}
-                  onClick={() => { if (!selected || !required) onChange(selected ? '' : t); }}
+                  onClick={() => onChange(selected ? '' : t)}
                   style={{
                     fontSize: 13, lineHeight: 1, padding: '4px 7px', borderRadius: 6,
                     cursor: 'pointer', fontFamily: 'inherit',
@@ -56,7 +54,7 @@ function CostTypePicker({ value, onChange, clearLabel = 'inherit', required = fa
           </button>
         );
       })}
-      {!required && value !== '' && (
+      {value !== '' && (
         <button type="button" title={`Clear — ${clearLabel}`} onClick={() => onChange('')}
                 style={{ fontSize: 10, padding: '4px 6px', borderRadius: 6, cursor: 'pointer',
                          fontFamily: 'inherit', background: 'transparent', color: 'var(--text-3)',
@@ -97,14 +95,26 @@ const glLabel = (c: { cost_element_code: string; cost_element_name?: string | nu
   c.cost_element_name ? `${c.cost_element_name} (${c.cost_element_code})` : c.cost_element_code;
 
 /**
- * Group combinations by their current cost type — UNMAPPED first, since that
- * is the group needing attention — with the GL + document-type combinations
- * inside each sorted by GL description, not GL code.
+ * Group combinations by cost type — UNMAPPED first, since that is the group
+ * needing attention — with the GL + document-type combinations inside each
+ * sorted by GL description, not GL code.
+ *
+ * A row picked to a new type moves here immediately, before Save: `pending`
+ * is a live choice, not just a note attached to the old row, so the group it
+ * sits under is the group it will land in once saved. Clearing an allocation
+ * (an explicit '' in `pending`) is the one case that cannot be predicted this
+ * way — which pattern would then apply is only known on the server — so a
+ * cleared row stays where the server currently has it until the next reload.
  */
-function groupByCostType(combos: CostTypeCombination[]): CostTypeGroup[] {
+function groupByCostType(
+  combos: CostTypeCombination[],
+  pending: Record<string, CostType | ''>,
+  comboKey: (c: { cost_element_code: string; document_type: string }) => string,
+): CostTypeGroup[] {
   const map = new Map<string, CostTypeGroup>();
   for (const c of combos) {
-    const key = c.resolved_cost_type ?? 'UNMAPPED';
+    const p = pending[comboKey(c)];
+    const key = (p ? p : c.resolved_cost_type) ?? 'UNMAPPED';
     const g = map.get(key) ?? { type: key as CostType | 'UNMAPPED', rows: [], postings: 0, amount: 0 };
     g.rows.push(c);
     g.postings += c.postings;
@@ -131,7 +141,7 @@ function GroupedAllocationTable({ combos, pending, setPending, comboKey }: {
   setPending: (fn: (p: Record<string, CostType | ''>) => Record<string, CostType | ''>) => void;
   comboKey: (c: { cost_element_code: string; document_type: string }) => string;
 }) {
-  const groups = useMemo(() => groupByCostType(combos), [combos]);
+  const groups = useMemo(() => groupByCostType(combos, pending, comboKey), [combos, pending, comboKey]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [allCollapsed, setAllCollapsed] = useState(true);
 
@@ -199,8 +209,11 @@ function GroupedAllocationTable({ combos, pending, setPending, comboKey }: {
                   const key = comboKey(c);
                   const current = key in pending ? pending[key] : (c.assigned_cost_type ?? '');
                   const changed = key in pending;
+                  // A non-empty pending value already moved this row into a new group above —
+                  // the highlight makes that move visible even while collapsed elsewhere.
+                  const moved = !!pending[key];
                   return (
-                    <tr key={key}>
+                    <tr key={key} style={moved ? { background: 'rgba(57,135,229,.08)' } : undefined}>
                       <td></td>
                       <td className="mono" style={{ paddingLeft: 20 }} title={c.cost_element_code}>
                         {glLabel(c)}
@@ -213,9 +226,10 @@ function GroupedAllocationTable({ combos, pending, setPending, comboKey }: {
                           {c.resolved_cost_type
                             ? <CostTypeBadge type={c.resolved_cost_type} />
                             : <span className="faint mono">UNMAPPED</span>}
-                          {!c.assigned_cost_type && c.resolved_cost_type && (
+                          {!c.assigned_cost_type && c.resolved_cost_type && !moved && (
                             <span className="faint" style={{ fontSize: 10 }}>(pattern)</span>
                           )}
+                          {moved && <span className="faint" style={{ fontSize: 10 }}>(still saved as this — moved above, unsaved)</span>}
                         </div>
                       </td>
                       <td>
@@ -285,8 +299,6 @@ export function Settings() {
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ project_code: '', project_name: '', client_name: '', currency_code: 'USD', contract_value: '' });
   const [revenuePattern, setRevenuePattern] = useState('^4');
-  const [rules, setRules] = useState<CostTypeRule[]>([]);
-  const [preview, setPreview] = useState<CostTypePreviewRow[]>([]);
 
   const [combos, setCombos] = useState<CostTypeCombination[]>([]);
   // Only what the user has actually changed, keyed "code doctype".
@@ -296,11 +308,7 @@ export function Settings() {
     `${c.cost_element_code} ${c.document_type}`;
 
   const loadCostTypes = async () => {
-    const [r, p, c] = await Promise.all([
-      api.costTypes.list(), api.costTypes.preview(), api.costTypes.combinations(),
-    ]);
-    if (r.ok) setRules(r.data);
-    if (p.ok) setPreview(p.data);
+    const c = await api.costTypes.combinations();
     if (c.ok) setCombos(c.data);
     setPending({});
   };
@@ -332,30 +340,6 @@ export function Settings() {
     });
     loadCostTypes();
   }, []);
-
-  const editRule = (i: number, patch: Partial<CostTypeRule>) =>
-    setRules((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
-
-  const moveRule = (i: number, by: number) => setRules((rs) => {
-    const j = i + by;
-    if (j < 0 || j >= rs.length) return rs;
-    const next = [...rs];
-    [next[i], next[j]] = [next[j], next[i]];
-    return next;
-  });
-
-  const addRule = () => setRules((rs) => [...rs, {
-    rule_id: null, priority: (rs.length + 1) * 10,
-    cost_element_glob: '', document_type_glob: '', cost_type: 'OTHER', note: null, is_active: 1,
-  }]);
-
-  const saveRules = () => guard(async () => {
-    // Order on screen is the order of evaluation; renumber so it survives a reload.
-    const ordered = rules.map((r, i) => ({ ...r, priority: (i + 1) * 10 }));
-    const res = await call(api.costTypes.save(ordered));
-    await loadCostTypes();
-    setNote(`${res.rules} rules saved. Every report reflects them now — no re-import needed.`);
-  });
 
   const saveClassification = () => guard(async () => {
     await call(api.settings.set('revenue_account_pattern', revenuePattern));
@@ -431,10 +415,10 @@ export function Settings() {
         <p className="hint">
           Every combination of cost element and document type that actually occurs in the cost
           already loaded — {combos.length} of them, grouped by their current cost type (UNMAPPED
-          first) with each GL listed by description, not code. Set one and it is answered
-          outright; leave it on <em>inherit</em> and the patterns below decide. An allocation is
-          written as an exact rule, so it always wins over a pattern, and it takes effect
-          immediately — no re-import.
+          first) with each GL listed by description, not code. Pick a new one and the row moves
+          here immediately, before you save, so you can see where it will land; <em>inherit</em>
+          {' '}leaves it to whatever the account's own pattern already resolves to. Saving takes
+          effect immediately — no re-import.
         </p>
 
         <GroupedAllocationTable combos={combos} pending={pending} setPending={setPending} comboKey={comboKey} />
@@ -462,112 +446,6 @@ export function Settings() {
             <GlDocTypeMatrix combos={combos} />
           </>
         )}
-      </div>
-
-      <div className="card">
-        <h3>Cost type mapping</h3>
-        <p className="hint">
-          Which postings count as labour, material, subcontract and so on. Rules are tried
-          top to bottom and the first match wins, so put the specific ones above the general
-          ones. Patterns are SQL <code className="mono">GLOB</code>, not regular expressions —
-          {' '}<code className="mono">301*</code> means "account starts with 301",
-          {' '}<code className="mono">*</code> on its own means any. Leave a column blank for
-          "any". Matching on document type as well as account lets the same account be split
-          by how it was posted, which an account range alone cannot express.
-        </p>
-        <p className="hint">
-          A cost type stated by the source file still wins over these rules. Rules are read
-          when a report runs, so a change here corrects history too — there is nothing to
-          re-import.
-        </p>
-
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th style={{ width: 34 }}>#</th>
-                <th>Cost element</th>
-                <th>Document type</th>
-                <th>Cost type</th>
-                <th>Note</th>
-                <th style={{ width: 56 }}>Active</th>
-                <th style={{ width: 90 }}>Order</th>
-                <th style={{ width: 34 }}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {rules.length === 0 && (
-                <tr><td colSpan={8}><div className="empty">No rules — every cost type will read as UNMAPPED.</div></td></tr>
-              )}
-              {rules.map((r, i) => (
-                <tr key={i}>
-                  <td className="faint mono">{i + 1}</td>
-                  <td>
-                    <input className="mono" style={{ width: 110 }} placeholder="any"
-                           value={r.cost_element_glob ?? ''}
-                           onChange={(e) => editRule(i, { cost_element_glob: e.target.value })} />
-                  </td>
-                  <td>
-                    <input className="mono" style={{ width: 90 }} placeholder="any"
-                           value={r.document_type_glob ?? ''}
-                           onChange={(e) => editRule(i, { document_type_glob: e.target.value })} />
-                  </td>
-                  <td>
-                    <CostTypePicker value={r.cost_type} required
-                      onChange={(v) => editRule(i, { cost_type: (v || 'OTHER') as CostTypeRule['cost_type'] })} />
-                  </td>
-                  <td>
-                    <input style={{ width: '100%', minWidth: 160 }} placeholder="why this rule exists"
-                           value={r.note ?? ''}
-                           onChange={(e) => editRule(i, { note: e.target.value })} />
-                  </td>
-                  <td style={{ textAlign: 'center' }}>
-                    <input type="checkbox" checked={r.is_active !== 0}
-                           onChange={(e) => editRule(i, { is_active: e.target.checked ? 1 : 0 })} />
-                  </td>
-                  <td>
-                    <button className="btn" style={{ padding: '2px 7px' }} disabled={i === 0}
-                            onClick={() => moveRule(i, -1)} title="Move up">↑</button>
-                    {' '}
-                    <button className="btn" style={{ padding: '2px 7px' }} disabled={i === rules.length - 1}
-                            onClick={() => moveRule(i, 1)} title="Move down">↓</button>
-                  </td>
-                  <td>
-                    <button className="btn" style={{ padding: '2px 7px' }} title="Delete rule"
-                            onClick={() => setRules((rs) => rs.filter((_, j) => j !== i))}>✕</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="row" style={{ marginTop: 10 }}>
-          <button className="btn" onClick={addRule} disabled={busy}>Add rule</button>
-          <button className="btn primary" onClick={saveRules} disabled={busy}>Save mapping</button>
-        </div>
-
-        <h4 style={{ marginTop: 18, marginBottom: 6 }}>What the rules classify today</h4>
-        <p className="hint">
-          Actual cost already loaded, split by the rules above. A large
-          {' '}<code className="mono">UNMAPPED</code> share means the rules do not fit this
-          chart of accounts — the breakdown charts will collapse into one bar rather than fail.
-        </p>
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>Cost type</th><th style={{ textAlign: 'right' }}>Postings</th><th style={{ textAlign: 'right' }}>Amount</th></tr></thead>
-            <tbody>
-              {preview.length === 0 && <tr><td colSpan={3}><div className="empty">No actual cost loaded yet.</div></td></tr>}
-              {preview.map((p) => (
-                <tr key={p.cost_type}>
-                  <td><CostTypeBadge type={p.cost_type} /></td>
-                  <td className="mono" style={{ textAlign: 'right' }}>{p.postings.toLocaleString()}</td>
-                  <td className="mono" style={{ textAlign: 'right' }}>{money(p.amount)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
       </div>
 
       <div className="card">

@@ -224,31 +224,6 @@ export const COST_TYPE_VALUES = ['LABOR', 'MATERIAL', 'SUBCONTRACT', 'EQUIPMENT'
 export type CostType = typeof COST_TYPE_VALUES[number];
 
 /**
- * One line of the cost type mapping. A NULL pattern means "any"; both NULL is
- * rejected, because a rule matching everything would mask every rule below it.
- * Patterns are SQL GLOB (`301*`), not regular expressions, so the match can
- * happen inside the view.
- */
-export interface CostTypeRule {
-  rule_id: number | null;
-  priority: number;
-  cost_element_glob: string | null;
-  document_type_glob: string | null;
-  cost_type: CostType;
-  note: string | null;
-  is_active: number;
-}
-
-export type CostTypeRuleInput = Omit<CostTypeRule, 'rule_id' | 'priority'>
-  & { rule_id?: number | null; priority?: number };
-
-export interface CostTypePreviewRow {
-  cost_type: string;
-  postings: number;
-  amount: number;
-}
-
-/**
  * One (cost element, document type) pair that actually occurs in posted cost,
  * with what the rules currently make of it. This is the allocation screen's
  * unit of work: the combinations are derived from the data rather than typed in,

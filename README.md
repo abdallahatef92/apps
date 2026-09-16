@@ -164,12 +164,14 @@ cost element, at import — and stored so stickily that nothing could later corr
 Those ranges are one particular operating chart, and the account alone cannot always
 answer: the same cost element carries different cost depending on the document it was
 posted with. So the mapping is data. `cost_type_rule` holds an ordered list matching on
-cost element and/or document type (SQL `GLOB`, first match wins), edited in
-Settings › Cost type mapping, and `v_posting` resolves it per posting row. A cost type
-stated by the source file still outranks a rule. Because the rules are read when a report
-runs, correcting one fixes history as well as the next import — there is nothing to
-reload. The seeded rules reproduce the former hard-coded ranges exactly, so upgrading an
-existing warehouse does not move a number.
+cost element and/or document type (SQL `GLOB`, first match wins), seeded once with the
+former hard-coded ranges so upgrading an existing warehouse never moves a number, and
+`v_posting` resolves it per posting row. A cost type stated by the source file still
+outranks a rule. There is no screen for editing a pattern directly — Settings › Allocate
+cost types writes an exact-pair rule at priority 1 instead, which always wins over a
+pattern and is what a cost controller actually needs: an answer for this GL and this
+document type, not a regular expression. Because rules are read when a report runs,
+an allocation fixes history as well as the next import — there is nothing to reload.
 
 **A subcontractor report is a sub-ledger, not extra cost.** It is the service-line
 detail behind purchase orders already posted in CJI3, so adding it to actuals
