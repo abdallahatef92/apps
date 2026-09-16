@@ -252,15 +252,32 @@ function MonthlyPivot({ rows, types }: { rows: MonthRow[]; types: CostTypeDef[] 
  * is expanded, so opening the page never pulls every posting up front. Closed
  * off the same way as the monthly pivot, with a totals row at the bottom.
  */
+/** A GL's transactions, grouped by the period they posted in — oldest first. */
+function groupByPeriod(rows: Record<string, unknown>[]): { period: string; rows: Record<string, unknown>[]; postings: number; amount: number }[] {
+  const map = new Map<string, Record<string, unknown>[]>();
+  for (const r of rows) {
+    const p = String(r.period_key ?? '');
+    map.set(p, [...(map.get(p) ?? []), r]);
+  }
+  return [...map.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([period, prows]) => ({
+      period, rows: prows, postings: prows.length,
+      amount: prows.reduce((s, r) => s + Number(r.amount ?? 0), 0),
+    }));
+}
+
 function TransactionTree({ rows, types }: { rows: MonthRow[]; types: CostTypeDef[] }) {
   const { types: tree, grandTotal, grandPostings } = useMemo(() => buildTree(rows), [rows]);
   const [collapsedType, setCollapsedType] = useState<Record<string, boolean>>({});
   const [openGl, setOpenGl] = useState<Record<string, boolean>>({});
+  const [collapsedPeriod, setCollapsedPeriod] = useState<Record<string, boolean>>({});
   const [txns, setTxns] = useState<Record<string, QueryResult>>({});
   const [loadingGl, setLoadingGl] = useState<string | null>(null);
   const { projectKey } = useApp();
 
   const toggleType = (t: string) => setCollapsedType((c) => ({ ...c, [t]: !c[t] }));
+  const togglePeriod = (key: string) => setCollapsedPeriod((c) => ({ ...c, [key]: !c[key] }));
   const toggleGl = async (code: string) => {
     const willOpen = !openGl[code];
     setOpenGl((s) => ({ ...s, [code]: willOpen }));
@@ -323,22 +340,42 @@ function TransactionTree({ rows, types }: { rows: MonthRow[]; types: CostTypeDef
                       {glOpen && loadingGl === gl.code && (
                         <tr><td></td><td colSpan={7}><div className="empty">Loading…</div></td></tr>
                       )}
-                      {glOpen && txns[gl.code]?.rows.map((r: any, i: number) => (
-                        <tr key={i}>
-                          <td></td>
-                          <td style={{ paddingLeft: 40 }} className="mono faint" title={r.description ?? ''}>
-                            {r.document_no}{r.description ? ` — ${r.description}` : ''}
-                          </td>
-                          <td className="mono faint">{r.document_type || '(none)'}</td>
-                          <td className="mono faint">{r.period_key}</td>
-                          <td className="faint">{r.vendor_name ?? '—'}</td>
-                          <td></td>
-                          <td className="mono" style={{ textAlign: 'right' }}>
-                            {Number(r.amount).toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                          </td>
-                          <td></td>
-                        </tr>
-                      ))}
+                      {glOpen && txns[gl.code] && groupByPeriod(txns[gl.code].rows).map((pg) => {
+                        const periodKey = `${gl.code}::${pg.period}`;
+                        const periodOpen = !collapsedPeriod[periodKey];
+                        return (
+                          <Fragment key={periodKey}>
+                            <tr style={{ cursor: 'pointer', background: 'var(--surface-2)' }} onClick={() => togglePeriod(periodKey)}>
+                              <td className="faint" style={{ textAlign: 'center' }}>{periodOpen ? '▾' : '▸'}</td>
+                              <td colSpan={3} style={{ paddingLeft: 40 }} className="mono faint">
+                                {periodLabel(pg.period) || pg.period || '(no period)'}
+                              </td>
+                              <td></td>
+                              <td className="mono faint" style={{ textAlign: 'right' }}>{pg.postings.toLocaleString()}</td>
+                              <td className="mono faint" style={{ textAlign: 'right' }}>
+                                {pg.amount.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                              </td>
+                              <td></td>
+                            </tr>
+                            {periodOpen && pg.rows.map((r: any, i: number) => (
+                              <tr key={i}>
+                                <td></td>
+                                <td style={{ paddingLeft: 60 }} className="mono faint" title={r.description ?? ''}>
+                                  {r.document_no}{r.description ? ` — ${r.description}` : ''}
+                                </td>
+                                <td className="mono faint">{r.document_type || '(none)'}</td>
+                                <td className="mono faint">{r.period_key}</td>
+                                <td className="faint">{r.vendor_name ?? '—'}</td>
+                                <td></td>
+                                <td className="mono" style={{ textAlign: 'right' }}>
+                                  {Number(r.amount).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                                </td>
+                                <td></td>
+                              </tr>
+                            ))}
+                          </Fragment>
+                        );
+                      })}
                     </Fragment>
                   );
                 })}
