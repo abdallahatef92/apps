@@ -682,6 +682,53 @@ GROUP BY t.gl_label, COALESCE(NULLIF(a.document_type,''),'(none)')
 ORDER BY t.gl_label`,
   },
   {
+    code: 'COST_BY_TYPE_GL_MONTH',
+    name: 'Actuals by cost type, GL and month',
+    module: 'ACTUAL',
+    category: 'Detail',
+    description: 'Actual cost per cost type, GL account and month — the source data behind the '
+      + 'Reports page pivot, which turns period_key into columns and groups by cost type in the UI.',
+    params: [P_PROJECT],
+    viz: { kind: 'table' },
+    sql: `
+SELECT
+  COALESCE(cost_type,'UNMAPPED') AS cost_type,
+  cost_element_code,
+  cost_element_name,
+  period_key,
+  COUNT(*)      AS postings,
+  SUM(amount)   AS amount
+FROM v_actual
+WHERE project_key = :project_key
+GROUP BY COALESCE(cost_type,'UNMAPPED'), cost_element_code, cost_element_name, period_key
+ORDER BY cost_type, cost_element_code, period_key`,
+  },
+  {
+    code: 'COST_BY_TYPE_GL_TXN',
+    name: 'Actual postings for a GL',
+    module: 'ACTUAL',
+    category: 'Detail',
+    description: 'Every individual posting behind one GL account — the transaction-level drill-down '
+      + 'under the Reports page pivot. Leave the GL blank to see every posting.',
+    params: [P_PROJECT, { name: 'cost_element_code', type: 'text', label: 'GL account' }],
+    viz: { kind: 'table' },
+    sql: `
+SELECT
+  document_no, document_type, period_key, data_date,
+  vendor_name, description, quantity, uom, amount
+FROM v_actual
+WHERE project_key = :project_key
+  -- cost_element_code is text even when every digit looks numeric (e.g. "30301100"),
+  -- and the generic query runner binds a numeric-looking parameter as a number, so
+  -- a plain text comparison silently fails for those GLs. The second branch recovers
+  -- them (round-tripping through INTEGER strips the REAL's trailing ".0"); it is a
+  -- no-op for a genuinely alphanumeric code, which the first branch already matches.
+  AND (:cost_element_code IS NULL
+       OR cost_element_code = :cost_element_code
+       OR cost_element_code = CAST(CAST(:cost_element_code AS INTEGER) AS TEXT))
+ORDER BY period_key, document_no`,
+  },
+  {
     code: 'KPI_PROJECT',
     name: 'Project headline figures',
     module: 'CROSS',

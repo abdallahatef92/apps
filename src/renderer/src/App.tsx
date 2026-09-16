@@ -3,6 +3,7 @@ import { api, call } from './lib/api';
 import { Dashboard } from './pages/Dashboard';
 import { Upload } from './pages/Upload';
 import { Analysis } from './pages/Analysis';
+import { Reports } from './pages/Reports';
 import { QueryLibrary } from './pages/QueryLibrary';
 import { DataRegister } from './pages/DataRegister';
 import { Settings } from './pages/Settings';
@@ -32,13 +33,14 @@ export const useApp = (): AppState => {
   return v;
 };
 
-type PageId = 'dashboard' | 'upload' | 'analysis' | 'queries' | 'register' | 'settings';
+type PageId = 'dashboard' | 'upload' | 'analysis' | 'reports' | 'queries' | 'register' | 'settings';
 
 const PAGES: { id: PageId; label: string; glyph: string; group: string; subtitle: string }[] = [
   { id: 'dashboard', label: 'Dashboard', glyph: '◈', group: 'Overview', subtitle: 'Portfolio position and data freshness' },
   { id: 'upload', label: 'Upload data', glyph: '↥', group: 'Data', subtitle: 'Bring a report in, map it, review it, post it' },
   { id: 'register', label: 'Data register', glyph: '▤', group: 'Data', subtitle: 'Every import, its data date and audit trail' },
   { id: 'analysis', label: 'Analysis', glyph: '◨', group: 'Reporting', subtitle: 'Run a saved analysis and export it' },
+  { id: 'reports', label: 'Reports', glyph: '▦', group: 'Reporting', subtitle: 'Cost type by GL by month, and the transactions behind it' },
   { id: 'queries', label: 'Query library', glyph: '⌗', group: 'Reporting', subtitle: 'The SQL behind every report, stored in the database' },
   { id: 'settings', label: 'Settings', glyph: '⚙', group: 'Admin', subtitle: 'Projects, database and backups' },
 ];
@@ -139,6 +141,7 @@ export default function App() {
             {page === 'upload' && <Upload onDone={() => { state.touch(); refresh(); }} />}
             {page === 'register' && <DataRegister />}
             {page === 'analysis' && <Analysis />}
+            {page === 'reports' && <Reports />}
             {page === 'queries' && <QueryLibrary />}
             {page === 'settings' && <Settings />}
           </div>
