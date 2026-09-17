@@ -682,25 +682,69 @@ GROUP BY t.gl_label, COALESCE(NULLIF(a.document_type,''),'(none)')
 ORDER BY t.gl_label`,
   },
   {
+    // Detail Substitution, the Reports-page cut: the same merge
+    // UNIFIED_COST_REGISTER performs (a CJI3 posting is left out once a PO or
+    // settled order has its own detail loaded, so nothing is counted twice),
+    // grouped down to cost type / GL / month instead of listed line by line.
+    // The po_with_detail / order_with_detail CTEs are duplicated from
+    // UNIFIED_COST_REGISTER rather than shared — system queries are
+    // independent stored SQL, the same tradeoff UNIFIED_COST_SUMMARY already
+    // makes.
     code: 'COST_BY_TYPE_GL_MONTH',
     name: 'Actuals by cost type, GL and month',
     module: 'ACTUAL',
     category: 'Detail',
-    description: 'Actual cost per cost type, GL account and month — the source data behind the '
-      + 'Reports page pivot, which turns period_key into columns and groups by cost type in the UI.',
+    description: 'Actual cost per cost type, GL account and month, with PO and settled-order detail '
+      + 'substituted in where it has been loaded — the source data behind the Reports page pivot, '
+      + 'which turns period_key into columns and groups by cost type in the UI.',
     params: [P_PROJECT],
     viz: { kind: 'table' },
     sql: `
+WITH po_with_detail AS (
+  SELECT DISTINCT po_no FROM v_service_line
+  WHERE project_key = :project_key AND po_no IS NOT NULL AND po_no <> ''
+),
+order_with_detail AS (
+  SELECT DISTINCT order_no FROM v_order_line
+  WHERE project_key = :project_key AND category = 'WBS'
+    AND order_no IS NOT NULL AND order_no <> ''
+),
+direct_cost AS (
+  SELECT
+    COALESCE(a.cost_type,'UNMAPPED') AS cost_type,
+    a.cost_element_code, a.cost_element_name, a.period_key, a.amount
+  FROM v_actual a
+  WHERE a.project_key = :project_key
+    AND (a.po_no IS NULL OR a.po_no = '' OR a.po_no NOT IN (SELECT po_no FROM po_with_detail))
+    AND (a.partner_object_type IS NULL OR a.partner_object_type <> 'Order'
+         OR a.partner_object IS NULL OR a.partner_object = ''
+         OR a.partner_object NOT IN (SELECT order_no FROM order_with_detail))
+),
+detail_lines AS (
+  SELECT
+    COALESCE(s.cost_type,'UNMAPPED') AS cost_type,
+    s.cost_element_code, s.cost_element_name, s.period_key, s.amount_net AS amount
+  FROM v_service_line s
+  WHERE s.project_key = :project_key
+),
+order_detail AS (
+  SELECT
+    COALESCE(s.cost_type,'UNMAPPED') AS cost_type,
+    s.cost_element_code, s.cost_element_name, s.period_key, s.amount
+  FROM v_order_line s
+  WHERE s.project_key = :project_key AND s.category = 'WBS'
+),
+merged AS (
+  SELECT * FROM direct_cost
+  UNION ALL SELECT * FROM detail_lines
+  UNION ALL SELECT * FROM order_detail
+)
 SELECT
-  COALESCE(cost_type,'UNMAPPED') AS cost_type,
-  cost_element_code,
-  cost_element_name,
-  period_key,
-  COUNT(*)      AS postings,
-  SUM(amount)   AS amount
-FROM v_actual
-WHERE project_key = :project_key
-GROUP BY COALESCE(cost_type,'UNMAPPED'), cost_element_code, cost_element_name, period_key
+  cost_type, cost_element_code, cost_element_name, period_key,
+  COUNT(*)    AS postings,
+  SUM(amount) AS amount
+FROM merged
+GROUP BY cost_type, cost_element_code, cost_element_name, period_key
 ORDER BY cost_type, cost_element_code, period_key`,
   },
   {
@@ -708,26 +752,111 @@ ORDER BY cost_type, cost_element_code, period_key`,
     name: 'Actual postings for a GL',
     module: 'ACTUAL',
     category: 'Detail',
-    description: 'Every individual posting behind one GL account — the transaction-level drill-down '
-      + 'under the Reports page pivot. Leave the GL blank to see every posting.',
+    description: 'Every individual posting behind one GL account, merging direct CJI3 postings with '
+      + 'PO and settled-order detail the same way COST_BY_TYPE_GL_MONTH does — the transaction-level '
+      + 'drill-down under the Reports page pivot. Leave the GL blank to see every posting.',
     params: [P_PROJECT, { name: 'cost_element_code', type: 'text', label: 'GL account' }],
     viz: { kind: 'table' },
     sql: `
-SELECT
-  cost_type, cost_element_code, cost_element_name,
-  document_no, document_type, period_key, data_date,
-  vendor_name, description, quantity, uom, amount
-FROM v_actual
-WHERE project_key = :project_key
+WITH po_with_detail AS (
+  SELECT DISTINCT po_no FROM v_service_line
+  WHERE project_key = :project_key AND po_no IS NOT NULL AND po_no <> ''
+),
+order_with_detail AS (
+  SELECT DISTINCT order_no FROM v_order_line
+  WHERE project_key = :project_key AND category = 'WBS'
+    AND order_no IS NOT NULL AND order_no <> ''
+),
+direct_cost AS (
+  SELECT
+    'ACTUAL' AS source, COALESCE(a.cost_type,'UNMAPPED') AS cost_type,
+    a.cost_element_code, a.cost_element_name,
+    a.document_no AS document_no, a.document_type, a.period_key, a.data_date,
+    a.vendor_name, a.description, a.quantity, a.uom, a.amount
+  FROM v_actual a
+  WHERE a.project_key = :project_key
+    AND (a.po_no IS NULL OR a.po_no = '' OR a.po_no NOT IN (SELECT po_no FROM po_with_detail))
+    AND (a.partner_object_type IS NULL OR a.partner_object_type <> 'Order'
+         OR a.partner_object IS NULL OR a.partner_object = ''
+         OR a.partner_object NOT IN (SELECT order_no FROM order_with_detail))
+),
+detail_lines AS (
+  SELECT
+    'SERVICE' AS source, COALESCE(s.cost_type,'UNMAPPED') AS cost_type,
+    s.cost_element_code, s.cost_element_name,
+    s.invoice_no AS document_no, NULL AS document_type, s.period_key, s.data_date,
+    s.vendor_name, s.service_text AS description, s.quantity_current AS quantity, s.uom, s.amount_net AS amount
+  FROM v_service_line s
+  WHERE s.project_key = :project_key
+),
+order_detail AS (
+  SELECT
+    'ORDER' AS source, COALESCE(s.cost_type,'UNMAPPED') AS cost_type,
+    s.cost_element_code, s.cost_element_name,
+    s.order_no AS document_no, NULL AS document_type, s.period_key, s.data_date,
+    s.vendor_name, s.order_description AS description, s.quantity, s.uom, s.amount
+  FROM v_order_line s
+  WHERE s.project_key = :project_key AND s.category = 'WBS'
+),
+merged AS (
+  SELECT * FROM direct_cost
+  UNION ALL SELECT * FROM detail_lines
+  UNION ALL SELECT * FROM order_detail
+)
+SELECT *
+FROM merged
+WHERE
   -- cost_element_code is text even when every digit looks numeric (e.g. "30301100"),
   -- and the generic query runner binds a numeric-looking parameter as a number, so
   -- a plain text comparison silently fails for those GLs. The second branch recovers
   -- them (round-tripping through INTEGER strips the REAL's trailing ".0"); it is a
   -- no-op for a genuinely alphanumeric code, which the first branch already matches.
-  AND (:cost_element_code IS NULL
-       OR cost_element_code = :cost_element_code
-       OR cost_element_code = CAST(CAST(:cost_element_code AS INTEGER) AS TEXT))
+  (:cost_element_code IS NULL
+   OR cost_element_code = :cost_element_code
+   OR cost_element_code = CAST(CAST(:cost_element_code AS INTEGER) AS TEXT))
 ORDER BY period_key, document_no`,
+  },
+  {
+    code: 'BUDGET_BY_TYPE_GL_MONTH',
+    name: 'Budget by cost type, GL and month',
+    module: 'BUDGET',
+    category: 'Detail',
+    description: 'Current approved budget per cost type, GL account and month — the same shape as '
+      + 'COST_BY_TYPE_GL_MONTH, so the Reports page pivot can show Budget instead of Actual with no '
+      + 'change to how it renders.',
+    params: [P_PROJECT],
+    viz: { kind: 'table' },
+    sql: `
+SELECT
+  COALESCE(cost_type,'UNMAPPED') AS cost_type,
+  cost_element_code, cost_element_name, period_key,
+  COUNT(*)             AS postings,
+  SUM(budget_amount)   AS amount
+FROM v_budget
+WHERE project_key = :project_key AND is_current = 1
+GROUP BY COALESCE(cost_type,'UNMAPPED'), cost_element_code, cost_element_name, period_key
+ORDER BY cost_type, cost_element_code, period_key`,
+  },
+  {
+    code: 'FORECAST_BY_TYPE_GL_MONTH',
+    name: 'Forecast by cost type, GL and month',
+    module: 'FORECAST',
+    category: 'Detail',
+    description: 'Current ETC/EAC forecast per cost type, GL account and month — the same shape as '
+      + 'COST_BY_TYPE_GL_MONTH, so the Reports page pivot can show Forecast instead of Actual with no '
+      + 'change to how it renders.',
+    params: [P_PROJECT],
+    viz: { kind: 'table' },
+    sql: `
+SELECT
+  COALESCE(cost_type,'UNMAPPED') AS cost_type,
+  cost_element_code, cost_element_name, period_key,
+  COUNT(*)              AS postings,
+  SUM(forecast_amount)  AS amount
+FROM v_forecast
+WHERE project_key = :project_key AND is_current = 1
+GROUP BY COALESCE(cost_type,'UNMAPPED'), cost_element_code, cost_element_name, period_key
+ORDER BY cost_type, cost_element_code, period_key`,
   },
   {
     code: 'KPI_PROJECT',

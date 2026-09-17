@@ -5,9 +5,18 @@ import { money, pct } from '../lib/format';
 import type { CostTypeDef, QueryResult } from '@shared/types';
 
 type Tab = 'month' | 'txn';
+type Source = 'ACTUAL' | 'BUDGET' | 'FORECAST';
+
+const SOURCE_QUERY: Record<Source, string> = {
+  ACTUAL: 'COST_BY_TYPE_GL_MONTH', BUDGET: 'BUDGET_BY_TYPE_GL_MONTH', FORECAST: 'FORECAST_BY_TYPE_GL_MONTH',
+};
+const SOURCE_LABEL: Record<Source, string> = { ACTUAL: 'Actual', BUDGET: 'Budget', FORECAST: 'Forecast' };
 
 const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** A budget that is not time-phased carries no period_key at all — v_budget allows it. */
+const NO_PERIOD = '(no period)';
 const periodLabel = (key: string) => {
+  if (!key || key === NO_PERIOD) return NO_PERIOD;
   const [y, m] = key.split('-');
   return `${MONTH_ABBR[Number(m) - 1] ?? m} ${y.slice(2)}`;
 };
@@ -32,9 +41,10 @@ interface TypeNode {
  * aggregation: every number in it is still a straight sum from the query.
  */
 function buildTree(rows: MonthRow[]): { periods: string[]; types: TypeNode[]; grandTotal: number; grandPostings: number } {
-  const periods = [...new Set(rows.map((r) => r.period_key))].sort();
+  const periods = [...new Set(rows.map((r) => r.period_key || NO_PERIOD))].sort();
   const byType = new Map<string, Map<string, GlNode>>();
   for (const r of rows) {
+    const pk = r.period_key || NO_PERIOD;
     let gls = byType.get(r.cost_type);
     if (!gls) { gls = new Map(); byType.set(r.cost_type, gls); }
     let gl = gls.get(r.cost_element_code);
@@ -44,7 +54,7 @@ function buildTree(rows: MonthRow[]): { periods: string[]; types: TypeNode[]; gr
     }
     gl.postings += r.postings;
     gl.amount += r.amount;
-    gl.byPeriod.set(r.period_key, (gl.byPeriod.get(r.period_key) ?? 0) + r.amount);
+    gl.byPeriod.set(pk, (gl.byPeriod.get(pk) ?? 0) + r.amount);
   }
   let grandTotal = 0, grandPostings = 0;
   const types: TypeNode[] = [...byType.entries()].map(([type, gls]) => {
@@ -454,6 +464,9 @@ function TransactionTree({ rows, types, filters }: { rows: MonthRow[]; types: Co
                               <tr key={i}>
                                 <td></td>
                                 <td style={{ paddingLeft: 60 }} className="mono faint" title={r.description ?? ''}>
+                                  {r.source && r.source !== 'ACTUAL' && (
+                                    <span className="badge mute plain" style={{ fontSize: 9, marginRight: 6 }}>{r.source}</span>
+                                  )}
                                   {r.document_no}{r.description ? ` — ${r.description}` : ''}
                                 </td>
                                 <td className="mono faint">{r.document_type || '(none)'}</td>
@@ -492,6 +505,7 @@ function TransactionTree({ rows, types, filters }: { rows: MonthRow[]; types: Co
 
 export function Reports() {
   const { projectKey, project, dataVersion } = useApp();
+  const [source, setSource] = useState<Source>('ACTUAL');
   const [tab, setTab] = useState<Tab>('month');
   const [types, setTypes] = useState<CostTypeDef[]>([]);
   const [monthly, setMonthly] = useState<QueryResult | null>(null);
@@ -500,6 +514,9 @@ export function Reports() {
   const [savedTo, setSavedTo] = useState<string | null>(null);
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
 
+  /** Budget and forecast have no posting-level grain, so Transactions is actual-only. */
+  const setSourceAndTab = (s: Source) => { setSource(s); if (s !== 'ACTUAL') setTab('month'); };
+
   useEffect(() => {
     api.costTypes.types().then((r) => { if (r.ok) setTypes(r.data); });
   }, []);
@@ -507,17 +524,17 @@ export function Reports() {
   useEffect(() => {
     if (!projectKey) { setMonthly(null); return; }
     setBusy(true); setError(null);
-    call(api.queries.run('COST_BY_TYPE_GL_MONTH', { project_key: projectKey }))
+    call(api.queries.run(SOURCE_QUERY[source], { project_key: projectKey }))
       .then(setMonthly)
       .catch((e) => setError((e as Error).message))
       .finally(() => setBusy(false));
-  }, [projectKey, dataVersion]);
+  }, [projectKey, dataVersion, source]);
 
   const rows = (monthly?.rows ?? []) as unknown as MonthRow[];
-  const periods = useMemo(() => [...new Set(rows.map((r) => r.period_key))].sort(), [rows]);
+  const periods = useMemo(() => [...new Set(rows.map((r) => r.period_key).filter(Boolean))].sort(), [rows]);
   const filteredRows = useMemo(() => filterRows(monthly?.rows ?? [], filters) as unknown as MonthRow[], [monthly, filters]);
 
-  /** Exports whichever tab is actually on screen, filtered the same way it's shown. */
+  /** Exports whichever tab and source are actually on screen, filtered the same way they're shown. */
   const exportXlsx = async () => {
     setBusy(true); setError(null); setSavedTo(null);
     try {
@@ -525,9 +542,9 @@ export function Reports() {
         if (!monthly) return;
         const filtered = filterRows(monthly.rows, filters);
         setSavedTo(await call(api.exportResult({ ...monthly, rows: filtered, rowCount: filtered.length }, {
-          title: 'Actuals by cost type, GL and month',
+          title: `${SOURCE_LABEL[source]} by cost type, GL and month`,
           subtitle: 'One row per cost type / GL / month — pivot and group in Excel as needed.',
-          context: { Project: project?.project_code },
+          context: { Project: project?.project_code, Source: SOURCE_LABEL[source] },
         })));
       } else {
         if (!projectKey) return;
@@ -535,7 +552,8 @@ export function Reports() {
         const filtered = filterRows(all.rows, filters);
         setSavedTo(await call(api.exportResult({ ...all, rows: filtered, rowCount: filtered.length }, {
           title: 'Actual postings by cost type and GL',
-          subtitle: 'Every individual posting behind Reports → Transactions, one row each.',
+          subtitle: 'Every individual posting behind Reports → Transactions, one row each — PO and '
+            + 'settled-order detail substituted in where loaded.',
           context: { Project: project?.project_code },
         })));
       }
@@ -553,18 +571,32 @@ export function Reports() {
       )}
 
       <div className="card">
-        <div className="row" style={{ justifyContent: 'space-between', marginBottom: 14 }}>
-          <div className="segmented">
-            <button className={tab === 'month' ? 'on' : ''} onClick={() => setTab('month')}>By month</button>
-            <button className={tab === 'txn' ? 'on' : ''} onClick={() => setTab('txn')}>Transactions</button>
+        <div className="row" style={{ justifyContent: 'space-between', marginBottom: 14, flexWrap: 'wrap', gap: 10 }}>
+          <div className="row" style={{ gap: 10 }}>
+            <div className="segmented">
+              {(['ACTUAL', 'BUDGET', 'FORECAST'] as Source[]).map((s) => (
+                <button key={s} className={source === s ? 'on' : ''} onClick={() => setSourceAndTab(s)}>{SOURCE_LABEL[s]}</button>
+              ))}
+            </div>
+            <div className="segmented">
+              <button className={tab === 'month' ? 'on' : ''} onClick={() => setTab('month')}>By month</button>
+              <button className={tab === 'txn' ? 'on' : ''} onClick={() => setTab('txn')} disabled={source !== 'ACTUAL'}
+                      title={source !== 'ACTUAL' ? 'Only actual cost has individual postings' : undefined}>
+                Transactions
+              </button>
+            </div>
           </div>
           <button className="btn" onClick={exportXlsx} disabled={busy || !filteredRows.length}>⤓ Excel</button>
         </div>
 
         <p className="hint">
           {tab === 'month'
-            ? 'Actual cost by cost type and GL account, month by month. Share is each row\'s slice of total actual cost — click a column header to sort by it.'
-            : 'The same grouping down to individual postings — expand a GL to load its transactions.'}
+            ? `${SOURCE_LABEL[source]} cost by cost type and GL account, month by month`
+              + (source === 'ACTUAL' ? ' — PO and settled-order detail is substituted in where it has been loaded, so nothing is counted twice.'
+                : '.')
+              + ' Share is each row\'s slice of the total — click a column header to sort by it.'
+            : 'The same grouping down to individual postings, merging direct actuals with PO and order '
+              + 'detail — expand a GL to load its transactions.'}
         </p>
 
         <FilterBar filters={filters} onChange={setFilters} types={types} periods={periods}
