@@ -4,6 +4,8 @@ import { Dashboard } from './pages/Dashboard';
 import { Upload } from './pages/Upload';
 import { Analysis } from './pages/Analysis';
 import { Reports } from './pages/Reports';
+import { SubcontractorAnalysis } from './pages/SubcontractorAnalysis';
+import { MaterialAnalysis } from './pages/MaterialAnalysis';
 import { QueryLibrary } from './pages/QueryLibrary';
 import { DataRegister } from './pages/DataRegister';
 import { Settings } from './pages/Settings';
@@ -33,7 +35,7 @@ export const useApp = (): AppState => {
   return v;
 };
 
-type PageId = 'dashboard' | 'upload' | 'analysis' | 'reports' | 'queries' | 'register' | 'settings';
+type PageId = 'dashboard' | 'upload' | 'analysis' | 'reports' | 'subcontractor' | 'material' | 'queries' | 'register' | 'settings';
 
 const PAGES: { id: PageId; label: string; glyph: string; group: string; subtitle: string }[] = [
   { id: 'dashboard', label: 'Dashboard', glyph: '◈', group: 'Overview', subtitle: 'Portfolio position and data freshness' },
@@ -41,6 +43,8 @@ const PAGES: { id: PageId; label: string; glyph: string; group: string; subtitle
   { id: 'register', label: 'Data register', glyph: '▤', group: 'Data', subtitle: 'Every import, its data date and audit trail' },
   { id: 'analysis', label: 'Analysis', glyph: '◨', group: 'Reporting', subtitle: 'Run a saved analysis and export it' },
   { id: 'reports', label: 'Reports', glyph: '▦', group: 'Reporting', subtitle: 'Cost type by GL by month, and the transactions behind it' },
+  { id: 'subcontractor', label: 'Subcontractor Analysis', glyph: '▨', group: 'Reporting', subtitle: 'Certified work, supplier concentration and PO reconciliation' },
+  { id: 'material', label: 'Material Analysis', glyph: '▩', group: 'Reporting', subtitle: 'Material spend by GL, WBS and vendor, with rate outliers' },
   { id: 'queries', label: 'Query library', glyph: '⌗', group: 'Reporting', subtitle: 'The SQL behind every report, stored in the database' },
   { id: 'settings', label: 'Settings', glyph: '⚙', group: 'Admin', subtitle: 'Projects, database and backups' },
 ];
@@ -142,6 +146,8 @@ export default function App() {
             {page === 'register' && <DataRegister />}
             {page === 'analysis' && <Analysis />}
             {page === 'reports' && <Reports />}
+            {page === 'subcontractor' && <SubcontractorAnalysis />}
+            {page === 'material' && <MaterialAnalysis />}
             {page === 'queries' && <QueryLibrary />}
             {page === 'settings' && <Settings />}
           </div>

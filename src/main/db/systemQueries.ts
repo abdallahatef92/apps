@@ -605,6 +605,81 @@ FROM a
 ORDER BY amount DESC`,
   },
   {
+    code: 'SC_MONTHLY_TREND',
+    name: 'Certified vs actual, by month',
+    module: 'SERVICE',
+    category: 'Trend',
+    description: 'Certified subcontract work against the matching actual cost (postings carrying a '
+      + 'PO), month by month, cumulative — a gap that widens over time is a certificate not yet '
+      + 'loaded, or actual cost posted ahead of certification.',
+    params: [P_PROJECT],
+    viz: { kind: 'line', x: 'period_key',
+      series: [{ column: 'actual_cum', label: 'Actual (PO postings, cum.)' },
+               { column: 'certified_cum', label: 'Certified (cum.)' }],
+      headline: 'KPI_SUBCONTRACT' },
+    sql: `
+WITH act AS (
+  SELECT period_key, SUM(amount) AS actual_amount
+  FROM v_actual WHERE project_key = :project_key AND po_no IS NOT NULL AND po_no <> ''
+  GROUP BY period_key
+),
+sl AS (
+  SELECT period_key, SUM(amount_net) AS certified_amount
+  FROM v_service_line WHERE project_key = :project_key
+  GROUP BY period_key
+),
+periods AS (
+  SELECT period_key FROM act UNION SELECT period_key FROM sl
+)
+SELECT
+  p.period_key,
+  COALESCE(a.actual_amount,0)     AS actual_amount,
+  COALESCE(s.certified_amount,0)  AS certified_amount,
+  SUM(COALESCE(a.actual_amount,0))    OVER (ORDER BY p.period_key) AS actual_cum,
+  SUM(COALESCE(s.certified_amount,0)) OVER (ORDER BY p.period_key) AS certified_cum
+FROM periods p
+LEFT JOIN act a ON a.period_key = p.period_key
+LEFT JOIN sl  s ON s.period_key = p.period_key
+ORDER BY p.period_key`,
+  },
+  {
+    code: 'SC_RECONCILIATION_STATUS',
+    name: 'PO reconciliation status summary',
+    module: 'SERVICE',
+    category: 'Reconciliation',
+    description: 'How many purchase orders fall into each reconciliation status, and how much money '
+      + 'each status accounts for — the same classification as SC_PO_RECONCILIATION, rolled up.',
+    params: [P_PROJECT],
+    viz: { kind: 'bar', label: 'status', value: 'pos' },
+    sql: `
+WITH act AS (
+  SELECT po_no, SUM(amount) AS amount FROM v_actual
+  WHERE project_key = :project_key AND po_no IS NOT NULL AND po_no <> '' GROUP BY po_no
+),
+sl AS (
+  SELECT po_no, SUM(amount_net) AS amount FROM v_service_line
+  WHERE project_key = :project_key GROUP BY po_no
+),
+keys AS (SELECT po_no FROM act UNION SELECT po_no FROM sl),
+scored AS (
+  SELECT
+    COALESCE(act.amount,0) AS actual_amount, COALESCE(sl.amount,0) AS service_line_amount,
+    CASE
+      WHEN sl.amount IS NULL THEN 'NO SERVICE DETAIL'
+      WHEN act.amount IS NULL THEN 'NOT POSTED'
+      WHEN ABS(COALESCE(act.amount,0) - COALESCE(sl.amount,0)) <= 1 THEN 'RECONCILED'
+      ELSE 'DIFFERENCE'
+    END AS status
+  FROM keys k
+  LEFT JOIN act ON act.po_no = k.po_no
+  LEFT JOIN sl  ON sl.po_no  = k.po_no
+)
+SELECT status, COUNT(*) AS pos, SUM(actual_amount) AS actual_amount, SUM(service_line_amount) AS service_line_amount
+FROM scored
+GROUP BY status
+ORDER BY pos DESC`,
+  },
+  {
     code: 'REVENUE_BY_WBS',
     name: 'Revenue by WBS',
     module: 'CROSS',
@@ -923,6 +998,167 @@ SELECT
   quantity, uom, amount, reasons
 FROM flagged
 WHERE reasons <> ''
+ORDER BY period_key DESC, ABS(amount) DESC`,
+  },
+  {
+    code: 'KPI_MATERIAL',
+    name: 'Material headline figures',
+    module: 'ACTUAL',
+    category: 'Material',
+    description: 'One row of totals for material cost — spend, share of total actual cost, and how '
+      + 'many GLs and vendors it runs through. The Material Analysis page reads its KPI tiles from '
+      + 'this rather than summing the detail table in the UI.',
+    params: [P_PROJECT],
+    viz: { kind: 'table' },
+    sql: `
+WITH m AS (
+  SELECT COALESCE(SUM(amount),0) AS total, COUNT(*) AS n,
+         COUNT(DISTINCT cost_element_code) AS gls, COUNT(DISTINCT vendor_name) AS vendors
+  FROM v_actual WHERE project_key = :project_key AND cost_type = 'MATERIAL'
+),
+a AS (SELECT COALESCE(SUM(amount),0) AS total FROM v_actual WHERE project_key = :project_key)
+SELECT
+  (SELECT total   FROM m) AS material_amount,
+  (SELECT n       FROM m) AS postings,
+  (SELECT gls     FROM m) AS gl_count,
+  (SELECT vendors FROM m) AS vendor_count,
+  (SELECT total   FROM a) AS actual_total,
+  ROUND(100.0 * (SELECT total FROM m) / NULLIF((SELECT total FROM a),0), 1) AS pct_of_actual`,
+  },
+  {
+    code: 'MATERIAL_BY_GL',
+    name: 'Material spend by GL',
+    module: 'ACTUAL',
+    category: 'Material',
+    description: 'Material cost rolled up per GL account.',
+    params: [P_PROJECT],
+    viz: { kind: 'bar', label: 'cost_element_name', value: 'amount' },
+    sql: `
+SELECT cost_element_code, COALESCE(cost_element_name, cost_element_code) AS cost_element_name,
+       COUNT(*) AS postings, SUM(amount) AS amount
+FROM v_actual
+WHERE project_key = :project_key AND cost_type = 'MATERIAL'
+GROUP BY cost_element_code, COALESCE(cost_element_name, cost_element_code)
+ORDER BY amount DESC`,
+  },
+  {
+    code: 'MATERIAL_BY_WBS',
+    name: 'Material spend by WBS',
+    module: 'ACTUAL',
+    category: 'Material',
+    description: 'Material cost rolled up per WBS element — where the material money is going '
+      + 'structurally.',
+    params: [P_PROJECT],
+    viz: { kind: 'treemap', label: 'wbs_name', value: 'amount' },
+    sql: `
+SELECT COALESCE(wbs_code,'(no WBS)') AS wbs_code, COALESCE(wbs_name, wbs_code, '(no WBS)') AS wbs_name,
+       COUNT(*) AS postings, SUM(amount) AS amount
+FROM v_actual
+WHERE project_key = :project_key AND cost_type = 'MATERIAL'
+GROUP BY COALESCE(wbs_code,'(no WBS)'), COALESCE(wbs_name, wbs_code, '(no WBS)')
+ORDER BY amount DESC`,
+  },
+  {
+    code: 'MATERIAL_BY_VENDOR',
+    name: 'Material spend by vendor',
+    module: 'ACTUAL',
+    category: 'Material',
+    description: 'Material cost rolled up per supplier — concentration risk reads the same way it '
+      + 'does for subcontractors.',
+    params: [P_PROJECT],
+    viz: { kind: 'bar', label: 'vendor_name', value: 'amount' },
+    sql: `
+SELECT COALESCE(vendor_name,'(no vendor)') AS vendor_name, COUNT(*) AS postings, SUM(amount) AS amount
+FROM v_actual
+WHERE project_key = :project_key AND cost_type = 'MATERIAL'
+GROUP BY COALESCE(vendor_name,'(no vendor)')
+ORDER BY amount DESC`,
+  },
+  {
+    code: 'MATERIAL_MONTHLY_TREND',
+    name: 'Material spend by month',
+    module: 'ACTUAL',
+    category: 'Trend',
+    description: 'Material cost per month with a running cumulative total.',
+    params: [P_PROJECT],
+    viz: { kind: 'line', x: 'period_key', area: true,
+      series: [{ column: 'period_amount', label: 'Spend in period' }],
+      headline: 'KPI_MATERIAL' },
+    sql: `
+SELECT
+  period_key,
+  SUM(amount) AS period_amount,
+  SUM(SUM(amount)) OVER (ORDER BY period_key
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumulative_amount
+FROM v_actual
+WHERE project_key = :project_key AND cost_type = 'MATERIAL'
+GROUP BY period_key
+ORDER BY period_key`,
+  },
+  {
+    // Same explainable-deviation technique as ANOMALY_TRANSACTIONS, applied to
+    // unit rate (amount / quantity) instead of amount — a pricing error or an
+    // off-catalogue purchase shows up as a rate outlier even when the total
+    // amount on the line looks unremarkable.
+    code: 'MATERIAL_RATE_OUTLIERS',
+    name: 'Material unit-rate outliers',
+    module: 'ACTUAL',
+    category: 'Material',
+    description: 'Material postings whose unit rate (amount ÷ quantity) is more than 5x its GL\'s own '
+      + 'average rate — a likely pricing error, wrong UoM, or a purchase outside the usual supplier '
+      + 'agreement. A GL needs at least 5 priced postings before the check applies.',
+    params: [P_PROJECT],
+    viz: { kind: 'table' },
+    sql: `
+WITH base AS (
+  SELECT wbs_code, wbs_name, cost_element_code, cost_element_name, document_no, document_type,
+         period_key, vendor_name, description, quantity, uom, amount,
+         amount / quantity AS unit_rate
+  FROM v_actual
+  WHERE project_key = :project_key AND cost_type = 'MATERIAL'
+    AND quantity IS NOT NULL AND quantity <> 0
+),
+scored AS (
+  SELECT *,
+    AVG(ABS(unit_rate)) OVER (PARTITION BY cost_element_code) AS gl_avg_rate,
+    COUNT(*)             OVER (PARTITION BY cost_element_code) AS gl_n
+  FROM base
+)
+SELECT wbs_code, wbs_name, cost_element_code, cost_element_name, document_no, document_type,
+       period_key, vendor_name, description, quantity, uom, amount, unit_rate, gl_avg_rate
+FROM scored
+WHERE gl_n >= 5 AND gl_avg_rate > 0 AND ABS(unit_rate) > 5 * gl_avg_rate
+ORDER BY ABS(unit_rate) DESC`,
+  },
+  {
+    code: 'MATERIAL_RETURNS',
+    name: 'Material returns and damages',
+    module: 'ACTUAL',
+    category: 'Material',
+    description: 'Material postings with a negative amount — returns, damages, or a credit against '
+      + 'an earlier delivery.',
+    params: [P_PROJECT],
+    viz: { kind: 'table' },
+    sql: `
+SELECT wbs_code, wbs_name, cost_element_code, cost_element_name, document_no, document_type,
+       period_key, vendor_name, description, quantity, uom, amount
+FROM v_actual
+WHERE project_key = :project_key AND cost_type = 'MATERIAL' AND amount < 0
+ORDER BY amount ASC`,
+  },
+  {
+    code: 'MATERIAL_DETAIL',
+    name: 'Material postings',
+    module: 'ACTUAL',
+    category: 'Detail',
+    description: 'Every material posting — the detail table behind the Material Analysis page.',
+    params: [P_PROJECT],
+    viz: { kind: 'table' },
+    sql: `
+SELECT wbs_code, wbs_name, cost_element_code, cost_element_name, document_no, document_type,
+       period_key, data_date, vendor_name, description, quantity, uom, amount
+FROM v_actual
+WHERE project_key = :project_key AND cost_type = 'MATERIAL'
 ORDER BY period_key DESC, ABS(amount) DESC`,
   },
   {
