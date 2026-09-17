@@ -4,7 +4,7 @@ import { api, call } from '../lib/api';
 import { money, pct } from '../lib/format';
 import type { CostTypeDef, QueryResult } from '@shared/types';
 
-type Tab = 'month' | 'txn';
+type Tab = 'month' | 'txn' | 'anomaly';
 type Source = 'ACTUAL' | 'BUDGET' | 'FORECAST';
 
 const SOURCE_QUERY: Record<Source, string> = {
@@ -23,12 +23,19 @@ const periodLabel = (key: string) => {
 
 interface MonthRow {
   cost_type: string; cost_element_code: string; cost_element_name: string | null;
+  wbs_code: string | null; wbs_name: string | null;
   period_key: string; postings: number; amount: number;
 }
 
-interface GlNode {
+const NO_WBS = '(no WBS)';
+
+interface WbsNode {
   code: string; name: string | null; postings: number; amount: number;
   byPeriod: Map<string, number>;
+}
+interface GlNode {
+  code: string; name: string | null; postings: number; amount: number;
+  byPeriod: Map<string, number>; wbs: WbsNode[];
 }
 interface TypeNode {
   type: string; postings: number; amount: number;
@@ -36,29 +43,41 @@ interface TypeNode {
 }
 
 /**
- * Long format (one row per cost type / GL / month, from SQL) turned into a
- * two-level tree with periods folded into columns — a display transform, not
- * aggregation: every number in it is still a straight sum from the query.
+ * Long format (one row per cost type / GL / WBS / month, from SQL) turned
+ * into a three-level tree with periods folded into columns — a display
+ * transform, not aggregation: every number in it is still a straight sum
+ * from the query. A GL's own totals are the sum of its WBS breakdown, so
+ * collapsing the WBS level away changes nothing about what a GL row shows.
  */
 function buildTree(rows: MonthRow[]): { periods: string[]; types: TypeNode[]; grandTotal: number; grandPostings: number } {
   const periods = [...new Set(rows.map((r) => r.period_key || NO_PERIOD))].sort();
-  const byType = new Map<string, Map<string, GlNode>>();
+  const byType = new Map<string, Map<string, { name: string | null; wbs: Map<string, WbsNode> }>>();
   for (const r of rows) {
     const pk = r.period_key || NO_PERIOD;
+    const wbsCode = r.wbs_code || NO_WBS;
     let gls = byType.get(r.cost_type);
     if (!gls) { gls = new Map(); byType.set(r.cost_type, gls); }
-    let gl = gls.get(r.cost_element_code);
-    if (!gl) {
-      gl = { code: r.cost_element_code, name: r.cost_element_name, postings: 0, amount: 0, byPeriod: new Map() };
-      gls.set(r.cost_element_code, gl);
-    }
-    gl.postings += r.postings;
-    gl.amount += r.amount;
-    gl.byPeriod.set(pk, (gl.byPeriod.get(pk) ?? 0) + r.amount);
+    let glEntry = gls.get(r.cost_element_code);
+    if (!glEntry) { glEntry = { name: r.cost_element_name, wbs: new Map() }; gls.set(r.cost_element_code, glEntry); }
+    let wbs = glEntry.wbs.get(wbsCode);
+    if (!wbs) { wbs = { code: wbsCode, name: r.wbs_name, postings: 0, amount: 0, byPeriod: new Map() }; glEntry.wbs.set(wbsCode, wbs); }
+    wbs.postings += r.postings;
+    wbs.amount += r.amount;
+    wbs.byPeriod.set(pk, (wbs.byPeriod.get(pk) ?? 0) + r.amount);
   }
   let grandTotal = 0, grandPostings = 0;
   const types: TypeNode[] = [...byType.entries()].map(([type, gls]) => {
-    const glList = [...gls.values()];
+    const glList: GlNode[] = [...gls.entries()].map(([code, entry]) => {
+      const wbsList = [...entry.wbs.values()];
+      const byPeriod = new Map<string, number>();
+      let postings = 0, amount = 0;
+      for (const w of wbsList) {
+        postings += w.postings;
+        amount += w.amount;
+        for (const [pk, amt] of w.byPeriod) byPeriod.set(pk, (byPeriod.get(pk) ?? 0) + amt);
+      }
+      return { code, name: entry.name, postings, amount, byPeriod, wbs: wbsList };
+    });
     const byPeriod = new Map<string, number>();
     let postings = 0, amount = 0;
     for (const gl of glList) {
@@ -219,10 +238,12 @@ function SortableTh({ label, active, dir, onClick, style }: {
 function MonthlyPivot({ rows, types }: { rows: MonthRow[]; types: CostTypeDef[] }) {
   const { periods, types: tree, grandTotal, grandPostings } = useMemo(() => buildTree(rows), [rows]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [openGl, setOpenGl] = useState<Record<string, boolean>>({});
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const isOpen = (t: string) => !collapsed[t];
   const toggle = (t: string) => setCollapsed((c) => ({ ...c, [t]: isOpen(t) }));
+  const toggleGl = (code: string) => setOpenGl((c) => ({ ...c, [code]: !c[code] }));
 
   const sortBy = (key: SortKey) => {
     if (key === sortKey) setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'));
@@ -230,7 +251,10 @@ function MonthlyPivot({ rows, types }: { rows: MonthRow[]; types: CostTypeDef[] 
   };
 
   const sortedTree = useMemo(
-    () => sortNodes(tree, sortKey, sortDir).map((g) => ({ ...g, gls: sortNodes(g.gls, sortKey, sortDir) })),
+    () => sortNodes(tree, sortKey, sortDir).map((g) => ({
+      ...g,
+      gls: sortNodes(g.gls, sortKey, sortDir).map((gl) => ({ ...gl, wbs: sortNodes(gl.wbs, sortKey, sortDir) })),
+    })),
     [tree, sortKey, sortDir],
   );
 
@@ -293,29 +317,57 @@ function MonthlyPivot({ rows, types }: { rows: MonthRow[]; types: CostTypeDef[] 
                   ))}
                   <td className="mono" style={{ textAlign: 'right', fontWeight: 700 }}>{money(g.amount)}</td>
                 </tr>
-                {open && g.gls.map((gl) => (
-                  <tr key={gl.code}>
-                    <td style={{ position: 'sticky', left: 0, zIndex: 1, background: 'var(--surface)', paddingLeft: 26 }}
-                        title={gl.name ?? gl.code}>
-                      {gl.name ?? gl.code}
-                    </td>
-                    <td style={{ position: 'sticky', left: LABEL_W, zIndex: 1, background: 'var(--surface)' }}>
-                      <span className="badge mute plain mono" style={{ fontSize: 10 }}>{gl.code}</span>
-                    </td>
-                    <td className="mono faint" style={{ position: 'sticky', left: LABEL_W + CODE_W, zIndex: 1, background: 'var(--surface)', textAlign: 'right' }}>
-                      {gl.postings.toLocaleString()}
-                    </td>
-                    <td style={{ position: 'sticky', left: LABEL_W + CODE_W + TXN_W, zIndex: 1, background: 'var(--surface)' }}>
-                      <ShareBar pctValue={grandTotal ? (gl.amount / grandTotal) * 100 : 0} color={meta.color} />
-                    </td>
-                    {periods.map((p) => (
-                      <td key={p} className="mono faint" style={{ textAlign: 'right' }}>
-                        {gl.byPeriod.has(p) ? money(gl.byPeriod.get(p)) : '–'}
-                      </td>
-                    ))}
-                    <td className="mono faint" style={{ textAlign: 'right' }}>{money(gl.amount)}</td>
-                  </tr>
-                ))}
+                {open && g.gls.map((gl) => {
+                  const glOpen = !!openGl[gl.code];
+                  const showWbs = gl.wbs.length > 1 || gl.wbs[0]?.code !== NO_WBS;
+                  return (
+                    <Fragment key={gl.code}>
+                      <tr style={showWbs ? { cursor: 'pointer' } : undefined} onClick={showWbs ? () => toggleGl(gl.code) : undefined}>
+                        <td style={{ position: 'sticky', left: 0, zIndex: 1, background: 'var(--surface)', paddingLeft: 26 }}
+                            title={gl.name ?? gl.code}>
+                          {showWbs && <span className="faint" style={{ marginRight: 6 }}>{glOpen ? '▾' : '▸'}</span>}
+                          {gl.name ?? gl.code}
+                        </td>
+                        <td style={{ position: 'sticky', left: LABEL_W, zIndex: 1, background: 'var(--surface)' }}>
+                          <span className="badge mute plain mono" style={{ fontSize: 10 }}>{gl.code}</span>
+                        </td>
+                        <td className="mono faint" style={{ position: 'sticky', left: LABEL_W + CODE_W, zIndex: 1, background: 'var(--surface)', textAlign: 'right' }}>
+                          {gl.postings.toLocaleString()}
+                        </td>
+                        <td style={{ position: 'sticky', left: LABEL_W + CODE_W + TXN_W, zIndex: 1, background: 'var(--surface)' }}>
+                          <ShareBar pctValue={grandTotal ? (gl.amount / grandTotal) * 100 : 0} color={meta.color} />
+                        </td>
+                        {periods.map((p) => (
+                          <td key={p} className="mono faint" style={{ textAlign: 'right' }}>
+                            {gl.byPeriod.has(p) ? money(gl.byPeriod.get(p)) : '–'}
+                          </td>
+                        ))}
+                        <td className="mono faint" style={{ textAlign: 'right' }}>{money(gl.amount)}</td>
+                      </tr>
+                      {glOpen && gl.wbs.map((w) => (
+                        <tr key={w.code}>
+                          <td style={{ position: 'sticky', left: 0, zIndex: 1, background: 'var(--surface)', paddingLeft: 46 }}
+                              className="faint" title={w.code === NO_WBS ? undefined : w.code}>
+                            {w.code === NO_WBS ? w.code : (w.name ? `${w.name} (${w.code})` : w.code)}
+                          </td>
+                          <td style={{ position: 'sticky', left: LABEL_W, zIndex: 1, background: 'var(--surface)' }}></td>
+                          <td className="mono faint" style={{ position: 'sticky', left: LABEL_W + CODE_W, zIndex: 1, background: 'var(--surface)', textAlign: 'right' }}>
+                            {w.postings.toLocaleString()}
+                          </td>
+                          <td style={{ position: 'sticky', left: LABEL_W + CODE_W + TXN_W, zIndex: 1, background: 'var(--surface)' }}>
+                            <ShareBar pctValue={grandTotal ? (w.amount / grandTotal) * 100 : 0} color={meta.color} />
+                          </td>
+                          {periods.map((p) => (
+                            <td key={p} className="mono faint" style={{ textAlign: 'right' }}>
+                              {w.byPeriod.has(p) ? money(w.byPeriod.get(p)) : '–'}
+                            </td>
+                          ))}
+                          <td className="mono faint" style={{ textAlign: 'right' }}>{money(w.amount)}</td>
+                        </tr>
+                      ))}
+                    </Fragment>
+                  );
+                })}
               </Fragment>
             );
           })}
@@ -400,6 +452,7 @@ function TransactionTree({ rows, types, filters }: { rows: MonthRow[]; types: Co
           <tr>
             <th style={{ width: 24 }}></th>
             <th>Category / cost element / posting</th>
+            <th>WBS</th>
             <th>Doc type</th>
             <th>Period</th>
             <th>Vendor</th>
@@ -410,7 +463,7 @@ function TransactionTree({ rows, types, filters }: { rows: MonthRow[]; types: Co
         </thead>
         <tbody>
           {tree.length === 0 && (
-            <tr><td colSpan={8}><div className="empty">No actual cost loaded yet.</div></td></tr>
+            <tr><td colSpan={9}><div className="empty">No actual cost loaded yet.</div></td></tr>
           )}
           {sortedTree.map((g) => {
             const meta = typeMeta(types, g.type);
@@ -419,7 +472,7 @@ function TransactionTree({ rows, types, filters }: { rows: MonthRow[]; types: Co
               <Fragment key={g.type}>
                 <tr style={{ background: rowTint(meta.color), cursor: 'pointer' }} onClick={() => toggleType(g.type)}>
                   <td className="faint" style={{ textAlign: 'center' }}>{open ? '▾' : '▸'}</td>
-                  <td colSpan={4} style={{ fontWeight: 700 }}>
+                  <td colSpan={5} style={{ fontWeight: 700 }}>
                     <span style={{ marginRight: 6 }}>{meta.icon}</span>
                     <span style={{ color: meta.color }}>{meta.label}</span>
                   </td>
@@ -433,7 +486,7 @@ function TransactionTree({ rows, types, filters }: { rows: MonthRow[]; types: Co
                     <Fragment key={gl.code}>
                       <tr style={{ cursor: 'pointer' }} onClick={() => toggleGl(gl.code)}>
                         <td className="faint" style={{ textAlign: 'center' }}>{glOpen ? '▾' : '▸'}</td>
-                        <td colSpan={4} style={{ paddingLeft: 20 }} title={gl.code}>
+                        <td colSpan={5} style={{ paddingLeft: 20 }} title={gl.code}>
                           {gl.name ?? gl.code} <span className="faint mono" style={{ fontSize: 10 }}>{gl.code}</span>
                         </td>
                         <td className="mono faint" style={{ textAlign: 'right' }}>{gl.postings.toLocaleString()}</td>
@@ -441,7 +494,7 @@ function TransactionTree({ rows, types, filters }: { rows: MonthRow[]; types: Co
                         <td><ShareBar pctValue={grandTotal ? (gl.amount / grandTotal) * 100 : 0} color={meta.color} /></td>
                       </tr>
                       {glOpen && loadingGl === gl.code && (
-                        <tr><td></td><td colSpan={7}><div className="empty">Loading…</div></td></tr>
+                        <tr><td></td><td colSpan={8}><div className="empty">Loading…</div></td></tr>
                       )}
                       {glOpen && txns[gl.code] && groupByPeriod(filterRows(txns[gl.code].rows, filters)).map((pg) => {
                         const periodKey = `${gl.code}::${pg.period}`;
@@ -450,7 +503,7 @@ function TransactionTree({ rows, types, filters }: { rows: MonthRow[]; types: Co
                           <Fragment key={periodKey}>
                             <tr style={{ cursor: 'pointer', background: 'var(--surface-2)' }} onClick={() => togglePeriod(periodKey)}>
                               <td className="faint" style={{ textAlign: 'center' }}>{periodOpen ? '▾' : '▸'}</td>
-                              <td colSpan={3} style={{ paddingLeft: 40 }} className="mono faint">
+                              <td colSpan={4} style={{ paddingLeft: 40 }} className="mono faint">
                                 {periodLabel(pg.period) || pg.period || '(no period)'}
                               </td>
                               <td></td>
@@ -469,6 +522,7 @@ function TransactionTree({ rows, types, filters }: { rows: MonthRow[]; types: Co
                                   )}
                                   {r.document_no}{r.description ? ` — ${r.description}` : ''}
                                 </td>
+                                <td className="mono faint" title={r.wbs_name ?? ''}>{r.wbs_code || '—'}</td>
                                 <td className="mono faint">{r.document_type || '(none)'}</td>
                                 <td className="mono faint">{r.period_key}</td>
                                 <td className="faint">{r.vendor_name ?? '—'}</td>
@@ -491,7 +545,7 @@ function TransactionTree({ rows, types, filters }: { rows: MonthRow[]; types: Co
           {tree.length > 0 && (
             <tr style={{ borderTop: '2px solid var(--border)' }}>
               <td></td>
-              <td colSpan={4} style={{ fontWeight: 700 }}>Total</td>
+              <td colSpan={5} style={{ fontWeight: 700 }}>Total</td>
               <td className="mono" style={{ textAlign: 'right', fontWeight: 700 }}>{grandPostings.toLocaleString()}</td>
               <td className="mono" style={{ textAlign: 'right', fontWeight: 700 }}>{money(grandTotal)}</td>
               <td style={{ fontWeight: 700 }}>100.0%</td>
@@ -503,18 +557,110 @@ function TransactionTree({ rows, types, filters }: { rows: MonthRow[]; types: Co
   );
 }
 
+/** Each anomaly reason is its own chip so several flags on one posting stay legible. */
+function ReasonChips({ reasons }: { reasons: string }) {
+  const list = reasons.split(';').map((r) => r.trim()).filter(Boolean);
+  return (
+    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+      {list.map((r, i) => (
+        <span key={i} className="badge warn plain" style={{ fontSize: 10, whiteSpace: 'normal' }}>{r}</span>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * A flat list, not a tree — every row already carries its own "why flagged"
+ * reasons, so grouping by cost type would only get in the way of scanning
+ * them. Every check is a plain SQL predicate in ANOMALY_TRANSACTIONS, listed
+ * in the hint below so a reviewer knows exactly what "flagged" means here.
+ */
+function AnomalyTable({ rows, types, sortDir, sortKey, onSort }: {
+  rows: Record<string, unknown>[]; types: CostTypeDef[];
+  sortKey: 'amount' | null; sortDir: 'asc' | 'desc'; onSort: () => void;
+}) {
+  const sorted = useMemo(() => {
+    const sign = sortDir === 'asc' ? 1 : -1;
+    return [...rows].sort((a, b) => (Math.abs(Number(a.amount ?? 0)) - Math.abs(Number(b.amount ?? 0))) * sign);
+  }, [rows, sortDir]);
+
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>WBS</th>
+            <th>Cost type</th>
+            <th>GL account</th>
+            <th>Document</th>
+            <th>Period</th>
+            <th>Vendor</th>
+            <SortableTh label="Amount" active={sortKey === 'amount'} dir={sortDir} onClick={onSort} style={{ textAlign: 'right' }} />
+            <th>Why flagged</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.length === 0 && (
+            <tr><td colSpan={8}><div className="empty">Nothing flagged — every posting passes the checks below.</div></td></tr>
+          )}
+          {sorted.map((r: any, i: number) => (
+            <tr key={i}>
+              <td className="mono faint" title={r.wbs_name ?? ''}>{r.wbs_code || '—'}</td>
+              <td><CostBadge types={types} code={String(r.cost_type ?? 'UNMAPPED')} /></td>
+              <td title={r.cost_element_name ?? ''}>
+                {r.cost_element_name ?? r.cost_element_code}
+                <span className="faint mono" style={{ fontSize: 10, marginLeft: 6 }}>{r.cost_element_code}</span>
+              </td>
+              <td className="mono faint" title={r.description ?? ''}>
+                {r.document_no}{r.document_type ? ` (${r.document_type})` : ''}
+              </td>
+              <td className="mono faint">{r.period_key}</td>
+              <td className="faint">{r.vendor_name ?? '—'}</td>
+              <td className="mono" style={{ textAlign: 'right' }}>
+                {Number(r.amount).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+              </td>
+              <td><ReasonChips reasons={String(r.reasons ?? '')} /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function CostBadge({ types, code }: { types: CostTypeDef[]; code: string }) {
+  const meta = typeMeta(types, code);
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600,
+      color: meta.color, background: `${meta.color}22`, border: `1px solid ${meta.color}55`,
+      borderRadius: 5, padding: '2px 8px', whiteSpace: 'nowrap',
+    }}>
+      <span>{meta.icon}</span>{meta.label}
+    </span>
+  );
+}
+
+const ANOMALY_CHECKS = [
+  'Cost type not classified', 'No WBS element', 'Negative amount',
+  'Unusually large for its GL (over 5x the GL\'s average)', 'Subcontract cost with no vendor named',
+  'PO or settled order posted with no detail loaded yet', 'Possible duplicate (same WBS/GL/vendor/amount/period)',
+];
+
 export function Reports() {
   const { projectKey, project, dataVersion } = useApp();
   const [source, setSource] = useState<Source>('ACTUAL');
   const [tab, setTab] = useState<Tab>('month');
   const [types, setTypes] = useState<CostTypeDef[]>([]);
   const [monthly, setMonthly] = useState<QueryResult | null>(null);
+  const [anomalies, setAnomalies] = useState<QueryResult | null>(null);
+  const [anomalySortDir, setAnomalySortDir] = useState<'asc' | 'desc'>('desc');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedTo, setSavedTo] = useState<string | null>(null);
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
 
-  /** Budget and forecast have no posting-level grain, so Transactions is actual-only. */
+  /** Budget and forecast have no posting-level grain, so Transactions/Anomalies are actual-only. */
   const setSourceAndTab = (s: Source) => { setSource(s); if (s !== 'ACTUAL') setTab('month'); };
 
   useEffect(() => {
@@ -530,9 +676,23 @@ export function Reports() {
       .finally(() => setBusy(false));
   }, [projectKey, dataVersion, source]);
 
+  /** Fetched only once the tab is actually opened — a project's full posting history, scored. */
+  useEffect(() => {
+    if (tab !== 'anomaly' || !projectKey) return;
+    setBusy(true); setError(null);
+    call(api.queries.run('ANOMALY_TRANSACTIONS', { project_key: projectKey }))
+      .then(setAnomalies)
+      .catch((e) => setError((e as Error).message))
+      .finally(() => setBusy(false));
+  }, [tab, projectKey, dataVersion]);
+
   const rows = (monthly?.rows ?? []) as unknown as MonthRow[];
   const periods = useMemo(() => [...new Set(rows.map((r) => r.period_key).filter(Boolean))].sort(), [rows]);
   const filteredRows = useMemo(() => filterRows(monthly?.rows ?? [], filters) as unknown as MonthRow[], [monthly, filters]);
+  const anomalyRows = useMemo(() => filterRows(anomalies?.rows ?? [], filters), [anomalies, filters]);
+
+  const activeCount = tab === 'anomaly' ? anomalyRows.length : filteredRows.length;
+  const activeTotal = tab === 'anomaly' ? (anomalies?.rows.length ?? 0) : rows.length;
 
   /** Exports whichever tab and source are actually on screen, filtered the same way they're shown. */
   const exportXlsx = async () => {
@@ -543,10 +703,10 @@ export function Reports() {
         const filtered = filterRows(monthly.rows, filters);
         setSavedTo(await call(api.exportResult({ ...monthly, rows: filtered, rowCount: filtered.length }, {
           title: `${SOURCE_LABEL[source]} by cost type, GL and month`,
-          subtitle: 'One row per cost type / GL / month — pivot and group in Excel as needed.',
+          subtitle: 'One row per cost type / GL / WBS / month — pivot and group in Excel as needed.',
           context: { Project: project?.project_code, Source: SOURCE_LABEL[source] },
         })));
-      } else {
+      } else if (tab === 'txn') {
         if (!projectKey) return;
         const all = await call(api.queries.run('COST_BY_TYPE_GL_TXN', { project_key: projectKey, cost_element_code: null }));
         const filtered = filterRows(all.rows, filters);
@@ -555,6 +715,14 @@ export function Reports() {
           subtitle: 'Every individual posting behind Reports → Transactions, one row each — PO and '
             + 'settled-order detail substituted in where loaded.',
           context: { Project: project?.project_code },
+        })));
+      } else {
+        if (!anomalies) return;
+        const filtered = filterRows(anomalies.rows, filters);
+        setSavedTo(await call(api.exportResult({ ...anomalies, rows: filtered, rowCount: filtered.length }, {
+          title: 'Anomaly transactions',
+          subtitle: 'Actual postings that failed at least one data-quality check — see the "reasons" column.',
+          context: { Project: project?.project_code, Checks: ANOMALY_CHECKS.join(' | ') },
         })));
       }
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
@@ -584,30 +752,41 @@ export function Reports() {
                       title={source !== 'ACTUAL' ? 'Only actual cost has individual postings' : undefined}>
                 Transactions
               </button>
+              <button className={tab === 'anomaly' ? 'on' : ''} onClick={() => setTab('anomaly')} disabled={source !== 'ACTUAL'}
+                      title={source !== 'ACTUAL' ? 'Only actual cost is checked for anomalies' : undefined}>
+                Anomalies
+              </button>
             </div>
           </div>
-          <button className="btn" onClick={exportXlsx} disabled={busy || !filteredRows.length}>⤓ Excel</button>
+          <button className="btn" onClick={exportXlsx} disabled={busy || !activeCount}>⤓ Excel</button>
         </div>
 
         <p className="hint">
           {tab === 'month'
-            ? `${SOURCE_LABEL[source]} cost by cost type and GL account, month by month`
+            ? `${SOURCE_LABEL[source]} cost by cost type, GL account, WBS and month`
               + (source === 'ACTUAL' ? ' — PO and settled-order detail is substituted in where it has been loaded, so nothing is counted twice.'
                 : '.')
-              + ' Share is each row\'s slice of the total — click a column header to sort by it.'
-            : 'The same grouping down to individual postings, merging direct actuals with PO and order '
-              + 'detail — expand a GL to load its transactions.'}
+              + ' Share is each row\'s slice of the total — click a column header to sort by it, or a GL row to see its WBS split.'
+            : tab === 'txn'
+            ? 'The same grouping down to individual postings, merging direct actuals with PO and order '
+              + 'detail — expand a GL to load its transactions.'
+            : `Postings worth a second look: ${ANOMALY_CHECKS.join(' · ')}.`}
         </p>
 
         <FilterBar filters={filters} onChange={setFilters} types={types} periods={periods}
-                   matched={filteredRows.length} total={rows.length} />
+                   matched={activeCount} total={activeTotal} />
 
-        {busy && !monthly ? (
+        {busy && !monthly && tab !== 'anomaly' ? (
           <div className="empty">Loading…</div>
         ) : tab === 'month' ? (
           <MonthlyPivot rows={filteredRows} types={types} />
-        ) : (
+        ) : tab === 'txn' ? (
           <TransactionTree rows={filteredRows} types={types} filters={filters} />
+        ) : busy && !anomalies ? (
+          <div className="empty">Checking postings…</div>
+        ) : (
+          <AnomalyTable rows={anomalyRows} types={types} sortKey="amount" sortDir={anomalySortDir}
+            onSort={() => setAnomalySortDir((d) => (d === 'desc' ? 'asc' : 'desc'))} />
         )}
       </div>
     </>

@@ -694,9 +694,9 @@ ORDER BY t.gl_label`,
     name: 'Actuals by cost type, GL and month',
     module: 'ACTUAL',
     category: 'Detail',
-    description: 'Actual cost per cost type, GL account and month, with PO and settled-order detail '
-      + 'substituted in where it has been loaded — the source data behind the Reports page pivot, '
-      + 'which turns period_key into columns and groups by cost type in the UI.',
+    description: 'Actual cost per cost type, GL account, WBS and month, with PO and settled-order '
+      + 'detail substituted in where it has been loaded — the source data behind the Reports page '
+      + 'pivot, which turns period_key into columns and groups by cost type / GL / WBS in the UI.',
     params: [P_PROJECT],
     viz: { kind: 'table' },
     sql: `
@@ -712,7 +712,7 @@ order_with_detail AS (
 direct_cost AS (
   SELECT
     COALESCE(a.cost_type,'UNMAPPED') AS cost_type,
-    a.cost_element_code, a.cost_element_name, a.period_key, a.amount
+    a.cost_element_code, a.cost_element_name, a.wbs_code, a.wbs_name, a.period_key, a.amount
   FROM v_actual a
   WHERE a.project_key = :project_key
     AND (a.po_no IS NULL OR a.po_no = '' OR a.po_no NOT IN (SELECT po_no FROM po_with_detail))
@@ -723,14 +723,14 @@ direct_cost AS (
 detail_lines AS (
   SELECT
     COALESCE(s.cost_type,'UNMAPPED') AS cost_type,
-    s.cost_element_code, s.cost_element_name, s.period_key, s.amount_net AS amount
+    s.cost_element_code, s.cost_element_name, s.wbs_code, s.wbs_name, s.period_key, s.amount_net AS amount
   FROM v_service_line s
   WHERE s.project_key = :project_key
 ),
 order_detail AS (
   SELECT
     COALESCE(s.cost_type,'UNMAPPED') AS cost_type,
-    s.cost_element_code, s.cost_element_name, s.period_key, s.amount
+    s.cost_element_code, s.cost_element_name, s.wbs_code, s.wbs_name, s.period_key, s.amount
   FROM v_order_line s
   WHERE s.project_key = :project_key AND s.category = 'WBS'
 ),
@@ -740,12 +740,12 @@ merged AS (
   UNION ALL SELECT * FROM order_detail
 )
 SELECT
-  cost_type, cost_element_code, cost_element_name, period_key,
+  cost_type, cost_element_code, cost_element_name, wbs_code, wbs_name, period_key,
   COUNT(*)    AS postings,
   SUM(amount) AS amount
 FROM merged
-GROUP BY cost_type, cost_element_code, cost_element_name, period_key
-ORDER BY cost_type, cost_element_code, period_key`,
+GROUP BY cost_type, cost_element_code, cost_element_name, wbs_code, wbs_name, period_key
+ORDER BY cost_type, cost_element_code, wbs_code, period_key`,
   },
   {
     code: 'COST_BY_TYPE_GL_TXN',
@@ -770,7 +770,7 @@ order_with_detail AS (
 direct_cost AS (
   SELECT
     'ACTUAL' AS source, COALESCE(a.cost_type,'UNMAPPED') AS cost_type,
-    a.cost_element_code, a.cost_element_name,
+    a.cost_element_code, a.cost_element_name, a.wbs_code, a.wbs_name,
     a.document_no AS document_no, a.document_type, a.period_key, a.data_date,
     a.vendor_name, a.description, a.quantity, a.uom, a.amount
   FROM v_actual a
@@ -783,7 +783,7 @@ direct_cost AS (
 detail_lines AS (
   SELECT
     'SERVICE' AS source, COALESCE(s.cost_type,'UNMAPPED') AS cost_type,
-    s.cost_element_code, s.cost_element_name,
+    s.cost_element_code, s.cost_element_name, s.wbs_code, s.wbs_name,
     s.invoice_no AS document_no, NULL AS document_type, s.period_key, s.data_date,
     s.vendor_name, s.service_text AS description, s.quantity_current AS quantity, s.uom, s.amount_net AS amount
   FROM v_service_line s
@@ -792,7 +792,7 @@ detail_lines AS (
 order_detail AS (
   SELECT
     'ORDER' AS source, COALESCE(s.cost_type,'UNMAPPED') AS cost_type,
-    s.cost_element_code, s.cost_element_name,
+    s.cost_element_code, s.cost_element_name, s.wbs_code, s.wbs_name,
     s.order_no AS document_no, NULL AS document_type, s.period_key, s.data_date,
     s.vendor_name, s.order_description AS description, s.quantity, s.uom, s.amount
   FROM v_order_line s
@@ -821,42 +821,109 @@ ORDER BY period_key, document_no`,
     name: 'Budget by cost type, GL and month',
     module: 'BUDGET',
     category: 'Detail',
-    description: 'Current approved budget per cost type, GL account and month — the same shape as '
-      + 'COST_BY_TYPE_GL_MONTH, so the Reports page pivot can show Budget instead of Actual with no '
+    description: 'Current approved budget per cost type, GL account, WBS and month — the same shape '
+      + 'as COST_BY_TYPE_GL_MONTH, so the Reports page pivot can show Budget instead of Actual with no '
       + 'change to how it renders.',
     params: [P_PROJECT],
     viz: { kind: 'table' },
     sql: `
 SELECT
   COALESCE(cost_type,'UNMAPPED') AS cost_type,
-  cost_element_code, cost_element_name, period_key,
+  cost_element_code, cost_element_name, wbs_code, wbs_name, period_key,
   COUNT(*)             AS postings,
   SUM(budget_amount)   AS amount
 FROM v_budget
 WHERE project_key = :project_key AND is_current = 1
-GROUP BY COALESCE(cost_type,'UNMAPPED'), cost_element_code, cost_element_name, period_key
-ORDER BY cost_type, cost_element_code, period_key`,
+GROUP BY COALESCE(cost_type,'UNMAPPED'), cost_element_code, cost_element_name, wbs_code, wbs_name, period_key
+ORDER BY cost_type, cost_element_code, wbs_code, period_key`,
   },
   {
     code: 'FORECAST_BY_TYPE_GL_MONTH',
     name: 'Forecast by cost type, GL and month',
     module: 'FORECAST',
     category: 'Detail',
-    description: 'Current ETC/EAC forecast per cost type, GL account and month — the same shape as '
-      + 'COST_BY_TYPE_GL_MONTH, so the Reports page pivot can show Forecast instead of Actual with no '
-      + 'change to how it renders.',
+    description: 'Current ETC/EAC forecast per cost type, GL account, WBS and month — the same shape '
+      + 'as COST_BY_TYPE_GL_MONTH, so the Reports page pivot can show Forecast instead of Actual with '
+      + 'no change to how it renders.',
     params: [P_PROJECT],
     viz: { kind: 'table' },
     sql: `
 SELECT
   COALESCE(cost_type,'UNMAPPED') AS cost_type,
-  cost_element_code, cost_element_name, period_key,
+  cost_element_code, cost_element_name, wbs_code, wbs_name, period_key,
   COUNT(*)              AS postings,
   SUM(forecast_amount)  AS amount
 FROM v_forecast
 WHERE project_key = :project_key AND is_current = 1
-GROUP BY COALESCE(cost_type,'UNMAPPED'), cost_element_code, cost_element_name, period_key
-ORDER BY cost_type, cost_element_code, period_key`,
+GROUP BY COALESCE(cost_type,'UNMAPPED'), cost_element_code, cost_element_name, wbs_code, wbs_name, period_key
+ORDER BY cost_type, cost_element_code, wbs_code, period_key`,
+  },
+  {
+    // Anomaly detection stays explainable: every flag is a plain SQL predicate,
+    // computed once per posting, never a black-box score. A GL needs at least
+    // 5 postings of its own before the "unusually large" check fires, so a
+    // thin GL with one big legitimate posting doesn't flag itself.
+    code: 'ANOMALY_TRANSACTIONS',
+    name: 'Anomaly transactions',
+    module: 'ACTUAL',
+    category: 'Data quality',
+    description: 'Actual postings worth a second look — unclassified cost type, no WBS element, a '
+      + 'negative amount, a posting far larger than the GL\'s own average, a subcontract cost with no '
+      + 'vendor named, a PO or settled order with no detail loaded yet to verify it, or a likely '
+      + 'duplicate (same WBS, GL, vendor, amount and period posted more than once).',
+    params: [P_PROJECT],
+    viz: { kind: 'table' },
+    sql: `
+WITH base AS (
+  SELECT
+    a.wbs_code, a.wbs_name, COALESCE(a.cost_type,'UNMAPPED') AS cost_type,
+    a.cost_element_code, a.cost_element_name,
+    a.document_no, a.document_type, a.period_key, a.data_date,
+    a.vendor_name, a.description, a.quantity, a.uom, a.amount,
+    a.po_no, a.partner_object_type, a.partner_object
+  FROM v_actual a
+  WHERE a.project_key = :project_key
+),
+scored AS (
+  SELECT *,
+    AVG(ABS(amount)) OVER (PARTITION BY cost_element_code) AS gl_avg_abs,
+    COUNT(*)         OVER (PARTITION BY cost_element_code) AS gl_n,
+    COUNT(*)         OVER (PARTITION BY wbs_code, cost_element_code, vendor_name, amount, period_key) AS dup_n
+  FROM base
+),
+flagged AS (
+  SELECT *,
+    RTRIM(
+      CASE WHEN cost_type = 'UNMAPPED' THEN 'Cost type not classified; ' ELSE '' END ||
+      CASE WHEN wbs_code IS NULL OR wbs_code = '' THEN 'No WBS element; ' ELSE '' END ||
+      CASE WHEN amount < 0 THEN 'Negative amount; ' ELSE '' END ||
+      CASE WHEN gl_n >= 5 AND gl_avg_abs > 0 AND ABS(amount) > 5 * gl_avg_abs
+           THEN 'Unusually large for this GL (over 5x its average); ' ELSE '' END ||
+      CASE WHEN cost_type = 'SUBCONTRACT' AND (vendor_name IS NULL OR vendor_name = '')
+           THEN 'Subcontract cost with no vendor named; ' ELSE '' END ||
+      CASE WHEN po_no IS NOT NULL AND po_no <> ''
+                AND po_no NOT IN (SELECT DISTINCT po_no FROM v_service_line
+                                   WHERE project_key = :project_key AND po_no IS NOT NULL AND po_no <> '')
+           THEN 'PO posted, no service-line detail loaded yet; ' ELSE '' END ||
+      CASE WHEN partner_object_type = 'Order' AND partner_object IS NOT NULL AND partner_object <> ''
+                AND partner_object NOT IN (SELECT DISTINCT order_no FROM v_order_line
+                                             WHERE project_key = :project_key AND category = 'WBS'
+                                               AND order_no IS NOT NULL AND order_no <> '')
+           THEN 'Settled order posting, no order-line detail loaded yet; ' ELSE '' END ||
+      CASE WHEN dup_n > 1
+           THEN 'Possible duplicate — same WBS, GL, vendor and amount posted more than once this period; '
+           ELSE '' END,
+      '; ')
+    AS reasons
+  FROM scored
+)
+SELECT
+  wbs_code, wbs_name, cost_type, cost_element_code, cost_element_name,
+  document_no, document_type, period_key, data_date, vendor_name, description,
+  quantity, uom, amount, reasons
+FROM flagged
+WHERE reasons <> ''
+ORDER BY period_key DESC, ABS(amount) DESC`,
   },
   {
     code: 'KPI_PROJECT',
