@@ -680,6 +680,65 @@ GROUP BY status
 ORDER BY pos DESC`,
   },
   {
+    // The PO-level reconciliation (SC_PO_RECONCILIATION) can look "RECONCILED"
+    // while hiding a real timing gap: CJI3 is a batch extract and can lag the
+    // certificate register by a cycle, so the newest certificate under a PO
+    // is often the one not posted yet, not the PO as a whole. Rolling the
+    // certified amount up per invoice, in submission order, and comparing
+    // that running total against the PO's actual cost to date localises the
+    // gap to the specific certificate causing it.
+    code: 'SC_INVOICE_RECONCILIATION',
+    name: 'PO vs invoice reconciliation',
+    module: 'SERVICE',
+    category: 'Reconciliation',
+    description: 'Every certificate (invoice serial) under every PO, with its own certified value, '
+      + 'the running certified total for that PO up to and including it, and whether that running '
+      + 'total is still within what CJI3 has posted for the PO so far. A certificate flagged "not yet '
+      + 'in actual cost" is the one actually causing the PO-level gap, not the PO as a whole.',
+    params: [P_PROJECT],
+    viz: { kind: 'table' },
+    sql: `
+WITH po_actual AS (
+  SELECT po_no, SUM(amount) AS po_actual_amount
+  FROM v_actual
+  WHERE project_key = :project_key AND po_no IS NOT NULL AND po_no <> ''
+  GROUP BY po_no
+),
+invoices AS (
+  SELECT
+    po_no, vendor_name,
+    COALESCE(NULLIF(invoice_serial,''), invoice_no, '(no serial)') AS invoice_serial,
+    invoice_no, period_key,
+    SUM(amount_net)     AS certified_amount,
+    COUNT(*)            AS lines,
+    MAX(progress_pct)   AS progress_pct
+  FROM v_service_line
+  WHERE project_key = :project_key
+  GROUP BY po_no, vendor_name,
+           COALESCE(NULLIF(invoice_serial,''), invoice_no, '(no serial)'), invoice_no, period_key
+),
+running AS (
+  SELECT
+    i.*,
+    SUM(i.certified_amount) OVER (
+      PARTITION BY i.po_no ORDER BY i.period_key, i.invoice_serial
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS certified_cumulative
+  FROM invoices i
+)
+SELECT
+  r.po_no, r.vendor_name, r.invoice_serial, r.invoice_no, r.period_key,
+  r.lines, r.progress_pct, r.certified_amount, r.certified_cumulative,
+  COALESCE(pa.po_actual_amount,0) AS po_actual_amount,
+  CASE WHEN r.certified_cumulative > COALESCE(pa.po_actual_amount,0) + 1 THEN 1 ELSE 0 END AS not_yet_posted,
+  CASE WHEN r.certified_cumulative > COALESCE(pa.po_actual_amount,0) + 1
+       THEN 'Not yet in actual cost (CJI3 lag)'
+       ELSE 'Posted' END AS status
+FROM running r
+LEFT JOIN po_actual pa ON pa.po_no = r.po_no
+ORDER BY r.po_no, r.period_key, r.invoice_serial`,
+  },
+  {
     code: 'REVENUE_BY_WBS',
     name: 'Revenue by WBS',
     module: 'CROSS',

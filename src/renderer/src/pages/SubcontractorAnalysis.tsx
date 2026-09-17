@@ -10,9 +10,10 @@ import type { QueryResult } from '@shared/types';
 
 /**
  * Assembles queries that already existed (KPI_SUBCONTRACT, SC_BY_SUPPLIER,
- * SC_BY_CATEGORY, SC_PO_RECONCILIATION) with two new ones (SC_MONTHLY_TREND,
- * SC_RECONCILIATION_STATUS) into one screen, instead of picking them one at a
- * time in Analysis. Every number is still a stored query's own result set.
+ * SC_BY_CATEGORY, SC_PO_RECONCILIATION) with three new ones (SC_MONTHLY_TREND,
+ * SC_RECONCILIATION_STATUS, SC_INVOICE_RECONCILIATION) into one screen,
+ * instead of picking them one at a time in Analysis. Every number is still a
+ * stored query's own result set.
  */
 export function SubcontractorAnalysis() {
   const { projectKey, project, dataVersion } = useApp();
@@ -22,7 +23,10 @@ export function SubcontractorAnalysis() {
   const [trend, setTrend] = useState<QueryResult | null>(null);
   const [status, setStatus] = useState<QueryResult | null>(null);
   const [reconciliation, setReconciliation] = useState<QueryResult | null>(null);
+  const [invoices, setInvoices] = useState<QueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [savedTo, setSavedTo] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -30,7 +34,7 @@ export function SubcontractorAnalysis() {
         setError(null);
         if (!projectKey) {
           setKpi(null); setByVendor(null); setByCategory(null);
-          setTrend(null); setStatus(null); setReconciliation(null);
+          setTrend(null); setStatus(null); setReconciliation(null); setInvoices(null);
           return;
         }
         const p = { project_key: projectKey };
@@ -40,6 +44,7 @@ export function SubcontractorAnalysis() {
         setTrend(await call(api.queries.run('SC_MONTHLY_TREND', p)));
         setStatus(await call(api.queries.run('SC_RECONCILIATION_STATUS', p)));
         setReconciliation(await call(api.queries.run('SC_PO_RECONCILIATION', p)));
+        setInvoices(await call(api.queries.run('SC_INVOICE_RECONCILIATION', p)));
       } catch (e) { setError((e as Error).message); }
     })();
   }, [projectKey, dataVersion]);
@@ -50,15 +55,45 @@ export function SubcontractorAnalysis() {
     ? byVendor.rows.slice(0, 3).reduce((s, r) => s + Number(r.pct_of_total ?? 0), 0)
     : null;
 
+  // Same idea for invoices: a count and value already computed in SQL
+  // (not_yet_posted), just rolled up here rather than re-queried.
+  const lagging = invoices ? invoices.rows.filter((r) => Number(r.not_yet_posted) === 1) : [];
+  const laggingValue = lagging.reduce((s, r) => s + Number(r.certified_amount ?? 0), 0);
+
+  const exportTable = (result: QueryResult | null, title: string, subtitle: string) => async () => {
+    if (!result) return;
+    setBusy(true); setError(null); setSavedTo(null);
+    try {
+      setSavedTo(await call(api.exportResult(result, {
+        title, subtitle, context: { Project: project?.project_code },
+      })));
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
+
   return (
     <>
       {error && <div className="banner err">{error}</div>}
+      {savedTo && (
+        <div className="banner ok">
+          Exported to <span className="mono">{savedTo}</span>
+          <button className="btn sm ghost" style={{ marginLeft: 10 }} onClick={() => api.showItem(savedTo)}>Show in folder</button>
+        </div>
+      )}
 
       {kpi && <KpiStrip headline={kpi} currency={project?.currency_code ?? ''} />}
 
       {top3Share !== null && (
         <div className="banner info">
           The top 3 suppliers account for <strong>{top3Share.toFixed(1)}%</strong> of certified subcontract work.
+        </div>
+      )}
+
+      {lagging.length > 0 && (
+        <div className="banner warn">
+          <strong>{lagging.length}</strong> certificate{lagging.length === 1 ? '' : 's'} worth{' '}
+          <strong>{laggingValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong> look
+          {lagging.length === 1 ? 's' : ''} certified but not yet reflected in actual cost — see "PO
+          vs invoice" below for which ones.
         </div>
       )}
 
@@ -105,12 +140,44 @@ export function SubcontractorAnalysis() {
 
       {reconciliation && (
         <div className="card">
-          <h3>PO reconciliation detail</h3>
-          <p className="hint">
-            Every purchase order — actual cost against certified service-line value — sorted by the
-            size of its unreconciled gap. This is the "needs attention" list.
-          </p>
+          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <h3>PO reconciliation detail</h3>
+              <p className="hint">
+                Every purchase order — actual cost against certified service-line value — sorted by
+                the size of its unreconciled gap. This is the "needs attention" list.
+              </p>
+            </div>
+            <button className="btn sm" disabled={busy || !reconciliation.rowCount}
+                    onClick={exportTable(reconciliation, 'PO reconciliation',
+                      'Actual cost vs certified service-line value, per purchase order.')}>
+              ⤓ Excel
+            </button>
+          </div>
           <DataTable result={reconciliation} signColumns={['difference']} />
+        </div>
+      )}
+
+      {invoices && (
+        <div className="card">
+          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <h3>PO vs invoice</h3>
+              <p className="hint">
+                Every certificate under every PO, in submission order, with its own certified value and
+                the running certified total for that PO. CJI3 is a batch extract and can lag the
+                certificate register by a cycle — when the running total passes what has actually been
+                posted for the PO, the newest certificate(s) causing that are flagged, not the whole PO.
+              </p>
+            </div>
+            <button className="btn sm" disabled={busy || !invoices.rowCount}
+                    onClick={exportTable(invoices, 'PO vs invoice reconciliation',
+                      'Certified value per certificate, running total per PO, against actual cost posted so far.')}>
+              ⤓ Excel
+            </button>
+          </div>
+          <DataTable result={invoices} signColumns={[]} flagColumn="not_yet_posted"
+            flagLabel="This certificate's running total for the PO is ahead of what CJI3 has posted so far — likely not yet reflected in actual cost." />
         </div>
       )}
     </>
