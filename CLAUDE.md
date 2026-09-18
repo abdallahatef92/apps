@@ -1,7 +1,36 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # Working on this repository
 
 Cost Intelligence — an Electron + React + SQLite desktop app for project cost control.
 Read `README.md` first for the data model and the reasoning behind it.
+
+## Commands
+
+```bash
+npm run dev              # Electron app in development (hot reload)
+npm run demo:seed -- <path-to-db>   # write a synthetic demo database for manual UI testing
+npm run typecheck        # tsc over both main and renderer, no emit
+npm run db:check         # headless schema/query smoke test — no display needed, fast
+npm run test:e2e         # the SAP-shaped fixture pipeline (staging → post → reconciliation)
+npm test                 # db:check + test:e2e — what CI/before-push actually runs
+npm run build            # typecheck + electron-vite build
+```
+
+Focused checks for one behaviour at a time, each faster than the full `npm test` and useful
+while iterating on that specific area (all under `scripts/run-under-electron.mjs`, no display):
+
+```bash
+npm run check:split      # a report split across two overlapping extracts merges, not accumulates
+npm run check:unified    # UNIFIED_COST_REGISTER's Detail Substitution merge (PO + order exclusion)
+npm run check:partner    # partner_object_type/partner_object capture off a CJI3 posting
+npm run check:order      # internal-order settlement → fact_order_line / v_order_line
+```
+
+`npm run load:real -- <db> <cji3> <subcontractor> <wbs-tree>` loads genuine extracts and prints
+the reconciliation. The files are not in the repo, so this is a manual check.
 
 ## Non-negotiables
 
@@ -138,16 +167,66 @@ file.
 Modules are rows in `module_type`, not a CHECK constraint, so a new module needs a seed
 row and a branch in `postBatch` — no table rebuild.
 
+## Renderer architecture
+
+Pages live in `src/renderer/src/pages/` and are wired in exactly two places in `App.tsx`:
+the `PAGES` array (nav entry, glyph, subtitle) and the `page === '...'` switch in the
+`content` div. Both need updating to add a page — there is no router.
+
+`useApp()` (defined in `App.tsx`) is the only way a page reaches shared state: `projectKey`
+/ `project` (the picker in the top bar), and `dataVersion` — bumped by `touch()` after a
+successful import, which is how a page knows to re-run its queries without a manual
+refresh. A page that fetches once in a plain `useEffect(() => ..., [])` will go stale after
+the next import; depend on `[projectKey, dataVersion]` instead.
+
+Two established page shapes — reuse one rather than inventing a third:
+- **Single-query explorer** (`Analysis.tsx`, `QueryLibrary.tsx`): pick one stored query,
+  render it via chart/table/SQL tabs. This is what `query_library.viz_json` is for.
+- **Assembled dashboard** (`Dashboard.tsx`, `SubcontractorAnalysis.tsx`,
+  `MaterialAnalysis.tsx`): several stored queries fetched into one screen — a `<KpiStrip>`
+  (renders every column of a single-row headline query generically, so a new KPI is a SQL
+  change, not a component change), a couple of charts, a `<DataTable>` detail table. Reach
+  for this shape for a new "insights + details" report.
+
+`Reports.tsx` is the one bespoke page (a collapsible cost-type/GL/WBS pivot with sortable
+columns and a shared filter bar) — copy its patterns only when the data is genuinely
+tree-shaped; a flat KPI+chart+table screen belongs in the assembled-dashboard shape above.
+
+Chart components (`src/renderer/src/charts/`: `BarChart`, `Treemap`, `LineChart`,
+`Heatmap`, `Sparkline`) and `<DataTable>` all take a `QueryResult` plus column names, never
+a plain array — this is what keeps "aggregation belongs in SQL" true on the frontend too.
+`DataTable` already has free-text filtering, click-to-sort, a `signColumns` prop (red/green
+by sign) and a `flagColumn` prop (a 0/1 column that tints the row and hides itself from the
+rendered table) — use these instead of building bespoke table chrome.
+
+## Explainable anomaly detection
+
+`ANOMALY_TRANSACTIONS` and `MATERIAL_RATE_OUTLIERS` (in `systemQueries.ts`) are the
+pattern for "flag this for review": every check is a plain SQL predicate over a baseline
+computed with a window function (e.g. `AVG(ABS(amount)) OVER (PARTITION BY cost_element_code)`,
+with a minimum-sample-size guard so a thin GL doesn't flag itself) — never a black-box
+score. The query concatenates every predicate that fired into one `reasons` string per row,
+and the page's own hint text lists the checks in plain language. Add a new check as another
+`CASE WHEN ... THEN '<reason>; ' ELSE '' END ||` branch, not a separate feature.
+
+## A query-runner gotcha worth knowing before you debug it again
+
+The generic query runner (`coerce()` in `src/main/services/queryRunner.ts`) binds a
+numeric-looking string parameter (e.g. a GL code like `"30301100"`) as a number so it can
+match an INTEGER primary key. That silently breaks an equality filter against a TEXT column
+holding the same digits — SQLite's better-sqlite3 binding renders the number back with a
+trailing `.0`, so `cost_element_code = :code` never matches. The fix used in
+`COST_BY_TYPE_GL_TXN` is to compare against both the raw parameter and a round-tripped
+`CAST(CAST(:code AS INTEGER) AS TEXT)` — the second branch recovers the numeric case and is
+a harmless no-op for a genuinely alphanumeric code.
+
 ## Before you push
 
 ```bash
 npm run typecheck && npm test && npm run build
 ```
 
-`npm test` needs no display. Its fixtures live in `tests/makeFixtures.ts` — extend them
-when you add parsing behaviour, and assert the resulting numbers, not just row counts.
-The SAP-shaped fixtures reproduce the real traps (subtotal rows, income postings, the
-Title/Description swap, the PO sub-ledger); keep them that way.
-
-`npm run load:real -- <db> <cji3> <subcontractor> <wbs-tree>` loads genuine extracts and
-prints the reconciliation. The files are not in the repo, so this is a manual check.
+`npm test`'s fixtures live in `tests/makeFixtures.ts` — extend them when you add parsing
+behaviour, and assert the resulting numbers, not just row counts. The SAP-shaped fixtures
+reproduce the real traps (subtotal rows, income postings, the Title/Description swap, the
+PO sub-ledger); keep them that way.
