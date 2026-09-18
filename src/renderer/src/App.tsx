@@ -10,6 +10,7 @@ import { QueryLibrary } from './pages/QueryLibrary';
 import { DataRegister } from './pages/DataRegister';
 import { Settings } from './pages/Settings';
 import { SchemaDiagram } from './pages/SchemaDiagram';
+import { PivotBuilder } from './pages/PivotBuilder';
 
 export interface ProjectRow {
   project_key: number;
@@ -36,20 +37,30 @@ export const useApp = (): AppState => {
   return v;
 };
 
-type PageId = 'dashboard' | 'upload' | 'analysis' | 'reports' | 'subcontractor' | 'material' | 'queries' | 'register' | 'schema' | 'settings';
+type PageId = 'dashboard' | 'upload' | 'analysis' | 'reports' | 'subcontractor' | 'material'
+  | 'queries' | 'register' | 'schema' | 'pivot' | 'settings';
 
+/**
+ * Groups double as nav sections and as the collapse unit below — "Advanced"
+ * bundles the power-user/dev tools (raw SQL, free-form pivot, the schema
+ * diagram) that the everyday "log data, see actual cost" workflow never
+ * needs, so they start collapsed rather than sitting next to Reports/Settings.
+ */
 const PAGES: { id: PageId; label: string; glyph: string; group: string; subtitle: string }[] = [
   { id: 'dashboard', label: 'Dashboard', glyph: '◈', group: 'Overview', subtitle: 'Portfolio position and data freshness' },
   { id: 'upload', label: 'Upload data', glyph: '↥', group: 'Data', subtitle: 'Bring a report in, map it, review it, post it' },
   { id: 'register', label: 'Data register', glyph: '▤', group: 'Data', subtitle: 'Every import, its data date and audit trail' },
-  { id: 'analysis', label: 'Analysis', glyph: '◨', group: 'Reporting', subtitle: 'Run a saved analysis and export it' },
-  { id: 'reports', label: 'Reports', glyph: '▦', group: 'Reporting', subtitle: 'Cost type by GL by month, and the transactions behind it' },
-  { id: 'subcontractor', label: 'Subcontractor Analysis', glyph: '▨', group: 'Reporting', subtitle: 'Certified work, supplier concentration and PO reconciliation' },
-  { id: 'material', label: 'Material Analysis', glyph: '▩', group: 'Reporting', subtitle: 'Material spend by GL, WBS and vendor, with rate outliers' },
-  { id: 'queries', label: 'Query library', glyph: '⌗', group: 'Reporting', subtitle: 'The SQL behind every report, stored in the database' },
-  { id: 'schema', label: 'Schema diagram', glyph: '⛓', group: 'Admin', subtitle: 'How the tables in the database relate to each other' },
+  { id: 'reports', label: 'Reports', glyph: '▦', group: 'Reports', subtitle: 'Cost type by GL by month, and the transactions behind it' },
+  { id: 'subcontractor', label: 'Subcontractor Analysis', glyph: '▨', group: 'Reports', subtitle: 'Certified work, supplier concentration and PO reconciliation' },
+  { id: 'material', label: 'Material Analysis', glyph: '▩', group: 'Reports', subtitle: 'Material spend by GL, WBS and vendor, with rate outliers' },
+  { id: 'analysis', label: 'Analysis', glyph: '◨', group: 'Advanced', subtitle: 'Run a saved analysis and export it' },
+  { id: 'pivot', label: 'Pivot builder', glyph: '⊞', group: 'Advanced', subtitle: 'Build a free-form cross-tab from any view' },
+  { id: 'queries', label: 'Query library', glyph: '⌗', group: 'Advanced', subtitle: 'The SQL behind every report, stored in the database' },
+  { id: 'schema', label: 'Schema diagram', glyph: '⛓', group: 'Advanced', subtitle: 'How the tables in the database relate to each other' },
   { id: 'settings', label: 'Settings', glyph: '⚙', group: 'Admin', subtitle: 'Projects, database and backups' },
 ];
+const COLLAPSIBLE_GROUP = 'Advanced';
+const ADVANCED_OPEN_KEY = 'ci.nav.advancedOpen';
 
 export default function App() {
   const [page, setPage] = useState<PageId>('dashboard');
@@ -57,6 +68,9 @@ export default function App() {
   const [projectKey, setProjectKey] = useState<number | null>(null);
   const [dataVersion, setDataVersion] = useState(0);
   const [info, setInfo] = useState<{ version: string; dbPath: string } | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(() => {
+    try { return localStorage.getItem(ADVANCED_OPEN_KEY) === '1'; } catch { return false; }
+  });
 
   const refresh = useCallback(async () => {
     const rows = await call(api.projects.list());
@@ -95,21 +109,46 @@ export default function App() {
           </div>
 
           <nav className="nav">
-            {groups.map((g) => (
-              <div key={g}>
-                <div className="nav-group">{g}</div>
-                {PAGES.filter((p) => p.group === g).map((p) => (
-                  <button
-                    key={p.id}
-                    className={`nav-item ${page === p.id ? 'active' : ''}`}
-                    onClick={() => setPage(p.id)}
-                  >
-                    <span className="glyph">{p.glyph}</span>
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-            ))}
+            {groups.map((g) => {
+              const collapsible = g === COLLAPSIBLE_GROUP;
+              const open = !collapsible || advancedOpen;
+              return (
+                <div key={g}>
+                  {collapsible ? (
+                    <button
+                      className="nav-group"
+                      style={{ display: 'flex', alignItems: 'center', width: '100%', cursor: 'pointer',
+                               background: 'none', border: 0, padding: '0 10px' }}
+                      onClick={() => {
+                        const next = !advancedOpen;
+                        setAdvancedOpen(next);
+                        try { localStorage.setItem(ADVANCED_OPEN_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+                      }}
+                    >
+                      <span style={{ marginRight: 6, fontSize: 9 }}>{open ? '▾' : '▸'}</span>
+                      {g}
+                    </button>
+                  ) : (
+                    <div className="nav-group">{g}</div>
+                  )}
+                  {collapsible && open && (
+                    <div className="hint" style={{ padding: '0 10px', marginBottom: 6, fontSize: 11 }}>
+                      SQL, pivot tables and the schema — for building new reports.
+                    </div>
+                  )}
+                  {open && PAGES.filter((p) => p.group === g).map((p) => (
+                    <button
+                      key={p.id}
+                      className={`nav-item ${page === p.id ? 'active' : ''}`}
+                      onClick={() => setPage(p.id)}
+                    >
+                      <span className="glyph">{p.glyph}</span>
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              );
+            })}
           </nav>
 
           <div className="sidebar-foot">
@@ -152,6 +191,7 @@ export default function App() {
             {page === 'material' && <MaterialAnalysis />}
             {page === 'queries' && <QueryLibrary />}
             {page === 'schema' && <SchemaDiagram />}
+            {page === 'pivot' && <PivotBuilder />}
             {page === 'settings' && <Settings />}
           </div>
         </main>

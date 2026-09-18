@@ -4,7 +4,6 @@ import { api, call } from '../lib/api';
 import { DataTable } from '../components/DataTable';
 import { KpiStrip } from '../components/KpiStrip';
 import { VizPanel, vizRenders } from '../components/VizPanel';
-import { Pivot } from '../components/Pivot';
 import type { QueryResult, StoredQuery, VizSpec } from '@shared/types';
 
 interface ParamDef {
@@ -25,7 +24,6 @@ export function Analysis() {
   const { projectKey, project, dataVersion } = useApp();
   const [queries, setQueries] = useState<StoredQuery[]>([]);
   const [code, setCode] = useState<string>('BVA_BY_WBS');
-  const [pivotMode, setPivotMode] = useState(false);
   const [params, setParams] = useState<Record<string, string>>({});
   const [result, setResult] = useState<QueryResult | null>(null);
   const [headline, setHeadline] = useState<QueryResult | null>(null);
@@ -87,11 +85,11 @@ export function Analysis() {
     } finally { setBusy(false); }
   };
 
-  useEffect(() => { if (query && !pivotMode && !awaitingPeriod) run(); },
+  useEffect(() => { if (query && !awaitingPeriod) run(); },
     // Deliberately not depending on `awaitingPeriod`/`params`: typing into a period
     // field must not fire a run on every keystroke — Apply/Refresh do that explicitly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [code, projectKey, dataVersion, queries.length, pivotMode]);
+    [code, projectKey, dataVersion, queries.length]);
 
   // Selecting a different query (or project) invalidates whatever is on screen —
   // otherwise a gated query would keep showing the previous query's leftover result.
@@ -130,17 +128,13 @@ export function Analysis() {
         <input placeholder="Search analyses…" value={search} style={{ width: '100%', marginBottom: 10 }}
                onChange={(e) => setSearch(e.target.value)} />
 
-        <button className={`nav-item ${pivotMode ? 'active' : ''}`} onClick={() => setPivotMode(true)}>
-          <span className="glyph">⊞</span> Pivot builder
-        </button>
-
         {groups.map(([label, list]) => (
           <div key={label}>
             <div className="nav-group" style={{ padding: '0 10px' }}>{label}</div>
             {list.map((q) => (
               <button key={q.code} title={q.description ?? ''}
-                      className={`nav-item ${!pivotMode && code === q.code ? 'active' : ''}`}
-                      onClick={() => { setPivotMode(false); setCode(q.code); setParams({}); }}>
+                      className={`nav-item ${code === q.code ? 'active' : ''}`}
+                      onClick={() => { setCode(q.code); setParams({}); }}>
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {q.name}
                 </span>
@@ -162,9 +156,7 @@ export function Analysis() {
           </div>
         )}
 
-        {pivotMode ? (
-          <Pivot onError={setError} />
-        ) : !query ? (
+        {!query ? (
           <div className="card"><div className="empty">Pick an analysis.</div></div>
         ) : (
           <>
