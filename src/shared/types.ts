@@ -258,3 +258,27 @@ export interface CostTypeAssignment {
   document_type: string;
   cost_type: CostType | null;
 }
+
+export interface SchemaColumn {
+  name: string;
+  type: string;
+  notNull: boolean;
+  isPk: boolean;
+}
+
+export interface SchemaForeignKey {
+  column: string;
+  refTable: string;
+  refColumn: string;
+}
+
+export interface SchemaTable {
+  name: string;
+  columns: SchemaColumn[];
+  foreignKeys: SchemaForeignKey[];
+}
+
+/** Base-table introspection (via sqlite_master + PRAGMA), for the schema diagram page. */
+export interface SchemaDescription {
+  tables: SchemaTable[];
+}

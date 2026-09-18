@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { IpcResult } from '../shared/types';
+import type { IpcResult, SchemaDescription } from '../shared/types';
 
 /**
  * The renderer never touches Node or the database directly; everything goes
@@ -70,6 +70,9 @@ const api = {
   pivot: {
     meta: () => invoke<any[]>('pivot:meta'),
     build: (req: unknown) => invoke<string>('pivot:build', req),
+  },
+  schema: {
+    describe: () => invoke<SchemaDescription>('schema:describe'),
   },
   exportResult: (result: unknown, meta: unknown) => invoke<string | null>('export:result', result, meta),
   showItem: (filePath: string) => invoke<void>('shell:showItem', filePath),

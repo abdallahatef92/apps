@@ -9,7 +9,7 @@ import { buildPivotSql, pivotMeta, type PivotRequest } from './services/pivot';
 import { readWorkbook } from './ingest/workbook';
 import { deleteBatch, loadColumnMapping, postBatch, revenueAccountPattern, saveColumnMapping, stageFile } from './ingest/importer';
 import { suggestMapping, targetFields } from './ingest/targetFields';
-import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, IpcResult, Module, QueryResult, StageRequest } from '../shared/types';
+import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, IpcResult, Module, QueryResult, SchemaDescription, SchemaTable, StageRequest } from '../shared/types';
 
 /** Wrap a handler so the renderer always gets {ok,data} | {ok,error} instead of a rejection. */
 function handle<T>(channel: string, fn: (...args: any[]) => T | Promise<T>): void {
@@ -324,6 +324,25 @@ export function registerIpc(): void {
   // --- pivot ---------------------------------------------------------------
   handle('pivot:meta', () => pivotMeta());
   handle('pivot:build', (req: PivotRequest) => buildPivotSql(req));
+
+  // --- schema ----------------------------------------------------------------
+  handle('schema:describe', (): SchemaDescription => {
+    const conn = getDb();
+    const tableNames = (conn.prepare(
+      `SELECT name FROM sqlite_master
+       WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'schema_migration'
+       ORDER BY name`).all() as { name: string }[]).map((r) => r.name);
+
+    const tables: SchemaTable[] = tableNames.map((name) => ({
+      name,
+      columns: (conn.prepare(`PRAGMA table_info(${name})`).all() as any[])
+        .map((c) => ({ name: c.name, type: c.type, notNull: !!c.notnull, isPk: c.pk > 0 })),
+      foreignKeys: (conn.prepare(`PRAGMA foreign_key_list(${name})`).all() as any[])
+        .map((f) => ({ column: f.from, refTable: f.table, refColumn: f.to })),
+    }));
+
+    return { tables };
+  });
 
   // --- export --------------------------------------------------------------
   handle('export:result', async (result: QueryResult, meta: { title: string; subtitle?: string;

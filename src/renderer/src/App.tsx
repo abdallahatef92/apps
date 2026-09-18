@@ -9,6 +9,7 @@ import { MaterialAnalysis } from './pages/MaterialAnalysis';
 import { QueryLibrary } from './pages/QueryLibrary';
 import { DataRegister } from './pages/DataRegister';
 import { Settings } from './pages/Settings';
+import { SchemaDiagram } from './pages/SchemaDiagram';
 
 export interface ProjectRow {
   project_key: number;
@@ -35,7 +36,7 @@ export const useApp = (): AppState => {
   return v;
 };
 
-type PageId = 'dashboard' | 'upload' | 'analysis' | 'reports' | 'subcontractor' | 'material' | 'queries' | 'register' | 'settings';
+type PageId = 'dashboard' | 'upload' | 'analysis' | 'reports' | 'subcontractor' | 'material' | 'queries' | 'register' | 'schema' | 'settings';
 
 const PAGES: { id: PageId; label: string; glyph: string; group: string; subtitle: string }[] = [
   { id: 'dashboard', label: 'Dashboard', glyph: '◈', group: 'Overview', subtitle: 'Portfolio position and data freshness' },
@@ -46,6 +47,7 @@ const PAGES: { id: PageId; label: string; glyph: string; group: string; subtitle
   { id: 'subcontractor', label: 'Subcontractor Analysis', glyph: '▨', group: 'Reporting', subtitle: 'Certified work, supplier concentration and PO reconciliation' },
   { id: 'material', label: 'Material Analysis', glyph: '▩', group: 'Reporting', subtitle: 'Material spend by GL, WBS and vendor, with rate outliers' },
   { id: 'queries', label: 'Query library', glyph: '⌗', group: 'Reporting', subtitle: 'The SQL behind every report, stored in the database' },
+  { id: 'schema', label: 'Schema diagram', glyph: '⛓', group: 'Admin', subtitle: 'How the tables in the database relate to each other' },
   { id: 'settings', label: 'Settings', glyph: '⚙', group: 'Admin', subtitle: 'Projects, database and backups' },
 ];
 
@@ -149,6 +151,7 @@ export default function App() {
             {page === 'subcontractor' && <SubcontractorAnalysis />}
             {page === 'material' && <MaterialAnalysis />}
             {page === 'queries' && <QueryLibrary />}
+            {page === 'schema' && <SchemaDiagram />}
             {page === 'settings' && <Settings />}
           </div>
         </main>

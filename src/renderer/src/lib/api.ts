@@ -1,4 +1,4 @@
-import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, IpcResult, PivotSource } from '@shared/types';
+import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, IpcResult, PivotSource, SchemaDescription } from '@shared/types';
 
 // Shape exposed by the preload bridge.
 type Bridge = {
@@ -45,6 +45,7 @@ type Bridge = {
     meta(): Promise<IpcResult<PivotSource[]>>;
     build(req: unknown): Promise<IpcResult<string>>;
   };
+  schema: { describe(): Promise<IpcResult<SchemaDescription>> };
   exportResult(result: unknown, meta: unknown): Promise<IpcResult<string | null>>;
   showItem(p: string): Promise<IpcResult<void>>;
 };
