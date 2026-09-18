@@ -6,6 +6,7 @@ import { Treemap } from '../charts/Treemap';
 import { LineChart } from '../charts/LineChart';
 import { DataTable } from '../components/DataTable';
 import { KpiStrip } from '../components/KpiStrip';
+import { SheetTabs } from '../components/SheetTabs';
 import type { QueryResult } from '@shared/types';
 
 /**
@@ -97,89 +98,99 @@ export function SubcontractorAnalysis() {
         </div>
       )}
 
-      <div className="grid k2">
-        {byVendor && byVendor.rows.length > 0 && (
-          <div className="card">
-            <h3>Certified work by supplier</h3>
-            <p className="hint">Net certified value per subcontractor, largest first.</p>
-            <BarChart result={byVendor} labelColumn="supplier" valueColumn="work_done_net" limit={8} />
-          </div>
-        )}
-        {byCategory && byCategory.rows.length > 0 && (
-          <div className="card">
-            <h3>Work by category</h3>
-            <p className="hint">Certified value by the work category named on the certificate.</p>
-            <Treemap result={byCategory} labelColumn="category" sizeColumn="work_done_net" height={280} />
-          </div>
-        )}
-      </div>
+      <SheetTabs sheets={[
+        {
+          id: 'overview', label: 'Overview', content: (
+            <>
+              <div className="grid k2">
+                {byVendor && byVendor.rows.length > 0 && (
+                  <div className="card">
+                    <h3>Certified work by supplier</h3>
+                    <p className="hint">Net certified value per subcontractor, largest first.</p>
+                    <BarChart result={byVendor} labelColumn="supplier" valueColumn="work_done_net" limit={8} />
+                  </div>
+                )}
+                {byCategory && byCategory.rows.length > 0 && (
+                  <div className="card">
+                    <h3>Work by category</h3>
+                    <p className="hint">Certified value by the work category named on the certificate.</p>
+                    <Treemap result={byCategory} labelColumn="category" sizeColumn="work_done_net" height={280} />
+                  </div>
+                )}
+              </div>
 
-      {trend && trend.rows.length > 0 && (
-        <div className="card">
-          <h3>Certified vs actual</h3>
-          <p className="hint">
-            Cumulative certified subcontract work against the matching actual cost (postings carrying
-            a PO). A gap that widens over time is a certificate not yet loaded, or cost posted ahead
-            of certification.
-          </p>
-          <LineChart result={trend} xColumn="period_key" height={280}
-            series={[
-              { column: 'actual_cum', label: 'Actual (PO postings, cum.)' },
-              { column: 'certified_cum', label: 'Certified (cum.)' },
-            ]} />
-        </div>
-      )}
+              {trend && trend.rows.length > 0 && (
+                <div className="card">
+                  <h3>Certified vs actual</h3>
+                  <p className="hint">
+                    Cumulative certified subcontract work against the matching actual cost (postings carrying
+                    a PO). A gap that widens over time is a certificate not yet loaded, or cost posted ahead
+                    of certification.
+                  </p>
+                  <LineChart result={trend} xColumn="period_key" height={280}
+                    series={[
+                      { column: 'actual_cum', label: 'Actual (PO postings, cum.)' },
+                      { column: 'certified_cum', label: 'Certified (cum.)' },
+                    ]} />
+                </div>
+              )}
 
-      {status && status.rows.length > 0 && (
-        <div className="card">
-          <h3>Reconciliation status</h3>
-          <p className="hint">How many purchase orders fall into each status, by count.</p>
-          <BarChart result={status} labelColumn="status" valueColumn="pos" />
-        </div>
-      )}
-
-      {reconciliation && (
-        <div className="card">
-          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <div>
-              <h3>PO reconciliation detail</h3>
-              <p className="hint">
-                Every purchase order — actual cost against certified service-line value — sorted by
-                the size of its unreconciled gap. This is the "needs attention" list.
-              </p>
+              {status && status.rows.length > 0 && (
+                <div className="card">
+                  <h3>Reconciliation status</h3>
+                  <p className="hint">How many purchase orders fall into each status, by count.</p>
+                  <BarChart result={status} labelColumn="status" valueColumn="pos" />
+                </div>
+              )}
+            </>
+          ),
+        },
+        {
+          id: 'reconciliation', label: 'PO Reconciliation', content: reconciliation && (
+            <div className="card">
+              <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <h3>PO reconciliation detail</h3>
+                  <p className="hint">
+                    Every purchase order — actual cost against certified service-line value — sorted by
+                    the size of its unreconciled gap. This is the "needs attention" list.
+                  </p>
+                </div>
+                <button className="btn sm" disabled={busy || !reconciliation.rowCount}
+                        onClick={exportTable(reconciliation, 'PO reconciliation',
+                          'Actual cost vs certified service-line value, per purchase order.')}>
+                  ⤓ Excel
+                </button>
+              </div>
+              <DataTable result={reconciliation} signColumns={['difference']} />
             </div>
-            <button className="btn sm" disabled={busy || !reconciliation.rowCount}
-                    onClick={exportTable(reconciliation, 'PO reconciliation',
-                      'Actual cost vs certified service-line value, per purchase order.')}>
-              ⤓ Excel
-            </button>
-          </div>
-          <DataTable result={reconciliation} signColumns={['difference']} />
-        </div>
-      )}
-
-      {invoices && (
-        <div className="card">
-          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <div>
-              <h3>PO vs invoice</h3>
-              <p className="hint">
-                Every certificate under every PO, in submission order, with its own certified value and
-                the running certified total for that PO. CJI3 is a batch extract and can lag the
-                certificate register by a cycle — when the running total passes what has actually been
-                posted for the PO, the newest certificate(s) causing that are flagged, not the whole PO.
-              </p>
+          ),
+        },
+        {
+          id: 'invoices', label: 'PO vs Invoice', content: invoices && (
+            <div className="card">
+              <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <h3>PO vs invoice</h3>
+                  <p className="hint">
+                    Every certificate under every PO, in submission order, with its own certified value and
+                    the running certified total for that PO. CJI3 is a batch extract and can lag the
+                    certificate register by a cycle — when the running total passes what has actually been
+                    posted for the PO, the newest certificate(s) causing that are flagged, not the whole PO.
+                  </p>
+                </div>
+                <button className="btn sm" disabled={busy || !invoices.rowCount}
+                        onClick={exportTable(invoices, 'PO vs invoice reconciliation',
+                          'Certified value per certificate, running total per PO, against actual cost posted so far.')}>
+                  ⤓ Excel
+                </button>
+              </div>
+              <DataTable result={invoices} signColumns={[]} flagColumn="not_yet_posted"
+                flagLabel="This certificate's running total for the PO is ahead of what CJI3 has posted so far — likely not yet reflected in actual cost." />
             </div>
-            <button className="btn sm" disabled={busy || !invoices.rowCount}
-                    onClick={exportTable(invoices, 'PO vs invoice reconciliation',
-                      'Certified value per certificate, running total per PO, against actual cost posted so far.')}>
-              ⤓ Excel
-            </button>
-          </div>
-          <DataTable result={invoices} signColumns={[]} flagColumn="not_yet_posted"
-            flagLabel="This certificate's running total for the PO is ahead of what CJI3 has posted so far — likely not yet reflected in actual cost." />
-        </div>
-      )}
+          ),
+        },
+      ]} />
     </>
   );
 }

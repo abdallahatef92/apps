@@ -124,7 +124,10 @@ export function QueryLibrary() {
         ))}
       </div>
 
-      <div>
+      {/* min-width: 0 stops this grid column from growing to fit a wide result
+          set — without it, the results table's own scrollbar never kicks in
+          and the whole page scrolls sideways instead. */}
+      <div style={{ minWidth: 0 }}>
         {error && <div className="banner err">{error}</div>}
         {note && <div className="banner ok">{note}</div>}
 

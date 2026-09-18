@@ -1,12 +1,17 @@
 const NUMERIC_HINT = /(amount|budget|actual|forecast|etc|eac|vac|variance|cost|value|qty|quantity|rate|total|cum|overrun|count|rows|days|pct|percent|progress|lines|_no$|_key$)/i;
 const PCT_HINT = /(pct|percent|progress)/i;
-const KEY_HINT = /(_key$|_id$|row_no|top_n)/i;
+const KEY_HINT = /(_key$|_id$|_no$|_code$|row_no|top_n)/i;
 /** Columns that are money and therefore always carry decimals, even when whole. */
 const MONEY_HINT = /(amount|budget|actual|forecast|etc|eac|vac|variance|cost|value|rate|price|cum|overrun|margin|revenue|vat|net|gross)/i;
 
 export function isNumericColumn(name: string, sample: unknown): boolean {
   if (typeof sample === 'number') return true;
   return NUMERIC_HINT.test(name) && sample !== null && !Number.isNaN(Number(sample));
+}
+
+/** A numeric column worth summing into a subtotal — excludes ids/keys, which are numeric but not additive. */
+export function isSummableColumn(name: string, sample: unknown): boolean {
+  return isNumericColumn(name, sample) && !KEY_HINT.test(name);
 }
 
 export function formatCell(name: string, value: unknown): string {

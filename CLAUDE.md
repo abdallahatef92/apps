@@ -197,7 +197,27 @@ Chart components (`src/renderer/src/charts/`: `BarChart`, `Treemap`, `LineChart`
 a plain array — this is what keeps "aggregation belongs in SQL" true on the frontend too.
 `DataTable` already has free-text filtering, click-to-sort, a `signColumns` prop (red/green
 by sign) and a `flagColumn` prop (a 0/1 column that tints the row and hides itself from the
-rendered table) — use these instead of building bespoke table chrome.
+rendered table) — use these instead of building bespoke table chrome. It also owns a
+workbook-style toolbar for free: a "Group by" dropdown auto-populated from the result's own
+non-numeric columns (grouping and the subtotal/grand-total rows it produces are a client-side
+rollup of numbers the query already returned, the same category of operation `Reports.tsx`'s
+`buildTree` does, not a second source of truth for them) and a column-visibility picker. A
+column only ends up in a subtotal if `isSummableColumn` (`lib/format.ts`) says so — numeric-
+looking identifier columns (`_key`, `_id`, `_no`, `_code`) are deliberately excluded from
+summing even though they're right-aligned like numbers, since summing a document number is
+never meaningful. The first visible column is sticky or a wide result. Any container wrapping
+a `<DataTable>` in a CSS grid (like `.split`) must give its own last child `min-width: 0`, or
+the grid track grows to fit the table and the whole page scrolls sideways instead of the table
+scrolling internally — `.split > *:last-child` already carries this rule; copy it onto any new
+grid wrapper that can hold a wide table.
+
+For a page that assembles several related queries into switchable tabs (an "Excel workbook"
+with multiple sheets) rather than one long scroll, use `<SheetTabs>`
+(`src/renderer/src/components/SheetTabs.tsx`) — it takes sheets whose content is already
+fetched up front (same as the assembled-dashboard shape above), so switching tabs never
+re-queries anything. `SubcontractorAnalysis.tsx` and `MaterialAnalysis.tsx` are the reference
+usage: a `<KpiStrip>` and any context banners stay above the tab strip (they're portfolio
+context, not sheet-specific), and the tabs switch only the charts/tables below.
 
 ## Explainable anomaly detection
 

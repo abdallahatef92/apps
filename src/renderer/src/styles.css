@@ -133,7 +133,12 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .topbar .sub { font-size: 12px; color: var(--text-3); margin-top: 1px; }
 .topbar .spacer { flex: 1; }
 
-.content { flex: 1; overflow: auto; padding: 22px 24px 40px; }
+/* min-width: 0 keeps this flex item from growing to fit a wide table's
+   intrinsic width — without it, a wide DataTable's own overflow:auto never
+   kicks in (nothing forces it to be narrower than its content) and the whole
+   page scrolls sideways instead of just the grid, which also defeats the
+   sticky first column below. */
+.content { flex: 1; min-width: 0; overflow: auto; padding: 22px 24px 40px; }
 
 /* ---------- primitives ---------- */
 
@@ -198,6 +203,24 @@ textarea { font-family: var(--mono); font-size: 12.5px; line-height: 1.65; resiz
 .segmented button:hover { color: var(--text); }
 .segmented button.on { background: var(--surface-3); color: var(--text); font-weight: 600; }
 
+/* sheet tabs — Excel-worksheet-style switcher for a multi-table "workbook" page */
+.sheet-tabs { margin-bottom: 14px; }
+.sheet-tabs-strip {
+  display: flex; gap: 2px; overflow-x: auto; border-bottom: 1px solid var(--border);
+  padding-bottom: 0;
+}
+.sheet-tabs-strip button {
+  border: 1px solid transparent; border-bottom: 0; background: none; color: var(--text-3);
+  cursor: pointer; padding: 8px 16px; font-size: 12.5px; white-space: nowrap;
+  border-radius: var(--radius-s) var(--radius-s) 0 0; transition: background .12s, color .12s;
+  margin-bottom: -1px;
+}
+.sheet-tabs-strip button:hover { color: var(--text); background: var(--surface-2); }
+.sheet-tabs-strip button.on {
+  color: var(--text); font-weight: 600; background: var(--surface);
+  border-color: var(--border); border-bottom: 1px solid var(--surface);
+}
+
 .badge {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 2px 8px; border-radius: 5px;
@@ -251,6 +274,26 @@ td.neg { color: #ef8080; }
 td.pos { color: #55d155; }
 
 .empty { padding: 40px; text-align: center; color: var(--text-3); font-size: 13px; }
+
+/* ---------- DataTable: spreadsheet feel (scoped so Reports.tsx's own
+   hand-rolled tables, which share the base table/.table-wrap rules above,
+   are unaffected) ---------- */
+
+.dtable thead th, .dtable tbody td { border-right: 1px solid var(--border-soft); }
+.dtable thead th:last-child, .dtable tbody td:last-child { border-right: 0; }
+.dtable tbody td { padding: 6px 10px; }
+.dtable .sticky-col {
+  position: sticky; left: 0; z-index: 1;
+  background: var(--surface); border-right: 1px solid var(--border);
+}
+.dtable thead th.sticky-col { z-index: 2; background: var(--surface-2); }
+.dtable tbody tr:hover td.sticky-col { background: #1a2433; }
+.dtable .group-row td {
+  background: var(--surface-2); font-weight: 600; border-top: 1px solid var(--border-soft);
+}
+.dtable .group-row:hover td { background: var(--surface-3); }
+.dtable .group-row td.sticky-col { background: var(--surface-2); }
+.dtable .group-row:hover td.sticky-col { background: var(--surface-3); }
 
 /* ---------- steps, banners ---------- */
 
@@ -308,3 +351,8 @@ td.pos { color: #55d155; }
 
 .split { display: grid; grid-template-columns: 268px 1fr; gap: 16px; align-items: start; }
 @media (max-width: 1100px) { .split { grid-template-columns: 1fr; } }
+/* Without this, the canvas column won't shrink below a wide DataTable's
+   intrinsic width (a grid item's default min-width is its content's
+   min-content size) — the results table's own scrollbar never kicks in and
+   the whole page scrolls sideways instead. */
+.split > *:last-child { min-width: 0; }

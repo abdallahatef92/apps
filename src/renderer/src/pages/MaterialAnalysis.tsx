@@ -6,6 +6,7 @@ import { Treemap } from '../charts/Treemap';
 import { LineChart } from '../charts/LineChart';
 import { DataTable } from '../components/DataTable';
 import { KpiStrip } from '../components/KpiStrip';
+import { SheetTabs } from '../components/SheetTabs';
 import type { QueryResult } from '@shared/types';
 
 /**
@@ -53,67 +54,78 @@ export function MaterialAnalysis() {
 
       {kpi && <KpiStrip headline={kpi} currency={project?.currency_code ?? ''} />}
 
-      <div className="grid k2">
-        {byGl && byGl.rows.length > 0 && (
-          <div className="card">
-            <h3>Spend by GL</h3>
-            <p className="hint">Material cost rolled up per account, largest first.</p>
-            <BarChart result={byGl} labelColumn="cost_element_name" valueColumn="amount" limit={8} />
-          </div>
-        )}
-        {byWbs && byWbs.rows.length > 0 && (
-          <div className="card">
-            <h3>Spend by WBS</h3>
-            <p className="hint">Where the material money is going structurally.</p>
-            <Treemap result={byWbs} labelColumn="wbs_name" sizeColumn="amount" codeColumn="wbs_code" height={280} />
-          </div>
-        )}
-      </div>
+      <SheetTabs sheets={[
+        {
+          id: 'overview', label: 'Overview', content: (
+            <>
+              <div className="grid k2">
+                {byGl && byGl.rows.length > 0 && (
+                  <div className="card">
+                    <h3>Spend by GL</h3>
+                    <p className="hint">Material cost rolled up per account, largest first.</p>
+                    <BarChart result={byGl} labelColumn="cost_element_name" valueColumn="amount" limit={8} />
+                  </div>
+                )}
+                {byWbs && byWbs.rows.length > 0 && (
+                  <div className="card">
+                    <h3>Spend by WBS</h3>
+                    <p className="hint">Where the material money is going structurally.</p>
+                    <Treemap result={byWbs} labelColumn="wbs_name" sizeColumn="amount" codeColumn="wbs_code" height={280} />
+                  </div>
+                )}
+              </div>
 
-      {trend && trend.rows.length > 0 && (
-        <div className="card">
-          <h3>Monthly trend</h3>
-          <p className="hint">Material spend per month with a running cumulative total.</p>
-          <LineChart result={trend} xColumn="period_key" height={280} area
-            series={[{ column: 'period_amount', label: 'Spend in period' }]} />
-        </div>
-      )}
+              {trend && trend.rows.length > 0 && (
+                <div className="card">
+                  <h3>Monthly trend</h3>
+                  <p className="hint">Material spend per month with a running cumulative total.</p>
+                  <LineChart result={trend} xColumn="period_key" height={280} area
+                    series={[{ column: 'period_amount', label: 'Spend in period' }]} />
+                </div>
+              )}
 
-      {byVendor && byVendor.rows.length > 0 && (
-        <div className="card">
-          <h3>Spend by vendor</h3>
-          <p className="hint">Supplier concentration reads the same way it does for subcontractors.</p>
-          <BarChart result={byVendor} labelColumn="vendor_name" valueColumn="amount" limit={8} />
-        </div>
-      )}
-
-      {outliers && outliers.rows.length > 0 && (
-        <div className="card">
-          <h3>Unit-rate outliers</h3>
-          <p className="hint">
-            Postings whose unit rate (amount ÷ quantity) is more than 5x its GL's own average rate —
-            a likely pricing error, wrong unit of measure, or a purchase outside the usual supplier
-            agreement. A GL needs at least 5 priced postings before the check applies.
-          </p>
-          <DataTable result={outliers} signColumns={['unit_rate', 'amount']} />
-        </div>
-      )}
-
-      {returns && returns.rows.length > 0 && (
-        <div className="card">
-          <h3>Returns and damages</h3>
-          <p className="hint">Material postings with a negative amount — returns, damages, or a credit against an earlier delivery.</p>
-          <DataTable result={returns} signColumns={['amount']} />
-        </div>
-      )}
-
-      {detail && (
-        <div className="card">
-          <h3>Material postings</h3>
-          <p className="hint">Every material posting, most recent first.</p>
-          <DataTable result={detail} signColumns={['amount']} />
-        </div>
-      )}
+              {byVendor && byVendor.rows.length > 0 && (
+                <div className="card">
+                  <h3>Spend by vendor</h3>
+                  <p className="hint">Supplier concentration reads the same way it does for subcontractors.</p>
+                  <BarChart result={byVendor} labelColumn="vendor_name" valueColumn="amount" limit={8} />
+                </div>
+              )}
+            </>
+          ),
+        },
+        {
+          id: 'outliers', label: 'Rate Outliers', content: outliers && (
+            <div className="card">
+              <h3>Unit-rate outliers</h3>
+              <p className="hint">
+                Postings whose unit rate (amount ÷ quantity) is more than 5x its GL's own average rate —
+                a likely pricing error, wrong unit of measure, or a purchase outside the usual supplier
+                agreement. A GL needs at least 5 priced postings before the check applies.
+              </p>
+              <DataTable result={outliers} signColumns={['unit_rate', 'amount']} />
+            </div>
+          ),
+        },
+        {
+          id: 'returns', label: 'Returns', content: returns && (
+            <div className="card">
+              <h3>Returns and damages</h3>
+              <p className="hint">Material postings with a negative amount — returns, damages, or a credit against an earlier delivery.</p>
+              <DataTable result={returns} signColumns={['amount']} />
+            </div>
+          ),
+        },
+        {
+          id: 'detail', label: 'Detail', content: detail && (
+            <div className="card">
+              <h3>Material postings</h3>
+              <p className="hint">Every material posting, most recent first.</p>
+              <DataTable result={detail} signColumns={['amount']} />
+            </div>
+          ),
+        },
+      ]} />
     </>
   );
 }
