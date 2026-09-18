@@ -16,6 +16,13 @@ export interface QueryParamDef {
   label: string;
   required?: boolean;
   default?: string | number;
+  /**
+   * Set on a period param whose absence makes the query scan unbounded
+   * history — Analysis.tsx won't auto-run the query until it's filled (or
+   * the user explicitly asks to run anyway), so opening a heavy cross-module
+   * report doesn't itself trigger a full-history scan.
+   */
+  warnUnbounded?: boolean;
 }
 
 /**
@@ -1359,8 +1366,9 @@ ORDER BY cost_type, period_key`,
       + 'description, quantity — so nothing is counted twice. A PO or order with no detail loaded '
       + 'yet still shows its CJI3 posting, flagged, so the register never silently drops cost.',
     params: [P_PROJECT,
-      { name: 'period_from', type: 'period', label: 'Period from' },
-      { name: 'period_to', type: 'period', label: 'Period to' }],
+      { name: 'period_from', type: 'period', label: 'Period from', warnUnbounded: true },
+      { name: 'period_to', type: 'period', label: 'Period to', warnUnbounded: true },
+      { name: 'top_n', type: 'int', label: 'Rows', default: 10000 }],
     viz: { kind: 'table' },
     sql: `
 WITH po_with_detail AS (
@@ -1467,7 +1475,13 @@ UNION ALL
 SELECT * FROM detail_lines
 UNION ALL
 SELECT * FROM order_detail
-ORDER BY period_key, source, po_no, reference`,
+-- Caps what better-sqlite3 marshals into JS and ships across IPC. It does not
+-- reduce the scan + per-row cost_type resolution the three CTEs above still
+-- pay in full — narrow period_from/period_to for that. UNIFIED_COST_SUMMARY
+-- deliberately has no LIMIT: its GROUP BY already collapses to a handful of
+-- period rows regardless of how many source rows were scanned.
+ORDER BY period_key, source, po_no, reference
+LIMIT COALESCE(:top_n, 10000)`,
   },
   {
     code: 'UNIFIED_COST_SUMMARY',

@@ -7,7 +7,11 @@ import { VizPanel, vizRenders } from '../components/VizPanel';
 import { Pivot } from '../components/Pivot';
 import type { QueryResult, StoredQuery, VizSpec } from '@shared/types';
 
-interface ParamDef { name: string; type: string; label: string; required?: boolean; default?: string | number }
+interface ParamDef {
+  name: string; type: string; label: string; required?: boolean; default?: string | number;
+  /** Set on a period param whose absence makes the query scan unbounded history — see below. */
+  warnUnbounded?: boolean;
+}
 
 const SIGN_COLUMNS = ['variance_amount', 'vac_amount', 'overrun_amount', 'difference', 'margin', 'margin_cum'];
 const MODULE_LABEL: Record<string, string> = {
@@ -57,6 +61,12 @@ export function Analysis() {
     return out;
   }, [paramDefs, params, projectKey]);
 
+  // A handful of cross-module queries (e.g. the unified cost register) scan
+  // three views' worth of history when their period bound is left blank —
+  // expensive, and not something that should happen the instant the report is
+  // selected. Those params carry warnUnbounded; anything else runs as before.
+  const awaitingPeriod = paramDefs.some((p) => p.warnUnbounded && !effective[p.name]);
+
   const run = async () => {
     if (!query) return;
     setBusy(true); setError(null); setSavedTo(null);
@@ -77,9 +87,15 @@ export function Analysis() {
     } finally { setBusy(false); }
   };
 
-  useEffect(() => { if (query && !pivotMode) run(); },
+  useEffect(() => { if (query && !pivotMode && !awaitingPeriod) run(); },
+    // Deliberately not depending on `awaitingPeriod`/`params`: typing into a period
+    // field must not fire a run on every keystroke — Apply/Refresh do that explicitly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [code, projectKey, dataVersion, queries.length, pivotMode]);
+
+  // Selecting a different query (or project) invalidates whatever is on screen —
+  // otherwise a gated query would keep showing the previous query's leftover result.
+  useEffect(() => { setResult(null); setHeadline(null); setSpark([]); }, [code, projectKey]);
 
   const exportXlsx = async () => {
     if (!result || !query) return;
@@ -204,7 +220,11 @@ export function Analysis() {
               </div>
 
               {!result ? (
-                <div className="empty">{busy ? 'Running…' : 'No result yet.'}</div>
+                <div className="empty">
+                  {busy ? 'Running…'
+                    : awaitingPeriod ? 'This report scans full project history when unbounded — pick a period above and click Apply, or click Refresh to run it anyway.'
+                    : 'No result yet.'}
+                </div>
               ) : tab === 'chart' ? (
                 <VizPanel result={result} viz={viz} />
               ) : tab === 'table' ? (

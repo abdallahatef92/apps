@@ -68,6 +68,11 @@ export function openDatabase(dbPath: string): DB {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   db.pragma('synchronous = NORMAL');
+  // Reporting is scan-heavy (a cross-module reconciliation reads three views'
+  // worth of fact rows); the default ~2MB page cache is undersized for that.
+  db.pragma('cache_size = -64000');   // ~64MB page cache (negative = KB)
+  db.pragma('temp_store = MEMORY');   // keep UNION/ORDER BY temp structures off disk
+  db.pragma('mmap_size = 268435456'); // 256MB mmap read; safe alongside WAL
 
   migrate(db);
   seedSystemQueries(db);
