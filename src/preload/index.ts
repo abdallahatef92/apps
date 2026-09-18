@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { IpcResult, SchemaDescription } from '../shared/types';
+import type { ExportDiagramRequest, IpcResult, SchemaDescription } from '../shared/types';
 
 /**
  * The renderer never touches Node or the database directly; everything goes
@@ -73,6 +73,7 @@ const api = {
   },
   schema: {
     describe: () => invoke<SchemaDescription>('schema:describe'),
+    exportDiagram: (req: ExportDiagramRequest) => invoke<string | null>('export:diagram', req),
   },
   exportResult: (result: unknown, meta: unknown) => invoke<string | null>('export:result', result, meta),
   showItem: (filePath: string) => invoke<void>('shell:showItem', filePath),

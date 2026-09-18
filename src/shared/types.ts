@@ -282,3 +282,10 @@ export interface SchemaTable {
 export interface SchemaDescription {
   tables: SchemaTable[];
 }
+
+export interface ExportDiagramRequest {
+  format: 'svg' | 'png';
+  /** Raw SVG markup for 'svg'; base64-encoded PNG bytes (no data: prefix) for 'png'. */
+  data: string;
+  suggestedName: string;
+}

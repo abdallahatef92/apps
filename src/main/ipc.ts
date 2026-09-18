@@ -1,5 +1,5 @@
 import { BrowserWindow, app, dialog, ipcMain, shell } from 'electron';
-import { copyFileSync } from 'node:fs';
+import { copyFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { closeDatabase, currentDbPath, defaultDbPath, getDb, openDatabase } from './db';
@@ -9,7 +9,7 @@ import { buildPivotSql, pivotMeta, type PivotRequest } from './services/pivot';
 import { readWorkbook } from './ingest/workbook';
 import { deleteBatch, loadColumnMapping, postBatch, revenueAccountPattern, saveColumnMapping, stageFile } from './ingest/importer';
 import { suggestMapping, targetFields } from './ingest/targetFields';
-import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, IpcResult, Module, QueryResult, SchemaDescription, SchemaTable, StageRequest } from '../shared/types';
+import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, ExportDiagramRequest, IpcResult, Module, QueryResult, SchemaDescription, SchemaTable, StageRequest } from '../shared/types';
 
 /** Wrap a handler so the renderer always gets {ok,data} | {ok,error} instead of a rejection. */
 function handle<T>(channel: string, fn: (...args: any[]) => T | Promise<T>): void {
@@ -342,6 +342,18 @@ export function registerIpc(): void {
     }));
 
     return { tables };
+  });
+
+  handle('export:diagram', async (req: ExportDiagramRequest): Promise<string | null> => {
+    const res = await dialog.showSaveDialog({
+      title: 'Export diagram',
+      defaultPath: join(app.getPath('documents'), `${req.suggestedName}.${req.format}`),
+      filters: [{ name: req.format.toUpperCase(), extensions: [req.format] }],
+    });
+    if (res.canceled || !res.filePath) return null;
+    if (req.format === 'svg') writeFileSync(res.filePath, req.data, 'utf8');
+    else writeFileSync(res.filePath, Buffer.from(req.data, 'base64'));
+    return res.filePath;
   });
 
   // --- export --------------------------------------------------------------
