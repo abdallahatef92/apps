@@ -156,7 +156,18 @@ the reconciliation. The files are not in the repo, so this is a manual check.
   one fill whose color is the severity (`--good` once the group is fully
   coded, `--warning` otherwise), track the same color at low alpha rather
   than a second hue, per the dataviz skill's meter contract, not a two-tone
-  stacked bar.
+  stacked bar. `GroupedPackageTable` (the Subcontractors and Other tabs —
+  one shared component, so fixing it fixes both) carries every one of these
+  concepts too, not a separate, older pattern: checkbox rows and one sticky
+  `.sel-bar` picker instead of an inline `PackagePicker` per row/group,
+  `.table-wrap` overridden to `overflow: visible` so sticky actually reaches
+  `.content`, a text filter, sortable Postings/Amount that reorders groups
+  themselves (`groupByPackage` takes the same `sort` shape
+  `buildMaterialGroups` does), and the warning-colored/`UnallocatedBadge`/
+  `CoverageMeter` unallocated treatment. `CoverageMeter` lives at module
+  scope (not closed over `MaterialCodingTable`) specifically so both tables
+  share one implementation, and the sticky-header CSS selector is named
+  `.pkg-sticky-thead`, not `.material-thead`, for the same reason.
 - **Accrual is a manual estimate, but it still goes through staging.** `ACCRUAL` is a
   module like any other — `fact_accrual` / `v_accrual`, staged and posted via the normal
   upload wizard — for cost incurred but not yet posted in SAP (e.g. "ADD/OMM",

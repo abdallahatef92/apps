@@ -266,19 +266,20 @@ thead th {
 }
 thead th.num { text-align: right; }
 
-/* The Materials tab's selection bar sticks above its own column-header row
-   (which normally sticks at top:0, see `thead th` above). The bar can wrap
-   to more than one line (more work packages, a narrower window), so its
-   height is measured in JS and fed in as `--sel-bar-h` on the `<table>`
-   rather than assumed fixed here — the header row's own offset just reads
-   that variable. */
+/* Any checkbox+toolbar picker table on the Work packages page (Materials,
+   Subcontractors, Other) sticks its selection bar above its own column-header
+   row (which normally sticks at top:0, see `thead th` above). The bar can
+   wrap to more than one line (more work packages, a narrower window), so its
+   height is measured in JS per table instance and fed in as `--sel-bar-h` on
+   that table's own `<table>` rather than assumed fixed here — the header
+   row's own offset just reads that variable. */
 .sel-bar {
   min-height: 37px; box-sizing: border-box; display: flex; align-items: center; gap: 10px;
   position: sticky; top: 0; z-index: 2; background: var(--surface-2);
   border-bottom: 1px solid var(--border-soft); border-radius: var(--radius) var(--radius) 0 0;
   padding: 6px 10px; flex-wrap: wrap;
 }
-.material-thead th { top: var(--sel-bar-h, 0px); }
+.pkg-sticky-thead th { top: var(--sel-bar-h, 0px); }
 tbody td { padding: 8px 12px; border-bottom: 1px solid var(--border-soft); white-space: nowrap; }
 tbody td.num { text-align: right; font-variant-numeric: tabular-nums;
                font-family: var(--mono); font-size: 12px; }

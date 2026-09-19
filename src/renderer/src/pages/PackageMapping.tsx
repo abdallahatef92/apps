@@ -70,6 +70,21 @@ function UnallocatedBadge() {
   );
 }
 
+/** Small coded/uncoded fill — a scanning aid next to a group's own count, not a chart: one fill (severity color), track is the same color at low alpha rather than a second hue. Shared by every grouped-picker table on this page. */
+function CoverageMeter({ coded, total }: { coded: number; total: number }) {
+  const donePct = total > 0 ? (coded / total) * 100 : 0;
+  // Actual hex, not var(--good)/var(--warning) — a CSS variable can't be
+  // alpha-suffixed the way PackageBadge tints a data-driven hex color.
+  const color = coded === total ? '#0ca30c' : '#fab219';
+  return (
+    <span title={`${coded} of ${total} coded`}
+          style={{ display: 'inline-block', width: 44, height: 6, borderRadius: 3,
+                   background: `${color}33`, verticalAlign: 'middle', marginLeft: 8, overflow: 'hidden' }}>
+      <span style={{ display: 'block', width: `${donePct}%`, height: '100%', background: color, borderRadius: 3 }} />
+    </span>
+  );
+}
+
 function PackageBadge({ types, code }: { types: WorkPackageDef[]; code: string }) {
   const meta = lookupPackage(types, code);
   if (!meta) return <span className="faint mono">{code}</span>;
@@ -91,8 +106,11 @@ interface Group<T> {
   amount: number;
 }
 
+type PkgSortCol = 'key' | 'postings' | 'amount';
+
 function groupByPackage<T extends { resolved_work_package: string | null; amount: number; postings: number }>(
   combos: T[], types: WorkPackageDef[], sortKey: (c: T) => string,
+  sort: { col: PkgSortCol; dir: 1 | -1 },
 ): Group<T>[] {
   const map = new Map<string, Group<T>>();
   for (const c of combos) {
@@ -103,18 +121,27 @@ function groupByPackage<T extends { resolved_work_package: string | null; amount
     g.amount += c.amount;
     map.set(key, g);
   }
-  for (const g of map.values()) g.rows.sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
+  if (sort.col === 'postings' || sort.col === 'amount') {
+    const col = sort.col;
+    for (const g of map.values()) g.rows.sort((a, b) => (a[col] - b[col]) * sort.dir);
+    return [...map.values()].sort((a, b) => (a[col] - b[col]) * sort.dir);
+  }
+  for (const g of map.values()) g.rows.sort((a, b) => sortKey(a).localeCompare(sortKey(b)) * sort.dir);
+  // Group order itself stays fixed package identity order regardless of the
+  // key column's sort direction — a group has no single code/description of
+  // its own to rank by, same reasoning as buildMaterialGroups().
   const order = ['UNALLOCATED', ...types.map((t) => t.code)];
   return [...map.values()].sort((a, b) => order.indexOf(a.code) - order.indexOf(b.code));
 }
 
 /**
- * The grouped-allocation-table shape shared by Materials/Subcontractors/Other:
- * one collapsible row per work package, its unique lines nested beneath.
- * Every picker here — a single row's or a whole group's — saves the instant
- * it is clicked; the row reappears under its new group once the save
- * round-trips. `renderKeyCell` draws the row's own identity (GL, or service
- * code/text) — the only thing that differs between the three tabs.
+ * The grouped-allocation-table shape shared by Subcontractors/Other: one
+ * collapsible row per work package, its unique lines nested beneath.
+ * `renderKeyCell` draws the row's own identity (GL, or service code/text) —
+ * the only thing that differs between the two tabs. Mirrors
+ * `MaterialCodingTable`'s own shape (checkbox rows, one sticky toolbar
+ * picker, sortable columns, unallocated visual treatment) rather than
+ * carrying its own separate, older pattern.
  */
 function GroupedPackageTable<T extends { resolved_work_package: string | null; assigned_work_package: string | null; amount: number; postings: number }>({
   combos, types, savingKeys, onAllocate, rowKey, sortKey, keyColumnLabel, renderKeyCell, unitNoun,
@@ -129,70 +156,147 @@ function GroupedPackageTable<T extends { resolved_work_package: string | null; a
   renderKeyCell: (c: T) => React.ReactNode;
   unitNoun: string;
 }) {
-  const groups = useMemo(() => groupByPackage(combos, types, sortKey), [combos, types]);
+  const [filter, setFilter] = useState('');
+  const [sort, setSort] = useState<{ col: PkgSortCol; dir: 1 | -1 }>({ col: 'amount', dir: -1 });
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [allCollapsed, setAllCollapsed] = useState(true);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  const selBarRef = useRef<HTMLDivElement>(null);
+  const [selBarHeight, setSelBarHeight] = useState(0);
+  useEffect(() => {
+    const el = selBarRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(([entry]) => setSelBarHeight(entry.contentRect.height));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const filtered = useMemo(() => {
+    const f = filter.trim().toLowerCase();
+    if (!f) return combos;
+    return combos.filter((c) => sortKey(c).toLowerCase().includes(f));
+  }, [combos, filter, sortKey]);
+
+  const groups = useMemo(() => groupByPackage(filtered, types, sortKey, sort), [filtered, types, sortKey, sort]);
+  const grandTotal = useMemo(() => combos.reduce((s, c) => s + c.amount, 0), [combos]);
+  const unallocated = useMemo(() => combos.filter((c) => !c.resolved_work_package), [combos]);
+  const pct = (amount: number) => (grandTotal > 0 ? ((amount / grandTotal) * 100).toFixed(1) : '0.0');
 
   const isOpen = (code: string) => collapsed[code] !== undefined ? !collapsed[code] : !allCollapsed;
   const toggle = (code: string) => setCollapsed((c) => ({ ...c, [code]: isOpen(code) }));
   const expandAll = () => { setAllCollapsed(false); setCollapsed({}); };
   const collapseAll = () => { setAllCollapsed(true); setCollapsed({}); };
 
+  const toggleSort = (col: PkgSortCol) =>
+    setSort((s) => (s.col === col ? { col, dir: s.dir === 1 ? -1 : 1 } : { col, dir: col === 'key' ? 1 : -1 }));
+  const sortArrow = (col: PkgSortCol) => (sort.col === col ? (sort.dir === 1 ? ' ▲' : ' ▼') : '');
+
+  const selectionState = (rows: T[]): 'all' | 'some' | 'none' => {
+    const n = rows.filter((r) => selected.has(rowKey(r))).length;
+    return n === 0 ? 'none' : n === rows.length ? 'all' : 'some';
+  };
+  const setRowsSelected = (rows: T[], checked: boolean) =>
+    setSelected((s) => {
+      const next = new Set(s);
+      for (const r of rows) checked ? next.add(rowKey(r)) : next.delete(rowKey(r));
+      return next;
+    });
+  const toggleRow = (key: string, checked: boolean) =>
+    setSelected((s) => { const next = new Set(s); checked ? next.add(key) : next.delete(key); return next; });
+
   return (
-    <div className="table-wrap">
-      <div className="row" style={{ marginBottom: 8, gap: 8 }}>
+    <div className="table-wrap" style={{ overflow: 'visible' }}>
+      <div className="row" style={{ marginBottom: 8, gap: 8, flexWrap: 'wrap' }}>
+        <input placeholder={`Filter ${keyColumnLabel.toLowerCase()}…`} value={filter}
+               onChange={(e) => setFilter(e.target.value)} style={{ width: 220 }} />
         <button className="btn sm" onClick={expandAll}>Expand all</button>
         <button className="btn sm" onClick={collapseAll}>Collapse all</button>
         <span className="faint" style={{ fontSize: 11, alignSelf: 'center' }}>
-          {combos.length} {unitNoun}{combos.length === 1 ? '' : 's'} across {groups.length} work package{groups.length === 1 ? '' : 's'}
+          {filtered.length} of {combos.length} {unitNoun}{combos.length === 1 ? '' : 's'} across {groups.length} work package{groups.length === 1 ? '' : 's'}
+          {' · '}
+          <span style={{ color: 'var(--warning)' }}>
+            {unallocated.length} unallocated ({pct(unallocated.reduce((s, c) => s + c.amount, 0))}% of total)
+          </span>
         </span>
       </div>
-      <table>
-        <thead>
+      <div className="sel-bar" ref={selBarRef}>
+        {selected.size > 0 ? (
+          <>
+            <strong style={{ fontSize: 12 }}>{selected.size} selected</strong>
+            <PackagePicker types={types} value="" clearLabel="selection"
+              onChange={(v) => {
+                if (!v) return;
+                const rows = filtered.filter((r) => selected.has(rowKey(r)));
+                onAllocate(rows, v);
+                setSelected(new Set());
+              }} />
+            <button className="btn sm ghost" onClick={() => setSelected(new Set())}>Clear selection</button>
+          </>
+        ) : (
+          <span className="faint" style={{ fontSize: 12 }}>
+            Select rows to assign a package to several at once.
+          </span>
+        )}
+      </div>
+      <table style={{ '--sel-bar-h': `${selBarHeight}px` } as React.CSSProperties}>
+        <thead className="pkg-sticky-thead">
           <tr>
-            <th style={{ width: 24 }}></th>
-            <th>Work package / {keyColumnLabel}</th>
-            <th style={{ textAlign: 'right' }}>Postings</th>
-            <th style={{ textAlign: 'right' }}>Amount</th>
+            <th style={{ width: 28, textAlign: 'center' }}>
+              <TriCheckbox state={selectionState(filtered)} onChange={(checked) => setRowsSelected(filtered, checked)}
+                           title="Select all visible rows" />
+            </th>
+            <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('key')}>
+              Work package / {keyColumnLabel}{sortArrow('key')}
+            </th>
+            <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('postings')}>
+              Postings{sortArrow('postings')}
+            </th>
+            <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('amount')}>
+              Amount{sortArrow('amount')}
+            </th>
             <th style={{ width: 150 }}>Now</th>
-            <th style={{ width: 240 }}>Allocate</th>
           </tr>
         </thead>
         <tbody>
           {groups.length === 0 && (
-            <tr><td colSpan={6}><div className="empty">No cost loaded yet.</div></td></tr>
+            <tr><td colSpan={5}><div className="empty">No cost loaded yet.</div></td></tr>
           )}
           {groups.map((g) => {
             const open = isOpen(g.code);
             const groupSaving = g.rows.some((r) => savingKeys.has(rowKey(r)));
+            const groupUnallocated = g.rows.filter((r) => !r.resolved_work_package).length;
             return (
               <Fragment key={g.code}>
                 <tr style={{ background: 'var(--surface-2)', cursor: 'pointer' }} onClick={() => toggle(g.code)}>
-                  <td className="faint" style={{ textAlign: 'center' }}>{open ? '▾' : '▸'}</td>
-                  <td>
-                    {g.code === 'UNALLOCATED'
-                      ? <span className="faint mono" style={{ fontWeight: 700 }}>UNALLOCATED</span>
-                      : <PackageBadge types={types} code={g.code} />}
+                  <td style={{ textAlign: 'center', verticalAlign: 'top' }} onClick={(e) => e.stopPropagation()}>
+                    <TriCheckbox state={selectionState(g.rows)} onChange={(checked) => setRowsSelected(g.rows, checked)}
+                                 title="Select all rows in this group" />
+                  </td>
+                  <td style={{ verticalAlign: 'top' }}>
+                    <span style={{ marginRight: 6 }}>{open ? '▾' : '▸'}</span>
+                    {g.code === 'UNALLOCATED' ? <UnallocatedBadge /> : <PackageBadge types={types} code={g.code} />}
                     <span className="faint" style={{ fontSize: 11, marginLeft: 8 }}>
                       {g.rows.length} {unitNoun}{g.rows.length === 1 ? '' : 's'}
+                      {groupUnallocated > 0 && (
+                        <span style={{ color: 'var(--warning)' }}> · {groupUnallocated} unallocated</span>
+                      )}
                     </span>
+                    <CoverageMeter coded={g.rows.length - groupUnallocated} total={g.rows.length} />
                     {groupSaving && <span className="faint" style={{ fontSize: 10, marginLeft: 8 }}>saving…</span>}
                   </td>
-                  <td className="mono" style={{ textAlign: 'right' }}>{g.postings.toLocaleString()}</td>
-                  <td className="mono" style={{ textAlign: 'right' }}>{money(g.amount)}</td>
-                  <td></td>
-                  <td onClick={(e) => e.stopPropagation()}
-                      style={groupSaving ? { opacity: .5, pointerEvents: 'none' } : undefined}>
-                    <PackagePicker types={types} value={g.code === 'UNALLOCATED' ? '' : g.code} clearLabel="per-row"
-                      onChange={(v) => onAllocate(g.rows, v || null)} />
-                  </td>
+                  <td className="mono" style={{ textAlign: 'right', verticalAlign: 'top' }}>{g.postings.toLocaleString()}</td>
+                  <td className="mono" style={{ textAlign: 'right', verticalAlign: 'top' }}>{money(g.amount)}</td>
+                  <td style={{ verticalAlign: 'top' }}></td>
                 </tr>
                 {open && g.rows.map((c) => {
                   const key = rowKey(c);
                   const saving = savingKeys.has(key);
                   return (
-                    <tr key={key}>
-                      <td></td>
+                    <tr key={key} style={saving ? { opacity: .5 } : undefined}>
+                      <td style={{ textAlign: 'center' }}>
+                        <input type="checkbox" checked={selected.has(key)} onChange={(e) => toggleRow(key, e.target.checked)} />
+                      </td>
                       <td className="mono" style={{ paddingLeft: 20 }}>{renderKeyCell(c)}</td>
                       <td className="mono" style={{ textAlign: 'right' }}>{c.postings.toLocaleString()}</td>
                       <td className="mono" style={{ textAlign: 'right' }}>{money(c.amount)}</td>
@@ -200,16 +304,20 @@ function GroupedPackageTable<T extends { resolved_work_package: string | null; a
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                           {c.resolved_work_package
                             ? <PackageBadge types={types} code={c.resolved_work_package} />
-                            : <span className="faint mono">UNALLOCATED</span>}
+                            : <UnallocatedBadge />}
                           {!c.assigned_work_package && c.resolved_work_package && (
                             <span className="faint" style={{ fontSize: 10 }}>(default)</span>
                           )}
+                          {c.assigned_work_package && (
+                            <button type="button" title="Clear this row's allocation" onClick={() => onAllocate([c], null)}
+                                    style={{ fontSize: 10, padding: '2px 5px', borderRadius: 5, cursor: 'pointer',
+                                             fontFamily: 'inherit', background: 'transparent', color: 'var(--text-3)',
+                                             border: '1px solid var(--border)' }}>
+                              ✕
+                            </button>
+                          )}
                           {saving && <span className="faint" style={{ fontSize: 10 }}>saving…</span>}
                         </div>
-                      </td>
-                      <td style={saving ? { opacity: .5, pointerEvents: 'none' } : undefined}>
-                        <PackagePicker types={types} value={c.assigned_work_package ?? ''}
-                          onChange={(v) => onAllocate([c], v || null)} />
                       </td>
                     </tr>
                   );
@@ -373,21 +481,6 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
   const toggleRow = (code: string, checked: boolean) =>
     setSelected((s) => { const next = new Set(s); checked ? next.add(code) : next.delete(code); return next; });
 
-  /** Small coded/uncoded fill — a scanning aid next to a group's own count, not a chart: one fill (severity color), track is the same color at low alpha rather than a second hue. */
-  const CoverageMeter = ({ coded, total }: { coded: number; total: number }) => {
-    const donePct = total > 0 ? (coded / total) * 100 : 0;
-    // Actual hex, not var(--good)/var(--warning) — a CSS variable can't be
-    // alpha-suffixed the way PackageBadge tints a data-driven hex color.
-    const color = coded === total ? '#0ca30c' : '#fab219';
-    return (
-      <span title={`${coded} of ${total} coded`}
-            style={{ display: 'inline-block', width: 44, height: 6, borderRadius: 3,
-                     background: `${color}33`, verticalAlign: 'middle', marginLeft: 8, overflow: 'hidden' }}>
-        <span style={{ display: 'block', width: `${donePct}%`, height: '100%', background: color, borderRadius: 3 }} />
-      </span>
-    );
-  };
-
   const groupLabel = (kind: MaterialGroupKind, key: string) =>
     kind === 'package'
       ? (key === 'UNALLOCATED' ? <UnallocatedBadge /> : <PackageBadge types={types} code={key} />)
@@ -528,7 +621,7 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
         )}
       </div>
       <table style={{ '--sel-bar-h': `${selBarHeight}px` } as React.CSSProperties}>
-        <thead className="material-thead">
+        <thead className="pkg-sticky-thead">
           <tr>
             <th style={{ width: 28, textAlign: 'center' }}>
               <TriCheckbox state={selectionState(sorted)} onChange={(checked) => setRowsSelected(sorted, checked)}
