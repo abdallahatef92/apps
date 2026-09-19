@@ -34,13 +34,14 @@ function PackagePicker({ types, value, onChange, clearLabel = 'clear' }: {
           <button key={t.code} type="button" title={`${t.code} — ${t.label}`}
                   onClick={() => onChange(selected ? '' : t.code)}
                   style={{
-                    fontSize: 13, lineHeight: 1, padding: '4px 7px', borderRadius: 6,
+                    display: 'inline-flex', alignItems: 'center', gap: 4,
+                    fontSize: 11, lineHeight: 1, padding: '4px 7px', borderRadius: 6,
                     cursor: 'pointer', fontFamily: 'inherit',
                     background: selected ? t.color : 'var(--surface-3)',
                     border: `1px solid ${selected ? t.color : 'var(--border)'}`,
                     filter: selected ? 'none' : 'grayscale(0.4) opacity(0.75)',
                   }}>
-            {t.icon}
+            <span style={{ fontSize: 9 }}>{t.icon}</span>{t.code}
           </button>
         );
       })}
