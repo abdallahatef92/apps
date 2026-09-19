@@ -1,4 +1,4 @@
-import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, ExportDiagramRequest, IpcResult, LineageResult, MaterialPackageAssignment, MaterialPackageCombination, OtherPackageCombination, PivotSource, SchemaDescription, ServicePackageAssignment, ServicePackageCombination, WorkPackageDef } from '@shared/types';
+import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, ElementPackageAssignment, ExportDiagramRequest, IpcResult, LineageResult, MaterialPackageAssignment, MaterialPackageCombination, OtherPackageCombination, PivotSource, SchemaDescription, ServicePackageAssignment, ServicePackageCombination, WorkPackageDef } from '@shared/types';
 
 // Shape exposed by the preload bridge.
 type Bridge = {
@@ -22,7 +22,8 @@ type Bridge = {
     typeDelete(code: string): Promise<IpcResult<WorkPackageDef[]>>;
     materialCombinations(): Promise<IpcResult<MaterialPackageCombination[]>>;
     otherCombinations(): Promise<IpcResult<OtherPackageCombination[]>>;
-    assignElement(items: MaterialPackageAssignment[]): Promise<IpcResult<{ assigned: number; cleared: number }>>;
+    assignElement(items: ElementPackageAssignment[]): Promise<IpcResult<{ assigned: number; cleared: number }>>;
+    assignMaterial(items: MaterialPackageAssignment[]): Promise<IpcResult<{ assigned: number; cleared: number }>>;
     serviceCombinations(): Promise<IpcResult<ServicePackageCombination[]>>;
     assignService(items: ServicePackageAssignment[]): Promise<IpcResult<{ assigned: number; cleared: number }>>;
   };

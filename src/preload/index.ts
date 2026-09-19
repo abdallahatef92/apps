@@ -40,6 +40,7 @@ const api = {
     materialCombinations: () => invoke<any[]>('workPackages:materialCombinations'),
     otherCombinations: () => invoke<any[]>('workPackages:otherCombinations'),
     assignElement: (items: unknown[]) => invoke<{ assigned: number; cleared: number }>('workPackages:assignElement', items),
+    assignMaterial: (items: unknown[]) => invoke<{ assigned: number; cleared: number }>('workPackages:assignMaterial', items),
     serviceCombinations: () => invoke<any[]>('workPackages:serviceCombinations'),
     assignService: (items: unknown[]) => invoke<{ assigned: number; cleared: number }>('workPackages:assignService', items),
   },

@@ -59,6 +59,13 @@ const ACTUAL_FIELDS: FieldDef[] = [
   { field: 'vendor_name', label: 'Vendor name', type: 'text', required: false,
     description: 'Supplier name, often the offsetting account text in SAP.',
     synonyms: ['vendor name', 'supplier name', 'name of offsetting account', 'offsetting account name', 'partner'] },
+  { field: 'material_code', label: 'Material', type: 'text', required: false,
+    description: 'SAP material number (MATNR) — the real material identity, distinct from the GL '
+      + 'account (\'Cost element\'), which several different materials commonly share.',
+    synonyms: ['material', 'material number', 'material no', 'matnr'] },
+  { field: 'material_name', label: 'Material description', type: 'text', required: false,
+    description: 'Description of the material.',
+    synonyms: ['material description', 'material text', 'material short text'] },
   { field: 'period_key', label: 'Period (YYYY-MM)', type: 'period', required: false,
     description: 'Posting period. If absent it is derived from the posting date.',
     synonyms: ['period', 'posting period', 'fiscal period', 'month', 'yearmonth', 'year month'] },

@@ -384,6 +384,7 @@ class DimCache {
   private wbs = new Map<string, number>();
   private costElement = new Map<string, number>();
   private vendor = new Map<string, number>();
+  private material = new Map<string, number>();
   private currency = new Map<string, number>();
 
   projectKey(code: string, name?: string | null): number {
@@ -474,6 +475,21 @@ class DimCache {
       db.prepare('INSERT INTO dim_vendor (vendor_code, vendor_name) VALUES (?,?)')
         .run(c, name || c).lastInsertRowid);
     this.vendor.set(c, key);
+    return key;
+  }
+
+  /** The real material identity (MATNR) — a CJI3 line's "Material" column, distinct from its GL account. */
+  materialKey(code: string | null, name: string | null): number | null {
+    const c = code || name;
+    if (!c) return null;
+    const hit = this.material.get(c);
+    if (hit) return hit;
+    const db = getDb();
+    const row = db.prepare('SELECT material_key FROM dim_material WHERE material_code = ?').get(c) as any;
+    const key = row?.material_key ?? Number(
+      db.prepare('INSERT INTO dim_material (material_code, material_name) VALUES (?,?)')
+        .run(c, name || c).lastInsertRowid);
+    this.material.set(c, key);
     return key;
   }
 
@@ -618,17 +634,18 @@ export function postBatch(batchId: number, options: { allowDuplicate?: boolean }
   // ON CONFLICT on line_uid turns a re-import into a replacement of that exact
   // line. A NULL uid never conflicts, so keyless rows still simply insert.
   const upsertActual = db.prepare(`INSERT INTO fact_actual
-    (import_batch_id, project_key, wbs_key, cost_element_key, vendor_key, currency_key,
+    (import_batch_id, project_key, wbs_key, cost_element_key, material_key, vendor_key, currency_key,
      posting_date_key, document_date_key, period_key, document_no, document_line, document_type,
      reference_no, po_no, fiscal_year, description, quantity, uom, amount, source_row_no, line_uid,
      partner_object_type, partner_object, partner_object_name)
-    VALUES (@batch, @project, @wbs, @ce, @vendor, @currency, @postingDateKey, @docDateKey,
+    VALUES (@batch, @project, @wbs, @ce, @material, @vendor, @currency, @postingDateKey, @docDateKey,
             @period, @documentNo, @documentLine, @documentType, @referenceNo, @poNo, @fiscalYear,
             @description, @quantity, @uom, @amount, @rowNo, @uid,
             @partnerObjectType, @partnerObject, @partnerObjectName)
     ON CONFLICT(line_uid) DO UPDATE SET
       import_batch_id = excluded.import_batch_id, project_key = excluded.project_key,
       wbs_key = excluded.wbs_key, cost_element_key = excluded.cost_element_key,
+      material_key = excluded.material_key,
       vendor_key = excluded.vendor_key, currency_key = excluded.currency_key,
       posting_date_key = excluded.posting_date_key, document_date_key = excluded.document_date_key,
       period_key = excluded.period_key, document_no = excluded.document_no,
@@ -701,6 +718,7 @@ export function postBatch(batchId: number, options: { allowDuplicate?: boolean }
 
         upsertActual.run({
           batch: batchId, project: projectKey, wbs: wbsKey, ce: ceKey,
+          material: dims.materialKey(toText(mapped.material_code), toText(mapped.material_name)),
           vendor: dims.vendorKey(toText(mapped.vendor_code), toText(mapped.vendor_name)),
           currency: currencyKey,
           postingDateKey: postingDate ? Number(postingDate.replace(/-/g, '')) : null,

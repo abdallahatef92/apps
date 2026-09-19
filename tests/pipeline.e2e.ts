@@ -209,6 +209,20 @@ async function sapScenario(dir: string): Promise<void> {
     (db.prepare("SELECT cost_type, posting_nature n FROM dim_cost_element WHERE cost_element_code='40101100'")
       .get() as any).n === 'REVENUE');
 
+  // The real material identity (MATNR) — distinct from the GL account, and
+  // must not be silently dropped by the upload mapping.
+  check('Material column auto-mapped', cji.suggested.material_code === 'Material', String(cji.suggested.material_code));
+  const material = db.prepare(`SELECT material_code, material_name, SUM(amount) amt, COUNT(*) n
+      FROM v_actual WHERE project_key = ? AND material_code IS NOT NULL
+      GROUP BY material_code, material_name`).get(projectKey) as any;
+  check('material rows carry the real material number', material?.material_code === 'MAT-CEM-01', String(material?.material_code));
+  check('material description carried across', material?.material_name === 'Portland Cement 42.5N', String(material?.material_name));
+  check('material postings counted', material?.n === 2, String(material?.n));
+  near('material rows amount', Number(material?.amt), 200_000);
+  check('subcontract/labour/income rows carry no material code',
+    (db.prepare(`SELECT COUNT(*) n FROM v_actual WHERE project_key = ? AND cost_type <> 'MATERIAL' AND material_code IS NOT NULL`)
+      .get(projectKey) as any).n === 0);
+
   // Subcontractor sub-ledger: reconciles to actuals, never added to them.
   const scPath = join(dir, 'subcontractor.xlsx');
   await makeSubcontractorFile(scPath);

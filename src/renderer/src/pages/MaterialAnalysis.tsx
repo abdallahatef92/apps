@@ -17,6 +17,7 @@ import type { QueryResult } from '@shared/types';
 export function MaterialAnalysis() {
   const { projectKey, project, dataVersion } = useApp();
   const [kpi, setKpi] = useState<QueryResult | null>(null);
+  const [byMaterial, setByMaterial] = useState<QueryResult | null>(null);
   const [byGl, setByGl] = useState<QueryResult | null>(null);
   const [byWbs, setByWbs] = useState<QueryResult | null>(null);
   const [byVendor, setByVendor] = useState<QueryResult | null>(null);
@@ -31,12 +32,13 @@ export function MaterialAnalysis() {
       try {
         setError(null);
         if (!projectKey) {
-          setKpi(null); setByGl(null); setByWbs(null); setByVendor(null);
+          setKpi(null); setByMaterial(null); setByGl(null); setByWbs(null); setByVendor(null);
           setTrend(null); setOutliers(null); setReturns(null); setDetail(null);
           return;
         }
         const p = { project_key: projectKey };
         setKpi(await call(api.queries.run('KPI_MATERIAL', p)));
+        setByMaterial(await call(api.queries.run('MATERIAL_BY_MATERIAL', p)));
         setByGl(await call(api.queries.run('MATERIAL_BY_GL', p)));
         setByWbs(await call(api.queries.run('MATERIAL_BY_WBS', p)));
         setByVendor(await call(api.queries.run('MATERIAL_BY_VENDOR', p)));
@@ -59,6 +61,17 @@ export function MaterialAnalysis() {
           id: 'overview', label: 'Overview', content: (
             <>
               <div className="grid k2">
+                {byMaterial && byMaterial.rows.length > 0 && (
+                  <div className="card">
+                    <h3>Spend by material</h3>
+                    <p className="hint">
+                      Material cost rolled up per real material (SAP material number) — several
+                      different materials commonly share one GL account, so this is the true
+                      material identity, not the account it happens to post to.
+                    </p>
+                    <BarChart result={byMaterial} labelColumn="material_name" valueColumn="amount" limit={8} />
+                  </div>
+                )}
                 {byGl && byGl.rows.length > 0 && (
                   <div className="card">
                     <h3>Spend by GL</h3>

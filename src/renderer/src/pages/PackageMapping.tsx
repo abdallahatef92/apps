@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { api, call } from '../lib/api';
 import { SheetTabs } from '../components/SheetTabs';
 import type {
-  MaterialPackageAssignment, MaterialPackageCombination, OtherPackageCombination,
+  ElementPackageAssignment, MaterialPackageAssignment, MaterialPackageCombination, OtherPackageCombination,
   ServicePackageAssignment, ServicePackageCombination, WorkPackage, WorkPackageDef,
 } from '@shared/types';
 
@@ -13,6 +13,10 @@ const lookupPackage = (types: WorkPackageDef[], code: string) => types.find((t) 
 /** GL description if the file gave one, falling back to the code alone. */
 const glLabel = (c: { cost_element_code: string; cost_element_name?: string | null }) =>
   c.cost_element_name ? `${c.cost_element_name} (${c.cost_element_code})` : c.cost_element_code;
+
+/** Material description if the file gave one, falling back to the code — or a placeholder if neither exists. */
+const materialLabel = (c: { material_code: string | null; material_name?: string | null }) =>
+  c.material_name ? `${c.material_name} (${c.material_code})` : (c.material_code ?? '(no material code)');
 
 /**
  * Assign a work package with one click instead of a dropdown: a row of icon
@@ -373,20 +377,40 @@ export function PackageMapping() {
 
   const allocateElement = (
     rows: { cost_element_code: string }[], value: WorkPackage | null,
-    setSaving: typeof setSavingMaterial, reload: () => Promise<void>,
+    setSaving: typeof setSavingOther, reload: () => Promise<void>,
   ) => {
     const keys = rows.map((r) => r.cost_element_code);
     setSaving((s) => new Set([...s, ...keys]));
     setError(null);
     (async () => {
       try {
-        const items: MaterialPackageAssignment[] = rows.map((r) => ({ cost_element_code: r.cost_element_code, work_package: value }));
+        const items: ElementPackageAssignment[] = rows.map((r) => ({ cost_element_code: r.cost_element_code, work_package: value }));
         await call(api.workPackages.assignElement(items));
         await reload();
       } catch (e) {
         setError((e as Error).message);
       } finally {
         setSaving((s) => { const n = new Set(s); keys.forEach((k) => n.delete(k)); return n; });
+      }
+    })();
+  };
+
+  const allocateMaterial = (rows: MaterialPackageCombination[], value: WorkPackage | null) => {
+    const keys = rows.map((r) => r.material_code ?? '');
+    setSavingMaterial((s) => new Set([...s, ...keys]));
+    setError(null);
+    (async () => {
+      try {
+        const items: MaterialPackageAssignment[] = rows
+          .filter((r): r is MaterialPackageCombination & { material_code: string } => !!r.material_code)
+          .map((r) => ({ material_code: r.material_code, work_package: value }));
+        if (items.length === 0) throw new Error('This line has no material code and cannot be coded directly.');
+        await call(api.workPackages.assignMaterial(items));
+        await loadMaterials();
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setSavingMaterial((s) => { const n = new Set(s); keys.forEach((k) => n.delete(k)); return n; });
       }
     })();
   };
@@ -450,15 +474,16 @@ export function PackageMapping() {
             <div className="card">
               <h3>Code materials into packages</h3>
               <p className="hint">
-                Every material — a CO line item carries no separate material number, so the GL
-                account itself is the material's identity here — that occurs in posted MATERIAL
+                Every real material — the SAP material number (MATNR), not the GL account, since
+                several different materials commonly share one GL — that occurs in posted MATERIAL
                 cost. {materials.length} of them, grouped by their current work package
-                (UNALLOCATED first). Pick one and it saves immediately.
+                (UNALLOCATED first). Pick one and it saves immediately. A line with no material
+                code (an older extract, or the column left blank) can't be coded until it has one.
               </p>
               <GroupedPackageTable combos={materials} types={types} savingKeys={savingMaterial}
-                onAllocate={(rows, v) => allocateElement(rows, v, setSavingMaterial, loadMaterials)}
-                rowKey={(c) => c.cost_element_code} sortKey={glLabel}
-                keyColumnLabel="GL" renderKeyCell={(c) => glLabel(c)} unitNoun="material" />
+                onAllocate={allocateMaterial}
+                rowKey={(c) => c.material_code ?? `\u0000${c.material_name ?? ''}`} sortKey={materialLabel}
+                keyColumnLabel="Material" renderKeyCell={(c) => materialLabel(c)} unitNoun="material" />
             </div>
           ),
         },

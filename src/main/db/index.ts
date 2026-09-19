@@ -17,6 +17,7 @@ import costTypeRegistrySql from './migrations/010_cost_type_registry.sql?raw';
 import workPackagesSql from './migrations/011_work_packages.sql?raw';
 import accrualSql from './migrations/012_accrual.sql?raw';
 import workPackageReworkSql from './migrations/013_work_package_rework.sql?raw';
+import materialSql from './migrations/014_material.sql?raw';
 import { SYSTEM_QUERIES } from './systemQueries';
 
 interface Migration {
@@ -44,6 +45,7 @@ const MIGRATIONS: Migration[] = [
   { version: 11, name: '011_work_packages', sql: workPackagesSql },
   { version: 12, name: '012_accrual', sql: accrualSql },
   { version: 13, name: '013_work_package_rework', sql: workPackageReworkSql },
+  { version: 14, name: '014_material', sql: materialSql },
 ];
 
 let db: DB | null = null;

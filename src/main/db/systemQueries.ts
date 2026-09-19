@@ -166,7 +166,8 @@ LIMIT COALESCE(:top_n, 25)`,
     sql: `
 SELECT
   a.period_key, a.document_no, a.document_type, a.wbs_code, a.wbs_name,
-  a.cost_element_code, a.cost_element_name, a.cost_type, a.vendor_name,
+  a.cost_element_code, a.cost_element_name, a.material_code, a.material_name,
+  a.cost_type, a.vendor_name,
   a.description, a.quantity, a.uom, a.amount, a.data_date,
   a.partner_object_type, a.partner_object, a.partner_object_name
 FROM v_actual a
@@ -1235,6 +1236,26 @@ SELECT
   ROUND(100.0 * (SELECT total FROM m) / NULLIF((SELECT total FROM a),0), 1) AS pct_of_actual`,
   },
   {
+    code: 'MATERIAL_BY_MATERIAL',
+    name: 'Material spend by material',
+    module: 'ACTUAL',
+    category: 'Material',
+    description: 'Material cost rolled up per real material (SAP material number) — the actual '
+      + 'material identity, not the GL account several different materials commonly share. A '
+      + 'posting with no material number (an older extract, or the column left blank) rolls up '
+      + 'under "(no material code)".',
+    params: [P_PROJECT],
+    viz: { kind: 'bar', label: 'material_name', value: 'amount' },
+    sql: `
+SELECT COALESCE(material_code,'(no material code)') AS material_code,
+       COALESCE(material_name, material_code, '(no material code)') AS material_name,
+       COUNT(*) AS postings, SUM(amount) AS amount
+FROM v_actual
+WHERE project_key = :project_key AND cost_type = 'MATERIAL'
+GROUP BY COALESCE(material_code,'(no material code)'), COALESCE(material_name, material_code, '(no material code)')
+ORDER BY amount DESC`,
+  },
+  {
     code: 'MATERIAL_BY_GL',
     name: 'Material spend by GL',
     module: 'ACTUAL',
@@ -1320,7 +1341,8 @@ ORDER BY period_key`,
     viz: { kind: 'table' },
     sql: `
 WITH base AS (
-  SELECT wbs_code, wbs_name, cost_element_code, cost_element_name, document_no, document_type,
+  SELECT wbs_code, wbs_name, cost_element_code, cost_element_name, material_code, material_name,
+         document_no, document_type,
          period_key, vendor_name, description, quantity, uom, amount,
          amount / quantity AS unit_rate
   FROM v_actual
@@ -1333,7 +1355,8 @@ scored AS (
     COUNT(*)             OVER (PARTITION BY cost_element_code) AS gl_n
   FROM base
 )
-SELECT wbs_code, wbs_name, cost_element_code, cost_element_name, document_no, document_type,
+SELECT wbs_code, wbs_name, cost_element_code, cost_element_name, material_code, material_name,
+       document_no, document_type,
        period_key, vendor_name, description, quantity, uom, amount, unit_rate, gl_avg_rate
 FROM scored
 WHERE gl_n >= 5 AND gl_avg_rate > 0 AND ABS(unit_rate) > 5 * gl_avg_rate
@@ -1349,7 +1372,8 @@ ORDER BY ABS(unit_rate) DESC`,
     params: [P_PROJECT],
     viz: { kind: 'table' },
     sql: `
-SELECT wbs_code, wbs_name, cost_element_code, cost_element_name, document_no, document_type,
+SELECT wbs_code, wbs_name, cost_element_code, cost_element_name, material_code, material_name,
+       document_no, document_type,
        period_key, vendor_name, description, quantity, uom, amount
 FROM v_actual
 WHERE project_key = :project_key AND cost_type = 'MATERIAL' AND amount < 0
@@ -1364,7 +1388,8 @@ ORDER BY amount ASC`,
     params: [P_PROJECT],
     viz: { kind: 'table' },
     sql: `
-SELECT wbs_code, wbs_name, cost_element_code, cost_element_name, document_no, document_type,
+SELECT wbs_code, wbs_name, cost_element_code, cost_element_name, material_code, material_name,
+       document_no, document_type,
        period_key, data_date, vendor_name, description, quantity, uom, amount
 FROM v_actual
 WHERE project_key = :project_key AND cost_type = 'MATERIAL'
@@ -1536,7 +1561,7 @@ direct_cost AS (
     NULL                                                 AS report_name,
     a.period_key,
     a.wbs_code, a.wbs_name,
-    a.cost_element_code, a.cost_element_name, a.cost_type,
+    a.cost_element_code, a.cost_element_name, a.material_code, a.material_name, a.cost_type,
     a.vendor_name,
     a.po_no,
     a.document_no                                       AS reference,
@@ -1571,7 +1596,7 @@ detail_lines AS (
     s.report_name,
     s.period_key,
     s.wbs_code, s.wbs_name,
-    s.cost_element_code, s.cost_element_name, s.cost_type,
+    s.cost_element_code, s.cost_element_name, NULL AS material_code, NULL AS material_name, s.cost_type,
     s.vendor_name,
     s.po_no,
     s.invoice_no                                        AS reference,
@@ -1596,7 +1621,7 @@ order_detail AS (
     s.report_name,
     s.period_key,
     s.wbs_code, s.wbs_name,
-    s.cost_element_code, s.cost_element_name, s.cost_type,
+    s.cost_element_code, s.cost_element_name, NULL AS material_code, NULL AS material_name, s.cost_type,
     s.vendor_name,
     NULL                                                 AS po_no,
     s.order_no                                          AS reference,

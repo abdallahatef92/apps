@@ -279,12 +279,13 @@ export interface WorkPackageDef {
 }
 
 /**
- * One material (cost element under cost type MATERIAL) that actually occurs
- * in posted actual cost, with what cost_element_work_package resolves it to.
- * A CO line item carries no separate material number, so the cost element
- * itself is the material's identity here.
+ * One cost element (GL account) that actually occurs in posted actual cost
+ * under a cost type other than MATERIAL/SUBCONTRACT, with what
+ * cost_element_work_package resolves it to. These default to the INDIRECT
+ * catch-all but stay reviewable here in case one is really package work
+ * miscoded under the wrong cost type.
  */
-export interface MaterialPackageCombination {
+export interface ElementPackageCombination {
   cost_element_code: string;
   cost_element_name: string | null;
   postings: number;
@@ -293,13 +294,29 @@ export interface MaterialPackageCombination {
   assigned_work_package: WorkPackage | null;
 }
 
-/**
- * Same shape as MaterialPackageCombination, for every cost type other than
- * MATERIAL/SUBCONTRACT — these default to the INDIRECT catch-all but stay
- * reviewable here in case one is really package work miscoded elsewhere.
- */
-export interface OtherPackageCombination extends MaterialPackageCombination {
+export interface OtherPackageCombination extends ElementPackageCombination {
   cost_type: string | null;
+}
+
+/** `work_package: null` removes the assignment, leaving the cost element unallocated. */
+export interface ElementPackageAssignment {
+  cost_element_code: string;
+  work_package: WorkPackage | null;
+}
+
+/**
+ * One real material (SAP material number, cost type MATERIAL) that
+ * actually occurs in posted actual cost, with what material_work_package
+ * resolves it to. This is the true material identity — several different
+ * materials commonly share one GL account, so the cost element is not it.
+ */
+export interface MaterialPackageCombination {
+  material_code: string | null;
+  material_name: string | null;
+  postings: number;
+  amount: number;
+  resolved_work_package: string | null;
+  assigned_work_package: WorkPackage | null;
 }
 
 /**
@@ -317,9 +334,9 @@ export interface ServicePackageCombination {
   assigned_work_package: WorkPackage | null;
 }
 
-/** `work_package: null` removes the assignment, leaving the cost element unallocated. */
+/** `work_package: null` removes the assignment, leaving the material unallocated. */
 export interface MaterialPackageAssignment {
-  cost_element_code: string;
+  material_code: string;
   work_package: WorkPackage | null;
 }
 

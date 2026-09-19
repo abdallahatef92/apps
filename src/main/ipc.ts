@@ -10,7 +10,7 @@ import { buildLineage } from './services/lineage';
 import { readWorkbook } from './ingest/workbook';
 import { deleteBatch, loadColumnMapping, postBatch, revenueAccountPattern, saveColumnMapping, stageFile } from './ingest/importer';
 import { suggestMapping, targetFields } from './ingest/targetFields';
-import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, ExportDiagramRequest, IpcResult, LineageResult, MaterialPackageAssignment, MaterialPackageCombination, Module, OtherPackageCombination, QueryResult, SchemaDescription, SchemaTable, ServicePackageAssignment, ServicePackageCombination, StageRequest, WorkPackageDef } from '../shared/types';
+import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, ElementPackageAssignment, ExportDiagramRequest, IpcResult, LineageResult, MaterialPackageAssignment, MaterialPackageCombination, Module, OtherPackageCombination, QueryResult, SchemaDescription, SchemaTable, ServicePackageAssignment, ServicePackageCombination, StageRequest, WorkPackageDef } from '../shared/types';
 
 /** Wrap a handler so the renderer always gets {ok,data} | {ok,error} instead of a rejection. */
 function handle<T>(channel: string, fn: (...args: any[]) => T | Promise<T>): void {
@@ -54,21 +54,23 @@ function slugifyCostType(label: string): string {
 }
 
 /**
- * Every material (a cost element under cost type MATERIAL) that actually
- * occurs in posted actual cost, with what cost_element_work_package resolves
- * it to. A CO line item carries no separate material number, so the cost
- * element itself is the material's identity here.
+ * Every real material (SAP material number, cost type MATERIAL) that
+ * actually occurs in posted actual cost, with what material_work_package
+ * resolves it to. A row with no material_code (an older extract, or the
+ * column left blank) still appears — grouped under its own bucket — so a
+ * material line with no identity to code stays visible rather than
+ * silently vanishing from the coding screen.
  */
 function loadMaterialPackageCombinations(): MaterialPackageCombination[] {
   return getDb().prepare(`
-    SELECT a.cost_element_code, a.cost_element_name,
+    SELECT a.material_code, a.material_name,
            COUNT(*) AS postings, SUM(a.amount) AS amount,
            a.work_package AS resolved_work_package,
-           (SELECT m.work_package FROM cost_element_work_package m
-             WHERE m.cost_element_code = a.cost_element_code) AS assigned_work_package
+           (SELECT m.work_package FROM material_work_package m
+             WHERE m.material_code = a.material_code) AS assigned_work_package
     FROM v_actual a
     WHERE a.cost_type = 'MATERIAL'
-    GROUP BY a.cost_element_code, a.cost_element_name, a.work_package
+    GROUP BY a.material_code, a.material_name, a.work_package
     ORDER BY ABS(SUM(a.amount)) DESC`).all() as MaterialPackageCombination[];
 }
 
@@ -371,11 +373,11 @@ export function registerIpc(): void {
   handle('workPackages:otherCombinations', () => loadOtherPackageCombinations());
 
   /**
-   * Code a material (or "other") cost element into a work package — an
-   * exact row in cost_element_work_package, since the mapping key here is
-   * the cost element's own identity, not a pattern.
+   * Code an "other" (non-material, non-subcontract) cost element into a
+   * work package — an exact row in cost_element_work_package, since the
+   * mapping key here is the cost element's own identity, not a pattern.
    */
-  handle('workPackages:assignElement', (items: MaterialPackageAssignment[]) => {
+  handle('workPackages:assignElement', (items: ElementPackageAssignment[]) => {
     const db = getDb();
     const known = new Set(loadWorkPackageDefs().map((t) => t.code));
     for (const it of items) {
@@ -391,6 +393,35 @@ export function registerIpc(): void {
         del.run(it.cost_element_code);
         if (it.work_package === null) { cleared++; continue; }
         ins.run(it.cost_element_code, it.work_package);
+        assigned++;
+      }
+    });
+    run();
+    return { assigned, cleared };
+  });
+
+  /**
+   * Code a real material (SAP material number) into a work package — an
+   * exact row in material_work_package. The Materials tab's write side,
+   * mirroring assignService's shape with one key column instead of two.
+   */
+  handle('workPackages:assignMaterial', (items: MaterialPackageAssignment[]) => {
+    const db = getDb();
+    const known = new Set(loadWorkPackageDefs().map((t) => t.code));
+    for (const it of items) {
+      if (!it.material_code) throw new Error('This line has no material code and cannot be coded directly.');
+      if (it.work_package !== null && !known.has(it.work_package)) {
+        throw new Error(`"${it.work_package}" is not a work package.`);
+      }
+    }
+    const del = db.prepare(`DELETE FROM material_work_package WHERE material_code = ?`);
+    const ins = db.prepare(`INSERT INTO material_work_package (material_code, work_package) VALUES (?, ?)`);
+    let assigned = 0, cleared = 0;
+    const run = db.transaction(() => {
+      for (const it of items) {
+        del.run(it.material_code);
+        if (it.work_package === null) { cleared++; continue; }
+        ins.run(it.material_code, it.work_package);
         assigned++;
       }
     });

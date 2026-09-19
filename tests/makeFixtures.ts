@@ -77,7 +77,8 @@ export async function makeCji3File(
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('Data');
 
-  ws.addRow(['Cost Element', 'Cost element name', 'WBS Element', 'Project definition',
+  ws.addRow(['Cost Element', 'Cost element name', 'Material', 'Material Description',
+    'WBS Element', 'Project definition',
     'Object', 'Posting Date', 'Document Number', 'Posting Row', 'Fiscal Year',
     'Document Type', 'Purchasing Document', 'Offsetting Account',
     'Name of offsetting account', 'Object Type',
@@ -85,23 +86,28 @@ export async function makeCji3File(
 
   // month tag, then the row itself. Two lines share document D2 to prove the
   // posting row is what separates them, exactly as it does in a real export.
+  // Only the material-cost-type rows (D3/D4) carry a real Material — a
+  // subcontract/labour/income CO line typically has none, exactly like a
+  // genuine CJI3 export.
   const detail: [string, unknown[]][] = [
-    ['2026-01', ['30501100', 'Subcontractor Cost', 'P-100.CIV.01', 'P-100', 'P-100.CIV.01',
+    ['2026-01', ['30501100', 'Subcontractor Cost', '', '', 'P-100.CIV.01', 'P-100', 'P-100.CIV.01',
       '2026-01-18', 'D1', 1, '2026', 'SC', '4500001', 'V001', 'Al Rashid Contracting', 'WBS',
       40, 'M3', 1000000, 'EGP']],
-    ['2026-02', ['30501100', 'Subcontractor Cost', 'P-100.CIV.01', 'P-100', 'P-100.CIV.01',
+    ['2026-02', ['30501100', 'Subcontractor Cost', '', '', 'P-100.CIV.01', 'P-100', 'P-100.CIV.01',
       '2026-02-11', 'D2', 1, '2026', 'SC', '4500001', 'V001', 'Al Rashid Contracting', 'WBS',
       20, 'M3', 300000, 'EGP']],
-    ['2026-02', ['30501100', 'Subcontractor Cost', 'P-100.CIV.01', 'P-100', 'P-100.CIV.01',
+    ['2026-02', ['30501100', 'Subcontractor Cost', '', '', 'P-100.CIV.01', 'P-100', 'P-100.CIV.01',
       '2026-02-11', 'D2', 2, '2026', 'SC', '4500001', 'V001', 'Al Rashid Contracting', 'WBS',
       10, 'M3', 200000, 'EGP']],
-    ['2026-02', ['30201100', 'Main Material', 'P-100.MEC.01', 'P-100', 'P-100.MEC.01',
+    ['2026-02', ['30201100', 'Main Material', 'MAT-CEM-01', 'Portland Cement 42.5N',
+      'P-100.MEC.01', 'P-100', 'P-100.MEC.01',
       '2026-02-20', 'D3', 1, '2026', 'WA', '', 'V002', 'Gulf Materials', 'WBS',
       300, 'TON', 250000, 'EGP']],
-    ['2026-03', ['30201100', 'Main Material', 'P-100.MEC.01', 'P-100', 'P-100.MEC.01',
+    ['2026-03', ['30201100', 'Main Material', 'MAT-CEM-01', 'Portland Cement 42.5N',
+      'P-100.MEC.01', 'P-100', 'P-100.MEC.01',
       '2026-03-05', 'D4', 1, '2026', 'WA', '', 'V002', 'Gulf Materials', 'WBS',
       -60, 'TON', -50000, 'EGP']],
-    ['2026-03', ['40101100', 'Op contracts Income', 'P-100.CIV.01', 'P-100', 'P-100.CIV.01',
+    ['2026-03', ['40101100', 'Op contracts Income', '', '', 'P-100.CIV.01', 'P-100', 'P-100.CIV.01',
       '2026-03-31', 'R1', 1, '2026', 'RV', '', 'C001', 'Client billing', 'WBS',
       0, '', -1200000, 'EGP']],
   ];
@@ -111,7 +117,7 @@ export async function makeCji3File(
     : detail;
 
   const blank = (ce: string, amount: number) =>
-    [ce, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', amount, 'EGP'];
+    [ce, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', amount, 'EGP'];
 
   // A full export prints grand totals and per-cost-element subtotals between the
   // detail; a hand-cut subset normally does not.

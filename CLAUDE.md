@@ -72,18 +72,23 @@ the reconciliation. The files are not in the repo, so this is a manual check.
   `OTHER`) are seeded with `is_system = 1` and can be renamed but never deleted — the
   account-range rules and `OTHER`'s role as the resolver's catch-all name them by code.
 - **Work package coding is keyed on the line's own identity, not its GL pattern or WBS
-  location.** Unlike cost type, there is no `GLOB` rule engine here — `cost_element_work_package`
-  maps one exact `cost_element_code` to a package (a CO line item carries no separate
-  material number, so for MATERIAL cost the cost element itself *is* the material), and
-  `service_work_package` maps one exact `(service_code, service_text)` pair from
-  `fact_service_line` (a PO's own GL account is usually one generic subcontract account
-  shared by many different service items, so subcontract package identity lives one
-  level down, on the PO's detail report, not on the posting). Every cost type other than
-  MATERIAL/SUBCONTRACT defaults to the seeded `INDIRECT` catch-all (`is_system = 1`,
-  undeletable, same role `cost_type`'s `OTHER` plays) but stays reviewable via
-  `cost_element_work_package` too. `v_posting` (→ `v_actual`/`v_revenue`) resolves
-  MATERIAL/other work packages per row but leaves SUBCONTRACT rows `NULL` — that split
-  is resolved later, off `v_service_line` detail, mirroring the Detail Substitution
+  location.** Unlike cost type, there is no `GLOB` rule engine here — `material_work_package`
+  maps one exact `material_code` (SAP's material number, MATNR, carried in CJI3's own
+  "Material" column, dimensioned as `dim_material` and captured on `fact_actual.material_key`
+  the same way `dim_vendor`/`vendor_key` are) to a package for MATERIAL cost,
+  `cost_element_work_package` maps one exact
+  `cost_element_code` to a package for every other cost type, and `service_work_package`
+  maps one exact `(service_code, service_text)` pair from `fact_service_line` for
+  SUBCONTRACT (a PO's own GL account is usually one generic subcontract account shared by
+  many different service items, so subcontract package identity lives one level down, on
+  the PO's detail report, not on the posting). A MATERIAL line with no material number
+  (an older extract, or the column left blank) stays unallocated — it never falls back to
+  the cost element, which several different materials commonly share. Every cost type
+  other than MATERIAL/SUBCONTRACT defaults to the seeded `INDIRECT` catch-all
+  (`is_system = 1`, undeletable, same role `cost_type`'s `OTHER` plays) but stays
+  reviewable via `cost_element_work_package` too. `v_posting` (→ `v_actual`/`v_revenue`)
+  resolves MATERIAL/other work packages per row but leaves SUBCONTRACT rows `NULL` — that
+  split is resolved later, off `v_service_line` detail, mirroring the Detail Substitution
   pattern (`PKG_SUMMARY` pulls subcontract package cost from `v_service_line`, excluding
   the matching PO's `v_actual` posting, exactly like `UNIFIED_COST_REGISTER` does for
   actual cost itself — a PO with no detail loaded yet falls into `(unallocated)`, never
