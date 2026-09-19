@@ -168,6 +168,19 @@ the reconciliation. The files are not in the repo, so this is a manual check.
   scope (not closed over `MaterialCodingTable`) specifically so both tables
   share one implementation, and the sticky-header CSS selector is named
   `.pkg-sticky-thead`, not `.material-thead`, for the same reason.
+  `GroupedPackageTable` also splits its own merged identity cell into two
+  real columns (`codeLabel`/`renderCode`, `descLabel`/`renderDescription` —
+  Service code/Description on Subcontractors, GL/Cost type on Other) instead
+  of one `<td>` with an inline secondary span, matching Materials' Code |
+  Description split. Its grouping generalizes `buildMaterialGroups()`'s
+  approach (`buildGenericGroups`, `Group<T>.key` instead of `.code`) behind
+  two **optional** props, `groupKey`/`groupKeyLabel`: when a caller supplies
+  them (Subcontractors: the service code's own first three characters, e.g.
+  `S0401` → `S04` — a service item's real category prefix, the direct
+  analog of a material's two-digit prefix) the table gets the same
+  two-level `groupBy1`/`groupBy2` selector Materials has (`'key' | 'package'
+  | 'none'`); when omitted (Other — no natural prefix asked for there) it
+  keeps exactly one grouping, by current package, unchanged from before.
 - **Accrual is a manual estimate, but it still goes through staging.** `ACCRUAL` is a
   module like any other — `fact_accrual` / `v_accrual`, staged and posted via the normal
   upload wizard — for cost incurred but not yet posted in SAP (e.g. "ADD/OMM",
