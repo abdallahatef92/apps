@@ -367,11 +367,11 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
     return (
       <tr key={collapseKey} style={{ background: depth ? 'var(--surface-1)' : 'var(--surface-2)', cursor: 'pointer' }}
           onClick={() => toggleGroup(collapseKey)}>
-        <td style={{ textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+        <td style={{ textAlign: 'center', verticalAlign: 'top' }} onClick={(e) => e.stopPropagation()}>
           <TriCheckbox state={selectionState(g.rows)} onChange={(checked) => setRowsSelected(g.rows, checked)}
                        title="Select all rows in this group" />
         </td>
-        <td colSpan={2} style={{ paddingLeft: depth ? depth * 20 : undefined }}>
+        <td colSpan={2} style={{ paddingLeft: depth ? depth * 20 : undefined, verticalAlign: 'top' }}>
           <span style={{ marginRight: 6 }}>{open ? '▾' : '▸'}</span>
           {groupLabel(kind, g.key)}
           <span className="faint" style={{ fontSize: 11, marginLeft: 8 }}>
@@ -379,12 +379,12 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
           </span>
           {groupSaving && <span className="faint" style={{ fontSize: 10, marginLeft: 8 }}>saving…</span>}
         </td>
-        <td></td>
-        <td className="mono" style={{ textAlign: 'right' }}>{g.postings.toLocaleString()}</td>
-        <td className="mono" style={{ textAlign: 'right' }}>{money(g.amount)}</td>
-        <td></td>
+        <td style={{ verticalAlign: 'top' }}></td>
+        <td className="mono" style={{ textAlign: 'right', verticalAlign: 'top' }}>{g.postings.toLocaleString()}</td>
+        <td className="mono" style={{ textAlign: 'right', verticalAlign: 'top' }}>{money(g.amount)}</td>
+        <td style={{ verticalAlign: 'top' }}></td>
         <td onClick={(e) => e.stopPropagation()}
-            style={groupSaving ? { opacity: .5, pointerEvents: 'none' } : undefined}>
+            style={{ verticalAlign: 'top', ...(groupSaving ? { opacity: .5, pointerEvents: 'none' } : undefined) }}>
           <PackagePicker types={types} value={g.uniformPackage} clearLabel="whole group"
             onChange={(v) => onAllocate(g.rows, v || null)} />
         </td>
