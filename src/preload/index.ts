@@ -41,6 +41,8 @@ const api = {
     otherCombinations: () => invoke<any[]>('workPackages:otherCombinations'),
     assignElement: (items: unknown[]) => invoke<{ assigned: number; cleared: number }>('workPackages:assignElement', items),
     assignMaterial: (items: unknown[]) => invoke<{ assigned: number; cleared: number }>('workPackages:assignMaterial', items),
+    exportMaterialMapping: () => invoke<string | null>('workPackages:exportMaterialMapping'),
+    importMaterialMapping: (filePath: string) => invoke<any>('workPackages:importMaterialMapping', filePath),
     serviceCombinations: () => invoke<any[]>('workPackages:serviceCombinations'),
     assignService: (items: unknown[]) => invoke<{ assigned: number; cleared: number }>('workPackages:assignService', items),
   },
@@ -57,7 +59,7 @@ const api = {
     issues: (batchId: number, limit?: number) => invoke<any[]>('import:issues', batchId, limit),
   },
   files: {
-    pick: () => invoke<string | null>('file:pick'),
+    pick: (title?: string) => invoke<string | null>('file:pick', title),
     preview: (filePath: string) => invoke<any>('file:preview', filePath),
   },
   mapping: {

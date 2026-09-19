@@ -100,7 +100,16 @@ the reconciliation. The files are not in the repo, so this is a manual check.
   under **Data** — not Settings, since this is a recurring classification workflow, not
   an admin setting) is where packages are defined and where materials/service items are
   coded; never touch `dim_wbs.package`, which is a free-text WBS-master field and not
-  this system.
+  this system. The Materials tab is built for real scale (hundreds of materials), not the
+  handful cost type/subcontract coding sees: it groups by the material code's first two
+  digits by default (real SAP numbering categorises there), not by current package, so one
+  bulk pick codes a whole category; and it round-trips through Excel
+  (`workPackages:exportMaterialMapping`/`importMaterialMapping` in `ipc.ts`, reusing the
+  generic `exportResult()` writer) rather than only one-row-at-a-time in the UI — the
+  exported `work_package` column is what a re-imported file is matched back on, so never
+  rename it without updating both sides. A row with no `material_code` is filtered out of
+  this tab's query entirely (there's nothing to key a coding on), not shown as a dead-end
+  bucket the way `service_work_package`'s uncoded-detail case is.
 - **Accrual is a manual estimate, but it still goes through staging.** `ACCRUAL` is a
   module like any other — `fact_accrual` / `v_accrual`, staged and posted via the normal
   upload wizard — for cost incurred but not yet posted in SAP (e.g. "ADD/OMM",

@@ -309,14 +309,25 @@ export interface ElementPackageAssignment {
  * actually occurs in posted actual cost, with what material_work_package
  * resolves it to. This is the true material identity — several different
  * materials commonly share one GL account, so the cost element is not it.
+ * A line with no material code can never be coded here (nothing to key
+ * on), so it never appears — `material_code` is always a real value.
  */
 export interface MaterialPackageCombination {
-  material_code: string | null;
+  material_code: string;
   material_name: string | null;
+  /** First two digits of material_code — real SAP numbering groups by category there. */
+  prefix: string;
   postings: number;
   amount: number;
   resolved_work_package: string | null;
   assigned_work_package: WorkPackage | null;
+}
+
+/** Result of bulk-applying a material_code -> work_package mapping read from an edited export. */
+export interface MaterialImportResult {
+  assigned: number;
+  skipped: number;
+  errors: { material_code: string; work_package: string }[];
 }
 
 /**

@@ -1,4 +1,4 @@
-import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, ElementPackageAssignment, ExportDiagramRequest, IpcResult, LineageResult, MaterialPackageAssignment, MaterialPackageCombination, OtherPackageCombination, PivotSource, SchemaDescription, ServicePackageAssignment, ServicePackageCombination, WorkPackageDef } from '@shared/types';
+import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, ElementPackageAssignment, ExportDiagramRequest, IpcResult, LineageResult, MaterialImportResult, MaterialPackageAssignment, MaterialPackageCombination, OtherPackageCombination, PivotSource, SchemaDescription, ServicePackageAssignment, ServicePackageCombination, WorkPackageDef } from '@shared/types';
 
 // Shape exposed by the preload bridge.
 type Bridge = {
@@ -24,6 +24,8 @@ type Bridge = {
     otherCombinations(): Promise<IpcResult<OtherPackageCombination[]>>;
     assignElement(items: ElementPackageAssignment[]): Promise<IpcResult<{ assigned: number; cleared: number }>>;
     assignMaterial(items: MaterialPackageAssignment[]): Promise<IpcResult<{ assigned: number; cleared: number }>>;
+    exportMaterialMapping(): Promise<IpcResult<string | null>>;
+    importMaterialMapping(filePath: string): Promise<IpcResult<MaterialImportResult>>;
     serviceCombinations(): Promise<IpcResult<ServicePackageCombination[]>>;
     assignService(items: ServicePackageAssignment[]): Promise<IpcResult<{ assigned: number; cleared: number }>>;
   };
@@ -34,7 +36,7 @@ type Bridge = {
   };
   freshness: { list(): Promise<IpcResult<any[]>> };
   batches: { list(limit?: number): Promise<IpcResult<any[]>>; issues(id: number, limit?: number): Promise<IpcResult<any[]>> };
-  files: { pick(): Promise<IpcResult<string | null>>; preview(p: string): Promise<IpcResult<any>> };
+  files: { pick(title?: string): Promise<IpcResult<string | null>>; preview(p: string): Promise<IpcResult<any>> };
   mapping: {
     targets(m: string): Promise<IpcResult<any[]>>;
     suggest(m: string, cols: string[]): Promise<IpcResult<Record<string, string>>>;

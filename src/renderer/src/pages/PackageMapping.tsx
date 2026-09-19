@@ -2,8 +2,8 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { api, call } from '../lib/api';
 import { SheetTabs } from '../components/SheetTabs';
 import type {
-  ElementPackageAssignment, MaterialPackageAssignment, MaterialPackageCombination, OtherPackageCombination,
-  ServicePackageAssignment, ServicePackageCombination, WorkPackage, WorkPackageDef,
+  ElementPackageAssignment, MaterialImportResult, MaterialPackageAssignment, MaterialPackageCombination,
+  OtherPackageCombination, ServicePackageAssignment, ServicePackageCombination, WorkPackage, WorkPackageDef,
 } from '@shared/types';
 
 const money = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 0 });
@@ -13,10 +13,6 @@ const lookupPackage = (types: WorkPackageDef[], code: string) => types.find((t) 
 /** GL description if the file gave one, falling back to the code alone. */
 const glLabel = (c: { cost_element_code: string; cost_element_name?: string | null }) =>
   c.cost_element_name ? `${c.cost_element_name} (${c.cost_element_code})` : c.cost_element_code;
-
-/** Material description if the file gave one, falling back to the code — or a placeholder if neither exists. */
-const materialLabel = (c: { material_code: string | null; material_name?: string | null }) =>
-  c.material_name ? `${c.material_name} (${c.material_code})` : (c.material_code ?? '(no material code)');
 
 /**
  * Assign a work package with one click instead of a dropdown: a row of icon
@@ -213,6 +209,202 @@ function GroupedPackageTable<T extends { resolved_work_package: string | null; a
   );
 }
 
+type MaterialSortCol = 'material_code' | 'material_name' | 'prefix' | 'postings' | 'amount';
+type MaterialGroupBy = 'prefix' | 'package' | 'none';
+
+interface MaterialGroup {
+  key: string;
+  rows: MaterialPackageCombination[];
+  postings: number;
+  amount: number;
+  /** The one package every row in this group already shares, or '' if mixed/none — the bulk picker's current value. */
+  uniformPackage: WorkPackage | '';
+}
+
+function buildMaterialGroups(rows: MaterialPackageCombination[], groupBy: 'prefix' | 'package', types: WorkPackageDef[]): MaterialGroup[] {
+  const map = new Map<string, MaterialGroup>();
+  for (const r of rows) {
+    const key = groupBy === 'prefix' ? r.prefix : (r.resolved_work_package ?? 'UNALLOCATED');
+    const g = map.get(key) ?? { key, rows: [], postings: 0, amount: 0, uniformPackage: '' as WorkPackage | '' };
+    g.rows.push(r);
+    g.postings += r.postings;
+    g.amount += r.amount;
+    map.set(key, g);
+  }
+  for (const g of map.values()) {
+    const first = g.rows[0]?.resolved_work_package ?? null;
+    g.uniformPackage = first && g.rows.every((r) => r.resolved_work_package === first) ? first : '';
+  }
+  if (groupBy === 'package') {
+    const order = ['UNALLOCATED', ...types.map((t) => t.code)];
+    return [...map.values()].sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key));
+  }
+  return [...map.values()].sort((a, b) => a.key.localeCompare(b.key, undefined, { numeric: true }));
+}
+
+/**
+ * The Materials tab's own table — 500+ rows in a real project, so it needs
+ * what GroupedPackageTable (fine for the much shorter Subcontractors/Other
+ * lists) doesn't have: a text filter, sortable columns, code and description
+ * as two real columns (never merged), and a second grouping dimension —
+ * the material code's first two digits, which real SAP numbering uses for
+ * category — so a bulk pick on one group header codes dozens of materials
+ * in one click instead of one at a time.
+ */
+function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
+  combos: MaterialPackageCombination[];
+  types: WorkPackageDef[];
+  savingKeys: Set<string>;
+  onAllocate: (rows: MaterialPackageCombination[], value: WorkPackage | null) => void;
+}) {
+  const [filter, setFilter] = useState('');
+  const [sort, setSort] = useState<{ col: MaterialSortCol; dir: 1 | -1 }>({ col: 'amount', dir: -1 });
+  const [groupBy, setGroupBy] = useState<MaterialGroupBy>('prefix');
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [allCollapsed, setAllCollapsed] = useState(true);
+
+  const filtered = useMemo(() => {
+    const f = filter.trim().toLowerCase();
+    if (!f) return combos;
+    return combos.filter((c) =>
+      c.material_code.toLowerCase().includes(f) || (c.material_name ?? '').toLowerCase().includes(f));
+  }, [combos, filter]);
+
+  const sorted = useMemo(() => {
+    const { col, dir } = sort;
+    return [...filtered].sort((a, b) => {
+      const x = a[col], y = b[col];
+      if (typeof x === 'number' && typeof y === 'number') return (x - y) * dir;
+      return String(x ?? '').localeCompare(String(y ?? ''), undefined, { numeric: true }) * dir;
+    });
+  }, [filtered, sort]);
+
+  const toggleSort = (col: MaterialSortCol) =>
+    setSort((s) => (s.col === col ? { col, dir: s.dir === 1 ? -1 : 1 } : { col, dir: col === 'amount' || col === 'postings' ? -1 : 1 }));
+
+  const groups = useMemo(
+    () => (groupBy === 'none' ? null : buildMaterialGroups(sorted, groupBy, types)),
+    [sorted, groupBy, types],
+  );
+
+  const isOpen = (key: string) => collapsed[key] !== undefined ? !collapsed[key] : !allCollapsed;
+  const toggleGroup = (key: string) => setCollapsed((c) => ({ ...c, [key]: isOpen(key) }));
+  const expandAll = () => { setAllCollapsed(false); setCollapsed({}); };
+  const collapseAll = () => { setAllCollapsed(true); setCollapsed({}); };
+
+  const sortArrow = (col: MaterialSortCol) => (sort.col === col ? (sort.dir === 1 ? ' ▲' : ' ▼') : '');
+
+  const renderRow = (c: MaterialPackageCombination, indent: boolean) => {
+    const key = c.material_code;
+    const saving = savingKeys.has(key);
+    return (
+      <tr key={key}>
+        <td className="mono" style={{ paddingLeft: indent ? 20 : undefined }}>{c.material_code}</td>
+        <td>{c.material_name ?? <span className="faint">—</span>}</td>
+        <td className="mono faint">{c.prefix}</td>
+        <td className="mono" style={{ textAlign: 'right' }}>{c.postings.toLocaleString()}</td>
+        <td className="mono" style={{ textAlign: 'right' }}>{money(c.amount)}</td>
+        <td>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {c.resolved_work_package
+              ? <PackageBadge types={types} code={c.resolved_work_package} />
+              : <span className="faint mono">UNALLOCATED</span>}
+            {!c.assigned_work_package && c.resolved_work_package && (
+              <span className="faint" style={{ fontSize: 10 }}>(default)</span>
+            )}
+            {saving && <span className="faint" style={{ fontSize: 10 }}>saving…</span>}
+          </div>
+        </td>
+        <td style={saving ? { opacity: .5, pointerEvents: 'none' } : undefined}>
+          <PackagePicker types={types} value={c.assigned_work_package ?? ''}
+            onChange={(v) => onAllocate([c], v || null)} />
+        </td>
+      </tr>
+    );
+  };
+
+  const headerCell = (label: string, col: MaterialSortCol, style?: React.CSSProperties) => (
+    <th style={{ cursor: 'pointer', ...style }} onClick={() => toggleSort(col)}>{label}{sortArrow(col)}</th>
+  );
+
+  return (
+    <div className="table-wrap">
+      <div className="row" style={{ marginBottom: 8, gap: 8, flexWrap: 'wrap' }}>
+        <input placeholder="Filter code or description…" value={filter}
+               onChange={(e) => setFilter(e.target.value)} style={{ width: 240 }} />
+        <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <span className="faint" style={{ fontSize: 12 }}>Group by</span>
+          <select value={groupBy} onChange={(e) => { setGroupBy(e.target.value as MaterialGroupBy); setCollapsed({}); }}>
+            <option value="prefix">Code prefix (first 2 digits)</option>
+            <option value="package">Current work package</option>
+            <option value="none">None</option>
+          </select>
+        </label>
+        {groups && (
+          <>
+            <button className="btn sm" onClick={expandAll}>Expand all</button>
+            <button className="btn sm" onClick={collapseAll}>Collapse all</button>
+          </>
+        )}
+        <span className="faint" style={{ fontSize: 11, alignSelf: 'center' }}>
+          {sorted.length.toLocaleString()} of {combos.length.toLocaleString()} materials
+          {groups && ` across ${groups.length} group${groups.length === 1 ? '' : 's'}`}
+        </span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            {headerCell('Code', 'material_code')}
+            {headerCell('Description', 'material_name')}
+            {headerCell('Prefix', 'prefix', { width: 70 })}
+            {headerCell('Postings', 'postings', { textAlign: 'right', width: 90 })}
+            {headerCell('Amount', 'amount', { textAlign: 'right', width: 120 })}
+            <th style={{ width: 150 }}>Now</th>
+            <th style={{ width: 240 }}>Allocate</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.length === 0 && (
+            <tr><td colSpan={7}><div className="empty">No materials match.</div></td></tr>
+          )}
+          {groups ? groups.map((g) => {
+            const open = isOpen(g.key);
+            const groupSaving = g.rows.some((r) => savingKeys.has(r.material_code));
+            return (
+              <Fragment key={g.key}>
+                <tr style={{ background: 'var(--surface-2)', cursor: 'pointer' }} onClick={() => toggleGroup(g.key)}>
+                  <td colSpan={2}>
+                    <span style={{ marginRight: 6 }}>{open ? '▾' : '▸'}</span>
+                    {groupBy === 'package'
+                      ? (g.key === 'UNALLOCATED'
+                          ? <span className="faint mono" style={{ fontWeight: 700 }}>UNALLOCATED</span>
+                          : <PackageBadge types={types} code={g.key} />)
+                      : <span className="mono" style={{ fontWeight: 700 }}>{g.key}xxxxx</span>}
+                    <span className="faint" style={{ fontSize: 11, marginLeft: 8 }}>
+                      {g.rows.length} material{g.rows.length === 1 ? '' : 's'}
+                    </span>
+                    {groupSaving && <span className="faint" style={{ fontSize: 10, marginLeft: 8 }}>saving…</span>}
+                  </td>
+                  <td></td>
+                  <td className="mono" style={{ textAlign: 'right' }}>{g.postings.toLocaleString()}</td>
+                  <td className="mono" style={{ textAlign: 'right' }}>{money(g.amount)}</td>
+                  <td></td>
+                  <td onClick={(e) => e.stopPropagation()}
+                      style={groupSaving ? { opacity: .5, pointerEvents: 'none' } : undefined}>
+                    <PackagePicker types={types} value={g.uniformPackage} clearLabel="whole group"
+                      onChange={(v) => onAllocate(g.rows, v || null)} />
+                  </td>
+                </tr>
+                {open && g.rows.map((c) => renderRow(c, true))}
+              </Fragment>
+            );
+          }) : sorted.map((c) => renderRow(c, false))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 /**
  * Manage dim_work_package itself — code, name, group, icon, colour. Unlike
  * cost type, the code is typed directly (the budget file's own "Cost Code"
@@ -396,15 +588,12 @@ export function PackageMapping() {
   };
 
   const allocateMaterial = (rows: MaterialPackageCombination[], value: WorkPackage | null) => {
-    const keys = rows.map((r) => r.material_code ?? '');
+    const keys = rows.map((r) => r.material_code);
     setSavingMaterial((s) => new Set([...s, ...keys]));
     setError(null);
     (async () => {
       try {
-        const items: MaterialPackageAssignment[] = rows
-          .filter((r): r is MaterialPackageCombination & { material_code: string } => !!r.material_code)
-          .map((r) => ({ material_code: r.material_code, work_package: value }));
-        if (items.length === 0) throw new Error('This line has no material code and cannot be coded directly.');
+        const items: MaterialPackageAssignment[] = rows.map((r) => ({ material_code: r.material_code, work_package: value }));
         await call(api.workPackages.assignMaterial(items));
         await loadMaterials();
       } catch (e) {
@@ -414,6 +603,24 @@ export function PackageMapping() {
       }
     })();
   };
+
+  const exportMaterials = () => guard(async () => {
+    const path = await call(api.workPackages.exportMaterialMapping());
+    setNote(path ? `Exported to ${path} — fill the "work package" column and import it back to bulk-apply.` : 'Export cancelled.');
+  });
+
+  const importMaterials = () => guard(async () => {
+    const path = await call(api.files.pick('Select the edited material mapping workbook'));
+    if (!path) { setNote('Import cancelled.'); return; }
+    const result: MaterialImportResult = await call(api.workPackages.importMaterialMapping(path));
+    await loadMaterials();
+    const errText = result.errors.length
+      ? ` — ${result.errors.length} unknown package code${result.errors.length === 1 ? '' : 's'}: ${
+          result.errors.slice(0, 5).map((e) => `${e.material_code} → "${e.work_package}"`).join(', ')
+        }${result.errors.length > 5 ? ', …' : ''}`
+      : '';
+    setNote(`Applied ${result.assigned}, skipped ${result.skipped}${errText}`);
+  });
 
   const allocateService = (rows: ServicePackageCombination[], value: WorkPackage | null) => {
     const keys = rows.map((r) => `${r.service_code}\u0000${r.service_text}`);
@@ -472,18 +679,24 @@ export function PackageMapping() {
         {
           id: 'materials', label: 'Materials', content: (
             <div className="card">
-              <h3>Code materials into packages</h3>
-              <p className="hint">
-                Every real material — the SAP material number (MATNR), not the GL account, since
-                several different materials commonly share one GL — that occurs in posted MATERIAL
-                cost. {materials.length} of them, grouped by their current work package
-                (UNALLOCATED first). Pick one and it saves immediately. A line with no material
-                code (an older extract, or the column left blank) can't be coded until it has one.
-              </p>
-              <GroupedPackageTable combos={materials} types={types} savingKeys={savingMaterial}
-                onAllocate={allocateMaterial}
-                rowKey={(c) => c.material_code ?? `\u0000${c.material_name ?? ''}`} sortKey={materialLabel}
-                keyColumnLabel="Material" renderKeyCell={(c) => materialLabel(c)} unitNoun="material" />
+              <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
+                <div>
+                  <h3>Code materials into packages</h3>
+                  <p className="hint">
+                    Every real material — the SAP material number (MATNR), not the GL account, since
+                    several different materials commonly share one GL — that occurs in posted MATERIAL
+                    cost. {materials.length} of them. Group by code prefix to bulk-code a whole category
+                    in one click, or pick a single row. Export to Excel, fill the "work package" column
+                    at scale, and import it back — a line with no material code (an older extract, or the
+                    column left blank) can't be coded until it has one, so it never shows up here.
+                  </p>
+                </div>
+                <div className="row" style={{ gap: 8 }}>
+                  <button className="btn sm" onClick={exportMaterials} disabled={busy}>⤓ Export to Excel</button>
+                  <button className="btn sm" onClick={importMaterials} disabled={busy}>⤒ Import mapping…</button>
+                </div>
+              </div>
+              <MaterialCodingTable combos={materials} types={types} savingKeys={savingMaterial} onAllocate={allocateMaterial} />
             </div>
           ),
         },

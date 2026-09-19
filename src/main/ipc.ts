@@ -1,4 +1,5 @@
 import { BrowserWindow, app, dialog, ipcMain, shell } from 'electron';
+import ExcelJS from 'exceljs';
 import { copyFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -56,22 +57,43 @@ function slugifyCostType(label: string): string {
 /**
  * Every real material (SAP material number, cost type MATERIAL) that
  * actually occurs in posted actual cost, with what material_work_package
- * resolves it to. A row with no material_code (an older extract, or the
- * column left blank) still appears — grouped under its own bucket — so a
- * material line with no identity to code stays visible rather than
- * silently vanishing from the coding screen.
+ * resolves it to, plus its code's first two digits (real SAP material
+ * numbering groups by category there) so the coding screen can bulk-assign
+ * a whole category at once instead of one material at a time. A line with
+ * no material code can never be coded here (nothing to key on), so it's
+ * excluded entirely rather than shown as a dead-end bucket.
  */
-function loadMaterialPackageCombinations(): MaterialPackageCombination[] {
-  return getDb().prepare(`
-    SELECT a.material_code, a.material_name,
+const MATERIAL_COMBINATIONS_SQL = `
+    SELECT a.material_code, a.material_name, SUBSTR(a.material_code, 1, 2) AS prefix,
            COUNT(*) AS postings, SUM(a.amount) AS amount,
            a.work_package AS resolved_work_package,
            (SELECT m.work_package FROM material_work_package m
              WHERE m.material_code = a.material_code) AS assigned_work_package
     FROM v_actual a
-    WHERE a.cost_type = 'MATERIAL'
+    WHERE a.cost_type = 'MATERIAL' AND a.material_code IS NOT NULL
     GROUP BY a.material_code, a.material_name, a.work_package
-    ORDER BY ABS(SUM(a.amount)) DESC`).all() as MaterialPackageCombination[];
+    ORDER BY ABS(SUM(a.amount)) DESC`;
+
+function loadMaterialPackageCombinations(): MaterialPackageCombination[] {
+  return getDb().prepare(MATERIAL_COMBINATIONS_SQL).all() as MaterialPackageCombination[];
+}
+
+/** Shared write path for a batch of material assignments — one at a time from the picker, or bulk from an import. */
+function applyMaterialAssignments(items: MaterialPackageAssignment[]): { assigned: number; cleared: number } {
+  const db = getDb();
+  const del = db.prepare(`DELETE FROM material_work_package WHERE material_code = ?`);
+  const ins = db.prepare(`INSERT INTO material_work_package (material_code, work_package) VALUES (?, ?)`);
+  let assigned = 0, cleared = 0;
+  const run = db.transaction(() => {
+    for (const it of items) {
+      del.run(it.material_code);
+      if (it.work_package === null) { cleared++; continue; }
+      ins.run(it.material_code, it.work_package);
+      assigned++;
+    }
+  });
+  run();
+  return { assigned, cleared };
 }
 
 /**
@@ -406,7 +428,6 @@ export function registerIpc(): void {
    * mirroring assignService's shape with one key column instead of two.
    */
   handle('workPackages:assignMaterial', (items: MaterialPackageAssignment[]) => {
-    const db = getDb();
     const known = new Set(loadWorkPackageDefs().map((t) => t.code));
     for (const it of items) {
       if (!it.material_code) throw new Error('This line has no material code and cannot be coded directly.');
@@ -414,19 +435,77 @@ export function registerIpc(): void {
         throw new Error(`"${it.work_package}" is not a work package.`);
       }
     }
-    const del = db.prepare(`DELETE FROM material_work_package WHERE material_code = ?`);
-    const ins = db.prepare(`INSERT INTO material_work_package (material_code, work_package) VALUES (?, ?)`);
-    let assigned = 0, cleared = 0;
-    const run = db.transaction(() => {
-      for (const it of items) {
-        del.run(it.material_code);
-        if (it.work_package === null) { cleared++; continue; }
-        ins.run(it.material_code, it.work_package);
-        assigned++;
-      }
+    return applyMaterialAssignments(items);
+  });
+
+  /**
+   * The Materials tab's own combinations, exported to Excel via the generic
+   * exportResult() writer — the same one Cost Report / Subcontractor
+   * Analysis use for their "⤓ Excel" buttons. The resolved column is
+   * literally named work_package so the file can be edited and re-imported
+   * with workPackages:importMaterialMapping.
+   */
+  handle('workPackages:exportMaterialMapping', async () => {
+    const res = await dialog.showSaveDialog({
+      title: 'Export material work-package mapping',
+      defaultPath: join(app.getPath('documents'), `Material mapping ${new Date().toISOString().slice(0, 10)}.xlsx`),
+      filters: [{ name: 'Excel workbook', extensions: ['xlsx'] }],
     });
-    run();
-    return { assigned, cleared };
+    if (res.canceled || !res.filePath) return null;
+    const rows = getDb().prepare(MATERIAL_COMBINATIONS_SQL).all() as MaterialPackageCombination[];
+    const result: QueryResult = {
+      columns: ['material_code', 'material_name', 'prefix', 'postings', 'amount', 'work_package'],
+      rows: rows.map((r) => ({
+        material_code: r.material_code, material_name: r.material_name,
+        prefix: r.prefix, postings: r.postings, amount: r.amount,
+        work_package: r.assigned_work_package ?? r.resolved_work_package ?? '',
+      })),
+      rowCount: rows.length, ms: 0, truncated: false,
+    };
+    await exportResult(res.filePath, result, {
+      title: 'Material work-package mapping',
+      subtitle: 'Fill the "work package" column with a work package code and re-import to bulk-apply.',
+    });
+    return res.filePath;
+  });
+
+  /**
+   * Bulk-apply a material_code -> work_package mapping from an edited export.
+   * Reads the workbook directly (not the staging-preview readWorkbook(),
+   * which caps at 200 rows and does title-block header detection this file
+   * — always its own export, header row 1 — doesn't need). A bad work
+   * package code is reported and skipped, never aborts the rest.
+   */
+  handle('workPackages:importMaterialMapping', async (filePath: string) => {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(filePath);
+    const ws = wb.worksheets[0];
+    if (!ws) throw new Error('That workbook has no worksheet.');
+
+    const header = (ws.getRow(1).values as unknown[]).map((v) => (v == null ? '' : String(v).trim().toLowerCase()));
+    const codeCol = header.findIndex((h) => h === 'material_code' || h === 'material code');
+    const pkgCol = header.findIndex((h) => h === 'work_package' || h === 'work package');
+    if (codeCol < 0 || pkgCol < 0) {
+      throw new Error('Expected a "Material code" column and a "Work package" column — export the mapping first and edit that file.');
+    }
+
+    const known = new Set(loadWorkPackageDefs().map((t) => t.code));
+    const items: MaterialPackageAssignment[] = [];
+    const errors: { material_code: string; work_package: string }[] = [];
+    let skipped = 0;
+    ws.eachRow((row, rowNo) => {
+      if (rowNo === 1) return;
+      const code = row.getCell(codeCol).value;
+      const pkg = row.getCell(pkgCol).value;
+      const codeText = code == null ? '' : String(code).trim();
+      const pkgText = pkg == null ? '' : String(pkg).trim();
+      if (!codeText || !pkgText) { skipped++; return; }
+      if (!known.has(pkgText)) { errors.push({ material_code: codeText, work_package: pkgText }); return; }
+      items.push({ material_code: codeText, work_package: pkgText });
+    });
+
+    const { assigned } = applyMaterialAssignments(items);
+    return { assigned, skipped, errors };
   });
 
   /** Every (service code, service text) pair in subcontract PO detail — the Subcontractors tab's unit of work. */
@@ -472,9 +551,9 @@ export function registerIpc(): void {
                      ORDER BY b.imported_at DESC LIMIT ?`).all(limit));
 
   // --- upload flow ---------------------------------------------------------
-  handle('file:pick', async () => {
+  handle('file:pick', async (title?: string) => {
     const res = await dialog.showOpenDialog({
-      title: 'Select a cost report',
+      title: title || 'Select a cost report',
       filters: [{ name: 'Spreadsheets', extensions: ['xlsx', 'xlsm', 'csv'] }],
       properties: ['openFile'],
     });
