@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { api, call } from '../lib/api';
 import { SheetTabs } from '../components/SheetTabs';
 import type {
@@ -35,13 +35,13 @@ function PackagePicker({ types, value, onChange, clearLabel = 'clear' }: {
                   onClick={() => onChange(selected ? '' : t.code)}
                   style={{
                     display: 'inline-flex', alignItems: 'center', gap: 4,
-                    fontSize: 11, lineHeight: 1, padding: '4px 7px', borderRadius: 6,
+                    fontSize: 12, lineHeight: 1, padding: '4px 7px', borderRadius: 6,
                     cursor: 'pointer', fontFamily: 'inherit',
                     background: selected ? t.color : 'var(--surface-3)',
                     border: `1px solid ${selected ? t.color : 'var(--border)'}`,
                     filter: selected ? 'none' : 'grayscale(0.4) opacity(0.75)',
                   }}>
-            <span style={{ fontSize: 9 }}>{t.icon}</span>{t.code}
+            <span style={{ fontSize: 10 }}>{t.icon}</span>{t.code}
           </button>
         );
       })}
@@ -276,6 +276,20 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
   const [allCollapsed, setAllCollapsed] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
+  // The column-header row sticks directly below this bar, whatever height it
+  // actually renders at — it can wrap to more than one line depending on
+  // window width and how many work packages exist, so the offset is measured
+  // rather than a hardcoded constant (see `--sel-bar-h` in styles.css).
+  const selBarRef = useRef<HTMLDivElement>(null);
+  const [selBarHeight, setSelBarHeight] = useState(0);
+  useEffect(() => {
+    const el = selBarRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(([entry]) => setSelBarHeight(entry.contentRect.height));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   const filtered = useMemo(() => {
     const f = filter.trim().toLowerCase();
     if (!f) return combos;
@@ -372,7 +386,6 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
             {saving && <span className="faint" style={{ fontSize: 10 }}>saving…</span>}
           </div>
         </td>
-        <td></td>
       </tr>
     );
   };
@@ -403,11 +416,6 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
         <td className="mono" style={{ textAlign: 'right', verticalAlign: 'top' }}>{g.postings.toLocaleString()}</td>
         <td className="mono" style={{ textAlign: 'right', verticalAlign: 'top' }}>{money(g.amount)}</td>
         <td style={{ verticalAlign: 'top' }}></td>
-        <td onClick={(e) => e.stopPropagation()}
-            style={{ verticalAlign: 'top', ...(groupSaving ? { opacity: .5, pointerEvents: 'none' } : undefined) }}>
-          <PackagePicker types={types} value={g.uniformPackage} clearLabel="whole group"
-            onChange={(v) => onAllocate(g.rows, v || null)} />
-        </td>
       </tr>
     );
   };
@@ -455,7 +463,7 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
           {' · '}{unallocated.length.toLocaleString()} unallocated ({pct(unallocatedAmount)}% of total spend)
         </span>
       </div>
-      <div className="sel-bar">
+      <div className="sel-bar" ref={selBarRef}>
         {selected.size > 0 ? (
           <>
             <strong style={{ fontSize: 12 }}>{selected.size} selected</strong>
@@ -474,7 +482,7 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
           </span>
         )}
       </div>
-      <table>
+      <table style={{ '--sel-bar-h': `${selBarHeight}px` } as React.CSSProperties}>
         <thead className="material-thead">
           <tr>
             <th style={{ width: 28, textAlign: 'center' }}>
@@ -487,12 +495,11 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
             {headerCell('Postings', 'postings', { textAlign: 'right', width: 90 })}
             {headerCell('Amount', 'amount', { textAlign: 'right', width: 120 })}
             <th style={{ width: 150 }}>Now</th>
-            <th style={{ width: 240 }}>Allocate</th>
           </tr>
         </thead>
         <tbody>
           {sorted.length === 0 && (
-            <tr><td colSpan={8}><div className="empty">No materials match.</div></td></tr>
+            <tr><td colSpan={7}><div className="empty">No materials match.</div></td></tr>
           )}
           {groups ? groups.map((g) => {
             const open = isOpen(g.key);

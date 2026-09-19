@@ -118,30 +118,30 @@ the reconciliation. The files are not in the repo, so this is a manual check.
   in `MaterialCodingTable`) — group by package, then by code prefix within each, or the
   reverse — reusing `buildMaterialGroups()` for both levels rather than a second grouping
   function; picking the same dimension for both collapses back to one level rather than
-  showing a pointless single-item nesting. A leaf row never renders its own `PackagePicker`
-  — at CSI's 16-plus-INDIRECT scale that icon grid wraps across several lines and makes
-  every row unreadable — it carries only a plain checkbox instead. Assigning a package to
-  specific rows (a handful of exceptions cutting across groups, not "this whole group")
-  goes through one shared `PackagePicker` in a toolbar that appears above the table
-  whenever any row is checked, applying to every currently-checked row at once and then
-  clearing the selection. Group and sub-group headers keep their own scoped bulk
-  `PackagePicker` in the Allocate column unchanged — that "code this whole
-  prefix/package" fast path is still the primary way most materials get coded; the
-  checkbox+toolbar path is for what doesn't fit a whole group. A group header's own
-  checkbox (tri-state: all/some/none of its rows selected) is a shortcut into the same
-  shared selection set, not a separate mechanism. The toolbar and the column-header row
-  are both `position: sticky`, stacked so they stay visible together while a long,
-  scrolled list is checked — this only works because the Materials tab's own
-  `.table-wrap` overrides the shared class's `overflow: auto` back to `visible`
-  (`overflow: auto` makes an element the containing block for its own sticky
-  descendants regardless of whether it ever actually scrolls, which silently breaks
-  `position: sticky` whenever, as here, the real scrolling happens on `.content`
-  instead); the toolbar always renders, in an idle or an active state, so its height —
-  and therefore the header row's sticky offset below it — never shifts. A group header
-  and the page-level summary line both report their own unallocated count and % of
-  total spend (of the whole tab's total, not the current filter), and a leaf row with
-  its own explicit assignment carries a small inline "✕" next to its badge to clear
-  just that row, without needing the checkbox+toolbar flow for a single undo.
+  showing a pointless single-item nesting. Neither a leaf row nor a group/sub-group
+  header renders its own `PackagePicker` inline — at CSI's 16-plus-INDIRECT scale, once
+  each button also carries its code (not just its icon), that control is wide enough to
+  wrap across several lines and made every row it touched tall and hard to scan. Every
+  row instead carries a plain checkbox (a group header's own checkbox is tri-state:
+  all/some/none of its rows selected), and there is exactly one `PackagePicker` on the
+  page — a bar above the table, always rendered (an idle hint, or "N selected" once
+  anything is checked) — that applies to every currently-checked row at once, whether
+  that's one row, a hand-picked few across groups, or an entire group checked via its
+  own tri-state box, then clears the selection. This bar and the column-header row are
+  both `position: sticky`, stacked so they stay visible together while a long, scrolled
+  list is checked — this only works because the Materials tab's own `.table-wrap`
+  overrides the shared class's `overflow: auto` back to `visible` (`overflow: auto`
+  makes an element the containing block for its own sticky descendants regardless of
+  whether it ever actually scrolls, which silently breaks `position: sticky` whenever,
+  as here, the real scrolling happens on `.content` instead). The bar's rendered height
+  is measured with a `ResizeObserver` (`selBarHeight` in `MaterialCodingTable`) and fed
+  to the header row's own sticky offset as a `--sel-bar-h` CSS variable on the `<table>`
+  — never hardcoded, because the bar's own height isn't fixed: it can wrap to more than
+  one line depending on window width or simply how many work packages exist. A group
+  header and the page-level summary line both report their own unallocated count and %
+  of total spend (of the whole tab's total, not the current filter), and a leaf row
+  with its own explicit assignment carries a small inline "✕" next to its badge to
+  clear just that row, without needing the checkbox+bar flow for a single undo.
 - **Accrual is a manual estimate, but it still goes through staging.** `ACCRUAL` is a
   module like any other — `fact_accrual` / `v_accrual`, staged and posted via the normal
   upload wizard — for cost incurred but not yet posted in SAP (e.g. "ADD/OMM",
