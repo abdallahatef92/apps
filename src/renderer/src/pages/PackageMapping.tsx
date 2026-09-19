@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { api, call } from '../lib/api';
+import { useApp } from '../App';
 import { SheetTabs } from '../components/SheetTabs';
 import type {
   ElementPackageAssignment, MaterialImportResult, MaterialPackageAssignment, MaterialPackageCombination,
@@ -901,6 +902,7 @@ function PackageManager({ types, onCreate, onUpdate, onDelete, busy }: {
  * Indirect but stays visible here for review.
  */
 export function PackageMapping() {
+  const { projectKey, dataVersion } = useApp();
   const [types, setTypes] = useState<WorkPackageDef[]>([]);
   const [materials, setMaterials] = useState<MaterialPackageCombination[]>([]);
   const [other, setOther] = useState<OtherPackageCombination[]>([]);
@@ -918,23 +920,38 @@ export function PackageMapping() {
   };
 
   const loadTypes = async () => { const r = await api.workPackages.types(); if (r.ok) setTypes(r.data); };
-  const loadMaterials = async () => { const r = await api.workPackages.materialCombinations(); if (r.ok) setMaterials(r.data); };
-  const loadOther = async () => { const r = await api.workPackages.otherCombinations(); if (r.ok) setOther(r.data); };
-  const loadServices = async () => { const r = await api.workPackages.serviceCombinations(); if (r.ok) setServices(r.data); };
+  const loadMaterials = async () => {
+    if (!projectKey) { setMaterials([]); return; }
+    const r = await api.workPackages.materialCombinations(projectKey); if (r.ok) setMaterials(r.data);
+  };
+  const loadOther = async () => {
+    if (!projectKey) { setOther([]); return; }
+    const r = await api.workPackages.otherCombinations(projectKey); if (r.ok) setOther(r.data);
+  };
+  const loadServices = async () => {
+    if (!projectKey) { setServices([]); return; }
+    const r = await api.workPackages.serviceCombinations(projectKey); if (r.ok) setServices(r.data);
+  };
 
-  useEffect(() => { loadTypes(); loadMaterials(); loadOther(); loadServices(); }, []);
+  // Every material/cost element/service item is coded per project — the same
+  // material can (and often does) resolve to a different package, or none,
+  // on another project — so this page reloads whenever the project picker
+  // or the data version changes, the same dependency every other page keys
+  // its queries on.
+  useEffect(() => { loadTypes(); loadMaterials(); loadOther(); loadServices(); }, [projectKey, dataVersion]);
 
   const allocateElement = (
     rows: { cost_element_code: string }[], value: WorkPackage | null,
     setSaving: typeof setSavingOther, reload: () => Promise<void>,
   ) => {
+    if (!projectKey) return;
     const keys = rows.map((r) => r.cost_element_code);
     setSaving((s) => new Set([...s, ...keys]));
     setError(null);
     (async () => {
       try {
         const items: ElementPackageAssignment[] = rows.map((r) => ({ cost_element_code: r.cost_element_code, work_package: value }));
-        await call(api.workPackages.assignElement(items));
+        await call(api.workPackages.assignElement(projectKey, items));
         await reload();
       } catch (e) {
         setError((e as Error).message);
@@ -945,13 +962,14 @@ export function PackageMapping() {
   };
 
   const allocateMaterial = (rows: MaterialPackageCombination[], value: WorkPackage | null) => {
+    if (!projectKey) return;
     const keys = rows.map((r) => r.material_code);
     setSavingMaterial((s) => new Set([...s, ...keys]));
     setError(null);
     (async () => {
       try {
         const items: MaterialPackageAssignment[] = rows.map((r) => ({ material_code: r.material_code, work_package: value }));
-        await call(api.workPackages.assignMaterial(items));
+        await call(api.workPackages.assignMaterial(projectKey, items));
         await loadMaterials();
       } catch (e) {
         setError((e as Error).message);
@@ -962,14 +980,16 @@ export function PackageMapping() {
   };
 
   const exportMaterials = () => guard(async () => {
-    const path = await call(api.workPackages.exportMaterialMapping());
+    if (!projectKey) return;
+    const path = await call(api.workPackages.exportMaterialMapping(projectKey));
     setNote(path ? `Exported to ${path} — fill the "work package" column and import it back to bulk-apply.` : 'Export cancelled.');
   });
 
   const importMaterials = () => guard(async () => {
+    if (!projectKey) return;
     const path = await call(api.files.pick('Select the edited material mapping workbook'));
     if (!path) { setNote('Import cancelled.'); return; }
-    const result: MaterialImportResult = await call(api.workPackages.importMaterialMapping(path));
+    const result: MaterialImportResult = await call(api.workPackages.importMaterialMapping(projectKey, path));
     await loadMaterials();
     const errText = result.errors.length
       ? ` — ${result.errors.length} unknown package code${result.errors.length === 1 ? '' : 's'}: ${
@@ -980,6 +1000,7 @@ export function PackageMapping() {
   });
 
   const allocateService = (rows: ServicePackageCombination[], value: WorkPackage | null) => {
+    if (!projectKey) return;
     const keys = rows.map((r) => `${r.po_no}\u0000${r.service_code}\u0000${r.service_text}`);
     setSavingService((s) => new Set([...s, ...keys]));
     setError(null);
@@ -988,7 +1009,7 @@ export function PackageMapping() {
         const items: ServicePackageAssignment[] = rows.map((r) => ({
           service_code: r.service_code, service_text: r.service_text, work_package: value,
         }));
-        await call(api.workPackages.assignService(items));
+        await call(api.workPackages.assignService(projectKey, items));
         await loadServices();
       } catch (e) {
         setError((e as Error).message);

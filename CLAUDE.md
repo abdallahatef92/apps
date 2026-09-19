@@ -195,6 +195,32 @@ the reconciliation. The files are not in the repo, so this is a manual check.
   across every PO, immediately. `rowKey`/`savingKeys` for this tab include
   `po_no` too, so two rows that happen to share a code/text but sit on
   different POs never collide in the selection or saving-indicator state.
+  **The mapping tables are project-scoped** (`016_project_scoped_mapping.sql`)
+  — `material_work_package`, `cost_element_work_package` and
+  `service_work_package` all carry `project_key` as part of their primary
+  key now, not just the line's own identity, because two projects routinely
+  code the same material or GL account into different packages and the
+  workflow is "code one project's register at a time," never "code the
+  warehouse." `dim_work_package` (the package catalog itself) stays a
+  shared, global taxonomy — only the mapping is per-project. Every
+  correlated work-package subquery in `v_posting`/`v_service_line`/
+  `v_accrual` matches on `project_key` alongside the line's own code, and
+  `loadMaterialPackageCombinations`/`loadOtherPackageCombinations`/
+  `loadServicePackageCombinations` (`src/main/ipc.ts`) all take a
+  `projectKey` argument and filter `v_actual`/`v_service_line` by it too —
+  the combinations list itself, not just the assignment lookup, was
+  previously unscoped and summed every project's postings together under
+  one material/GL/service code. `workPackages:assignElement`/
+  `assignMaterial`/`assignService`/`exportMaterialMapping`/
+  `importMaterialMapping` all take `projectKey` as their first IPC
+  argument for the same reason. `PackageMapping.tsx` reads `projectKey`/
+  `dataVersion` from `useApp()` (it previously read neither) and reloads
+  on either changing, the same dependency every other page keys its
+  queries on; with no project selected, every combinations list is empty
+  rather than showing unscoped, cross-project data. An existing
+  assignment made before this migration was copied forward onto every
+  project already in the database (rather than dropped), so each project
+  starts from that shared history as its own independent baseline.
 - **Accrual is a manual estimate, but it still goes through staging.** `ACCRUAL` is a
   module like any other — `fact_accrual` / `v_accrual`, staged and posted via the normal
   upload wizard — for cost incurred but not yet posted in SAP (e.g. "ADD/OMM",

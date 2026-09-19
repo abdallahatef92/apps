@@ -68,27 +68,27 @@ const MATERIAL_COMBINATIONS_SQL = `
            COUNT(*) AS postings, SUM(a.amount) AS amount,
            a.work_package AS resolved_work_package,
            (SELECT m.work_package FROM material_work_package m
-             WHERE m.material_code = a.material_code) AS assigned_work_package
+             WHERE m.project_key = @project_key AND m.material_code = a.material_code) AS assigned_work_package
     FROM v_actual a
-    WHERE a.cost_type = 'MATERIAL' AND a.material_code IS NOT NULL
+    WHERE a.cost_type = 'MATERIAL' AND a.material_code IS NOT NULL AND a.project_key = @project_key
     GROUP BY a.material_code, a.material_name, a.work_package
     ORDER BY ABS(SUM(a.amount)) DESC`;
 
-function loadMaterialPackageCombinations(): MaterialPackageCombination[] {
-  return getDb().prepare(MATERIAL_COMBINATIONS_SQL).all() as MaterialPackageCombination[];
+function loadMaterialPackageCombinations(projectKey: number): MaterialPackageCombination[] {
+  return getDb().prepare(MATERIAL_COMBINATIONS_SQL).all({ project_key: projectKey }) as MaterialPackageCombination[];
 }
 
 /** Shared write path for a batch of material assignments — one at a time from the picker, or bulk from an import. */
-function applyMaterialAssignments(items: MaterialPackageAssignment[]): { assigned: number; cleared: number } {
+function applyMaterialAssignments(projectKey: number, items: MaterialPackageAssignment[]): { assigned: number; cleared: number } {
   const db = getDb();
-  const del = db.prepare(`DELETE FROM material_work_package WHERE material_code = ?`);
-  const ins = db.prepare(`INSERT INTO material_work_package (material_code, work_package) VALUES (?, ?)`);
+  const del = db.prepare(`DELETE FROM material_work_package WHERE project_key = ? AND material_code = ?`);
+  const ins = db.prepare(`INSERT INTO material_work_package (project_key, material_code, work_package) VALUES (?, ?, ?)`);
   let assigned = 0, cleared = 0;
   const run = db.transaction(() => {
     for (const it of items) {
-      del.run(it.material_code);
+      del.run(projectKey, it.material_code);
       if (it.work_package === null) { cleared++; continue; }
-      ins.run(it.material_code, it.work_package);
+      ins.run(projectKey, it.material_code, it.work_package);
       assigned++;
     }
   });
@@ -101,17 +101,17 @@ function applyMaterialAssignments(items: MaterialPackageAssignment[]): { assigne
  * default to the INDIRECT catch-all but stay reviewable here, in case one is
  * really package work miscoded under another cost type.
  */
-function loadOtherPackageCombinations(): OtherPackageCombination[] {
+function loadOtherPackageCombinations(projectKey: number): OtherPackageCombination[] {
   return getDb().prepare(`
     SELECT a.cost_element_code, a.cost_element_name, a.cost_type,
            COUNT(*) AS postings, SUM(a.amount) AS amount,
            a.work_package AS resolved_work_package,
            (SELECT m.work_package FROM cost_element_work_package m
-             WHERE m.cost_element_code = a.cost_element_code) AS assigned_work_package
+             WHERE m.project_key = @project_key AND m.cost_element_code = a.cost_element_code) AS assigned_work_package
     FROM v_actual a
-    WHERE a.cost_type NOT IN ('MATERIAL','SUBCONTRACT')
+    WHERE a.cost_type NOT IN ('MATERIAL','SUBCONTRACT') AND a.project_key = @project_key
     GROUP BY a.cost_element_code, a.cost_element_name, a.cost_type, a.work_package
-    ORDER BY ABS(SUM(a.amount)) DESC`).all() as OtherPackageCombination[];
+    ORDER BY ABS(SUM(a.amount)) DESC`).all({ project_key: projectKey }) as OtherPackageCombination[];
 }
 
 /**
@@ -126,18 +126,20 @@ function loadOtherPackageCombinations(): OtherPackageCombination[] {
  * this pair's rows applies to every row sharing that same code/text,
  * across every PO, immediately.
  */
-function loadServicePackageCombinations(): ServicePackageCombination[] {
+function loadServicePackageCombinations(projectKey: number): ServicePackageCombination[] {
   return getDb().prepare(`
     SELECT COALESCE(s.po_no,'') AS po_no,
            COALESCE(s.service_code,'') AS service_code, COALESCE(s.service_text,'') AS service_text,
            COUNT(*) AS postings, SUM(s.amount_net) AS amount,
            s.work_package AS resolved_work_package,
            (SELECT m.work_package FROM service_work_package m
-             WHERE m.service_code = COALESCE(s.service_code,'')
+             WHERE m.project_key = @project_key
+               AND m.service_code = COALESCE(s.service_code,'')
                AND m.service_text = COALESCE(s.service_text,'')) AS assigned_work_package
     FROM v_service_line s
+    WHERE s.project_key = @project_key
     GROUP BY COALESCE(s.po_no,''), COALESCE(s.service_code,''), COALESCE(s.service_text,''), s.work_package
-    ORDER BY ABS(SUM(s.amount_net)) DESC`).all() as ServicePackageCombination[];
+    ORDER BY ABS(SUM(s.amount_net)) DESC`).all({ project_key: projectKey }) as ServicePackageCombination[];
 }
 
 function loadWorkPackageDefs(): WorkPackageDef[] {
@@ -395,18 +397,20 @@ export function registerIpc(): void {
     return loadWorkPackageDefs();
   });
 
-  /** Every material (cost type MATERIAL) that occurs in posted actual cost — the Materials tab's unit of work. */
-  handle('workPackages:materialCombinations', () => loadMaterialPackageCombinations());
+  /** Every material (cost type MATERIAL) that occurs in posted actual cost — the Materials tab's unit of work. Project-scoped: the same material can be coded differently on different projects. */
+  handle('workPackages:materialCombinations', (projectKey: number) => loadMaterialPackageCombinations(projectKey));
 
-  /** Every other-cost-type cost element — the Other (auto-indirect) tab's unit of work. */
-  handle('workPackages:otherCombinations', () => loadOtherPackageCombinations());
+  /** Every other-cost-type cost element — the Other (auto-indirect) tab's unit of work. Project-scoped. */
+  handle('workPackages:otherCombinations', (projectKey: number) => loadOtherPackageCombinations(projectKey));
 
   /**
    * Code an "other" (non-material, non-subcontract) cost element into a
    * work package — an exact row in cost_element_work_package, since the
    * mapping key here is the cost element's own identity, not a pattern.
+   * Scoped to the current project — this cost element may resolve to a
+   * different package (or none) on another project.
    */
-  handle('workPackages:assignElement', (items: ElementPackageAssignment[]) => {
+  handle('workPackages:assignElement', (projectKey: number, items: ElementPackageAssignment[]) => {
     const db = getDb();
     const known = new Set(loadWorkPackageDefs().map((t) => t.code));
     for (const it of items) {
@@ -414,14 +418,14 @@ export function registerIpc(): void {
         throw new Error(`"${it.work_package}" is not a work package.`);
       }
     }
-    const del = db.prepare(`DELETE FROM cost_element_work_package WHERE cost_element_code = ?`);
-    const ins = db.prepare(`INSERT INTO cost_element_work_package (cost_element_code, work_package) VALUES (?, ?)`);
+    const del = db.prepare(`DELETE FROM cost_element_work_package WHERE project_key = ? AND cost_element_code = ?`);
+    const ins = db.prepare(`INSERT INTO cost_element_work_package (project_key, cost_element_code, work_package) VALUES (?, ?, ?)`);
     let assigned = 0, cleared = 0;
     const run = db.transaction(() => {
       for (const it of items) {
-        del.run(it.cost_element_code);
+        del.run(projectKey, it.cost_element_code);
         if (it.work_package === null) { cleared++; continue; }
-        ins.run(it.cost_element_code, it.work_package);
+        ins.run(projectKey, it.cost_element_code, it.work_package);
         assigned++;
       }
     });
@@ -433,8 +437,9 @@ export function registerIpc(): void {
    * Code a real material (SAP material number) into a work package — an
    * exact row in material_work_package. The Materials tab's write side,
    * mirroring assignService's shape with one key column instead of two.
+   * Scoped to the current project.
    */
-  handle('workPackages:assignMaterial', (items: MaterialPackageAssignment[]) => {
+  handle('workPackages:assignMaterial', (projectKey: number, items: MaterialPackageAssignment[]) => {
     const known = new Set(loadWorkPackageDefs().map((t) => t.code));
     for (const it of items) {
       if (!it.material_code) throw new Error('This line has no material code and cannot be coded directly.');
@@ -442,7 +447,7 @@ export function registerIpc(): void {
         throw new Error(`"${it.work_package}" is not a work package.`);
       }
     }
-    return applyMaterialAssignments(items);
+    return applyMaterialAssignments(projectKey, items);
   });
 
   /**
@@ -452,14 +457,14 @@ export function registerIpc(): void {
    * literally named work_package so the file can be edited and re-imported
    * with workPackages:importMaterialMapping.
    */
-  handle('workPackages:exportMaterialMapping', async () => {
+  handle('workPackages:exportMaterialMapping', async (projectKey: number) => {
     const res = await dialog.showSaveDialog({
       title: 'Export material work-package mapping',
       defaultPath: join(app.getPath('documents'), `Material mapping ${new Date().toISOString().slice(0, 10)}.xlsx`),
       filters: [{ name: 'Excel workbook', extensions: ['xlsx'] }],
     });
     if (res.canceled || !res.filePath) return null;
-    const rows = getDb().prepare(MATERIAL_COMBINATIONS_SQL).all() as MaterialPackageCombination[];
+    const rows = getDb().prepare(MATERIAL_COMBINATIONS_SQL).all({ project_key: projectKey }) as MaterialPackageCombination[];
     const result: QueryResult = {
       columns: ['material_code', 'material_name', 'prefix', 'postings', 'amount', 'work_package'],
       rows: rows.map((r) => ({
@@ -483,7 +488,7 @@ export function registerIpc(): void {
    * — always its own export, header row 1 — doesn't need). A bad work
    * package code is reported and skipped, never aborts the rest.
    */
-  handle('workPackages:importMaterialMapping', async (filePath: string) => {
+  handle('workPackages:importMaterialMapping', async (projectKey: number, filePath: string) => {
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.readFile(filePath);
     const ws = wb.worksheets[0];
@@ -511,15 +516,15 @@ export function registerIpc(): void {
       items.push({ material_code: codeText, work_package: pkgText });
     });
 
-    const { assigned } = applyMaterialAssignments(items);
+    const { assigned } = applyMaterialAssignments(projectKey, items);
     return { assigned, skipped, errors };
   });
 
-  /** Every (service code, service text) pair in subcontract PO detail — the Subcontractors tab's unit of work. */
-  handle('workPackages:serviceCombinations', () => loadServicePackageCombinations());
+  /** Every (service code, service text) pair in subcontract PO detail — the Subcontractors tab's unit of work. Project-scoped. */
+  handle('workPackages:serviceCombinations', (projectKey: number) => loadServicePackageCombinations(projectKey));
 
-  /** Code a subcontract service item into a work package — an exact row in service_work_package. */
-  handle('workPackages:assignService', (items: ServicePackageAssignment[]) => {
+  /** Code a subcontract service item into a work package — an exact row in service_work_package. Scoped to the current project. */
+  handle('workPackages:assignService', (projectKey: number, items: ServicePackageAssignment[]) => {
     const db = getDb();
     const known = new Set(loadWorkPackageDefs().map((t) => t.code));
     for (const it of items) {
@@ -527,14 +532,14 @@ export function registerIpc(): void {
         throw new Error(`"${it.work_package}" is not a work package.`);
       }
     }
-    const del = db.prepare(`DELETE FROM service_work_package WHERE service_code = ? AND service_text = ?`);
-    const ins = db.prepare(`INSERT INTO service_work_package (service_code, service_text, work_package) VALUES (?, ?, ?)`);
+    const del = db.prepare(`DELETE FROM service_work_package WHERE project_key = ? AND service_code = ? AND service_text = ?`);
+    const ins = db.prepare(`INSERT INTO service_work_package (project_key, service_code, service_text, work_package) VALUES (?, ?, ?, ?)`);
     let assigned = 0, cleared = 0;
     const run = db.transaction(() => {
       for (const it of items) {
-        del.run(it.service_code, it.service_text);
+        del.run(projectKey, it.service_code, it.service_text);
         if (it.work_package === null) { cleared++; continue; }
-        ins.run(it.service_code, it.service_text, it.work_package);
+        ins.run(projectKey, it.service_code, it.service_text, it.work_package);
         assigned++;
       }
     });

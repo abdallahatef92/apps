@@ -20,14 +20,14 @@ type Bridge = {
     typeCreate(input: { code: string; label: string; group_label: string; icon: string; color: string }): Promise<IpcResult<WorkPackageDef[]>>;
     typeUpdate(input: { code: string; label: string; group_label: string; icon: string; color: string }): Promise<IpcResult<WorkPackageDef[]>>;
     typeDelete(code: string): Promise<IpcResult<WorkPackageDef[]>>;
-    materialCombinations(): Promise<IpcResult<MaterialPackageCombination[]>>;
-    otherCombinations(): Promise<IpcResult<OtherPackageCombination[]>>;
-    assignElement(items: ElementPackageAssignment[]): Promise<IpcResult<{ assigned: number; cleared: number }>>;
-    assignMaterial(items: MaterialPackageAssignment[]): Promise<IpcResult<{ assigned: number; cleared: number }>>;
-    exportMaterialMapping(): Promise<IpcResult<string | null>>;
-    importMaterialMapping(filePath: string): Promise<IpcResult<MaterialImportResult>>;
-    serviceCombinations(): Promise<IpcResult<ServicePackageCombination[]>>;
-    assignService(items: ServicePackageAssignment[]): Promise<IpcResult<{ assigned: number; cleared: number }>>;
+    materialCombinations(projectKey: number): Promise<IpcResult<MaterialPackageCombination[]>>;
+    otherCombinations(projectKey: number): Promise<IpcResult<OtherPackageCombination[]>>;
+    assignElement(projectKey: number, items: ElementPackageAssignment[]): Promise<IpcResult<{ assigned: number; cleared: number }>>;
+    assignMaterial(projectKey: number, items: MaterialPackageAssignment[]): Promise<IpcResult<{ assigned: number; cleared: number }>>;
+    exportMaterialMapping(projectKey: number): Promise<IpcResult<string | null>>;
+    importMaterialMapping(projectKey: number, filePath: string): Promise<IpcResult<MaterialImportResult>>;
+    serviceCombinations(projectKey: number): Promise<IpcResult<ServicePackageCombination[]>>;
+    assignService(projectKey: number, items: ServicePackageAssignment[]): Promise<IpcResult<{ assigned: number; cleared: number }>>;
   };
   settings: {
     list(): Promise<IpcResult<{ key: string; value: string }[]>>;
