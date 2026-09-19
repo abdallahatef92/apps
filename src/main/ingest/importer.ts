@@ -887,8 +887,13 @@ function postWbsMaster(batchId: number, batch: any, staged: any[]): number {
   return written;
 }
 
-/** Which fact table a module writes to. Fixed map — never user input. */
-const FACT_TABLE: Record<string, string | null> = {
+/**
+ * Which fact table a module writes to. Fixed map — never user input.
+ * Exported as the authoritative report→fact edge for the Lineage page
+ * (`src/main/services/lineage.ts`) — a new module updates this one map and
+ * the lineage graph picks it up with no other change.
+ */
+export const FACT_TABLE: Record<string, string | null> = {
   ACTUAL: 'fact_actual',
   COMMITMENT: 'fact_actual',
   BUDGET: 'fact_budget',

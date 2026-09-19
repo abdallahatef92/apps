@@ -1,4 +1,4 @@
-import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, ExportDiagramRequest, IpcResult, PivotSource, SchemaDescription } from '@shared/types';
+import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, ExportDiagramRequest, IpcResult, LineageResult, PivotSource, SchemaDescription } from '@shared/types';
 
 // Shape exposed by the preload bridge.
 type Bridge = {
@@ -48,8 +48,11 @@ type Bridge = {
   };
   schema: {
     describe(): Promise<IpcResult<SchemaDescription>>;
-    exportDiagram(req: ExportDiagramRequest): Promise<IpcResult<string | null>>;
   };
+  lineage: {
+    forReport(reportDefinitionId: number): Promise<IpcResult<LineageResult>>;
+  };
+  exportDiagram(req: ExportDiagramRequest): Promise<IpcResult<string | null>>;
   exportResult(result: unknown, meta: unknown): Promise<IpcResult<string | null>>;
   showItem(p: string): Promise<IpcResult<void>>;
 };

@@ -6,10 +6,11 @@ import { closeDatabase, currentDbPath, defaultDbPath, getDb, openDatabase } from
 import { runSelect, runStoredQuery } from './services/queryRunner';
 import { exportCostTypeMapping, exportResult } from './services/exportExcel';
 import { buildPivotSql, pivotMeta, type PivotRequest } from './services/pivot';
+import { buildLineage } from './services/lineage';
 import { readWorkbook } from './ingest/workbook';
 import { deleteBatch, loadColumnMapping, postBatch, revenueAccountPattern, saveColumnMapping, stageFile } from './ingest/importer';
 import { suggestMapping, targetFields } from './ingest/targetFields';
-import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, ExportDiagramRequest, IpcResult, Module, QueryResult, SchemaDescription, SchemaTable, StageRequest } from '../shared/types';
+import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, ExportDiagramRequest, IpcResult, LineageResult, Module, QueryResult, SchemaDescription, SchemaTable, StageRequest } from '../shared/types';
 
 /** Wrap a handler so the renderer always gets {ok,data} | {ok,error} instead of a rejection. */
 function handle<T>(channel: string, fn: (...args: any[]) => T | Promise<T>): void {
@@ -356,6 +357,8 @@ export function registerIpc(): void {
 
     return { tables };
   });
+
+  handle('lineage:forReport', (reportDefinitionId: number): LineageResult => buildLineage(reportDefinitionId));
 
   handle('export:diagram', async (req: ExportDiagramRequest): Promise<string | null> => {
     const res = await dialog.showSaveDialog({

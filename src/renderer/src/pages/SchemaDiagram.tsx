@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api, call } from '../lib/api';
+import { buildExportSvg, rasterizeSvgToPng, useGraphCanvas } from '../components/GraphCanvas';
 import type { SchemaDescription, SchemaTable } from '@shared/types';
 
 /**
@@ -45,11 +46,8 @@ const BOX_GAP = 26;
 const HEADER_H = 30;
 const ROW_H = 19;
 const PAD = 24;
-const MIN_SCALE = 0.4;
-const MAX_SCALE = 6;
 
 interface Rect { x: number; y: number; w: number; h: number; group: number }
-interface View { x: number; y: number; w: number; h: number }
 
 export function SchemaDiagram() {
   const [schema, setSchema] = useState<SchemaDescription | null>(null);
@@ -58,14 +56,6 @@ export function SchemaDiagram() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [savedTo, setSavedTo] = useState<string | null>(null);
-  const [view, setView] = useState<View | null>(null);
-
-  const containerRef = useRef<HTMLDivElement>(null);
-  const svgRef = useRef<SVGSVGElement>(null);
-  const dragRef = useRef<{ startX: number; startY: number; view: View; moved: boolean } | null>(null);
-  /** Set when a drag actually moved the view, so the click that follows mouseup doesn't select a table. */
-  const suppressClickRef = useRef(false);
-  const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
     call(api.schema.describe()).then(setSchema).catch((e) => setError((e as Error).message));
@@ -130,9 +120,13 @@ export function SchemaDiagram() {
     return { columns, rects, edges, width, height };
   }, [schema]);
 
+  const canvas = useGraphCanvas(layout?.width ?? 0, layout?.height ?? 0);
+  const { view, containerRef, svgRef, suppressClickRef } = canvas;
+
   // Reset the viewBox to a 1:1 fit whenever a fresh layout arrives.
   useEffect(() => {
-    if (layout) setView({ x: 0, y: 0, w: layout.width, h: layout.height });
+    if (layout) canvas.fitTo(layout.width, layout.height);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layout]);
 
   const matches = (t: SchemaTable) => {
@@ -141,118 +135,26 @@ export function SchemaDiagram() {
     return t.name.toLowerCase().includes(q) || t.columns.some((c) => c.name.toLowerCase().includes(q));
   };
 
-  const clampView = useCallback((v: View): View => {
-    if (!layout) return v;
-    const minW = layout.width / MAX_SCALE, maxW = layout.width / MIN_SCALE;
-    const w = Math.min(maxW, Math.max(minW, v.w));
-    const h = w * (layout.height / layout.width);
-    return { x: v.x, y: v.y, w, h };
-  }, [layout]);
-
-  const zoomAt = useCallback((factor: number, clientX: number, clientY: number) => {
-    const container = containerRef.current;
-    if (!container || !view) return;
-    const rect = container.getBoundingClientRect();
-    const px = (clientX - rect.left) / rect.width;
-    const py = (clientY - rect.top) / rect.height;
-    const userX = view.x + px * view.w;
-    const userY = view.y + py * view.h;
-    const next = clampView({ x: 0, y: 0, w: view.w * factor, h: view.h * factor });
-    setView({ x: userX - px * next.w, y: userY - py * next.h, w: next.w, h: next.h });
-  }, [view, clampView]);
-
-  const onWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const factor = e.deltaY > 0 ? 1.12 : 1 / 1.12;
-    zoomAt(factor, e.clientX, e.clientY);
-  };
-
-  const onMouseDown = (e: React.MouseEvent) => {
-    if (e.button !== 0 || !view) return;
-    dragRef.current = { startX: e.clientX, startY: e.clientY, view, moved: false };
-    setIsDragging(true);
-    const onMove = (ev: MouseEvent) => {
-      const d = dragRef.current;
-      const container = containerRef.current;
-      if (!d || !container) return;
-      const rect = container.getBoundingClientRect();
-      const dx = (ev.clientX - d.startX) * (d.view.w / rect.width);
-      const dy = (ev.clientY - d.startY) * (d.view.h / rect.height);
-      if (Math.abs(ev.clientX - d.startX) > 3 || Math.abs(ev.clientY - d.startY) > 3) d.moved = true;
-      setView({ x: d.view.x - dx, y: d.view.y - dy, w: d.view.w, h: d.view.h });
-    };
-    const onUp = () => {
-      suppressClickRef.current = dragRef.current?.moved ?? false;
-      dragRef.current = null;
-      setIsDragging(false);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  };
-
-  const zoomButton = (factor: number) => () => {
-    const container = containerRef.current;
-    if (!container) return;
-    const rect = container.getBoundingClientRect();
-    zoomAt(factor, rect.left + rect.width / 2, rect.top + rect.height / 2);
-  };
-  const resetView = () => { if (layout) setView({ x: 0, y: 0, w: layout.width, h: layout.height }); };
-  const scalePct = layout && view ? Math.round((layout.width / view.w) * 100) : 100;
-
-  /** A clean copy of the diagram at its natural, un-panned/zoomed size — what gets exported. */
-  const buildExportSvg = (): string | null => {
-    const svg = svgRef.current;
-    if (!svg || !layout) return null;
-    const clone = svg.cloneNode(true) as SVGSVGElement;
-    clone.setAttribute('viewBox', `0 0 ${layout.width} ${layout.height}`);
-    clone.setAttribute('width', String(layout.width));
-    clone.setAttribute('height', String(layout.height));
-    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-    bg.setAttribute('x', '0'); bg.setAttribute('y', '0');
-    bg.setAttribute('width', String(layout.width)); bg.setAttribute('height', String(layout.height));
-    bg.setAttribute('fill', COLORS.surface);
-    clone.insertBefore(bg, clone.firstChild);
-    return `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(clone)}`;
-  };
-
   const exportSvg = async () => {
-    const data = buildExportSvg();
+    if (!layout) return;
+    const data = buildExportSvg(svgRef.current, layout.width, layout.height, COLORS.surface);
     if (!data) return;
     setBusy(true); setError(null); setSavedTo(null);
     try {
-      const path = await call(api.schema.exportDiagram({ format: 'svg', data, suggestedName: 'schema-diagram' }));
+      const path = await call(api.exportDiagram({ format: 'svg', data, suggestedName: 'schema-diagram' }));
       if (path) setSavedTo(path);
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   };
 
   const exportPng = async () => {
-    const svgText = buildExportSvg();
-    if (!svgText || !layout) return;
+    if (!layout) return;
+    const svgText = buildExportSvg(svgRef.current, layout.width, layout.height, COLORS.surface);
+    if (!svgText) return;
     setBusy(true); setError(null); setSavedTo(null);
     try {
-      const scale = 2; // sharper than 1:1 on a high-DPI screen
-      // A blob: URL would be blocked by the page's CSP (img-src is 'self' data:
-      // only) — a data: URI is both allowed and needs no revoke bookkeeping.
-      const svgDataUri = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgText)}`;
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const img = new Image();
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          canvas.width = layout.width * scale;
-          canvas.height = layout.height * scale;
-          const ctx = canvas.getContext('2d');
-          if (!ctx) { reject(new Error('canvas unavailable')); return; }
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          resolve(canvas.toDataURL('image/png'));
-        };
-        img.onerror = () => reject(new Error('Failed to rasterize the diagram.'));
-        img.src = svgDataUri;
-      });
+      const dataUrl = await rasterizeSvgToPng(svgText, layout.width, layout.height);
       const base64 = dataUrl.split(',')[1];
-      const path = await call(api.schema.exportDiagram({ format: 'png', data: base64, suggestedName: 'schema-diagram' }));
+      const path = await call(api.exportDiagram({ format: 'png', data: base64, suggestedName: 'schema-diagram' }));
       if (path) setSavedTo(path);
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   };
@@ -272,10 +174,10 @@ export function SchemaDiagram() {
           <input placeholder="Search tables or columns…" value={search} style={{ width: 220 }}
                  onChange={(e) => setSearch(e.target.value)} />
           <div className="row" style={{ gap: 4 }}>
-            <button className="btn sm" onClick={zoomButton(1 / 1.3)} disabled={!layout} title="Zoom in">＋</button>
-            <button className="btn sm" onClick={zoomButton(1.3)} disabled={!layout} title="Zoom out">－</button>
-            <button className="btn sm" onClick={resetView} disabled={!layout} title="Reset view">⤢ Fit</button>
-            <span className="faint mono" style={{ alignSelf: 'center', fontSize: 12, minWidth: 40 }}>{scalePct}%</span>
+            <button className="btn sm" onClick={canvas.zoomButton(1 / 1.3)} disabled={!layout} title="Zoom in">＋</button>
+            <button className="btn sm" onClick={canvas.zoomButton(1.3)} disabled={!layout} title="Zoom out">－</button>
+            <button className="btn sm" onClick={canvas.resetView} disabled={!layout} title="Reset view">⤢ Fit</button>
+            <span className="faint mono" style={{ alignSelf: 'center', fontSize: 12, minWidth: 40 }}>{canvas.scalePct}%</span>
           </div>
           <button className="btn sm" onClick={exportSvg} disabled={busy || !layout}>⤓ SVG</button>
           <button className="btn sm" onClick={exportPng} disabled={busy || !layout}>⤓ PNG</button>
@@ -290,14 +192,14 @@ export function SchemaDiagram() {
         </div>
       )}
 
-      {!schema || !layout || !view ? (
+      {!schema || !layout ? (
         <div className="empty">Loading…</div>
       ) : (
         <div ref={containerRef}
              style={{ overflow: 'hidden', height: 'calc(100vh - 260px)', border: '1px solid var(--border-soft)',
-                       borderRadius: 'var(--radius-s)', cursor: isDragging ? 'grabbing' : 'grab' }}
-             onWheel={onWheel}
-             onMouseDown={onMouseDown}>
+                       borderRadius: 'var(--radius-s)', cursor: canvas.isDragging ? 'grabbing' : 'grab' }}
+             onWheel={canvas.onWheel}
+             onMouseDown={canvas.onMouseDown}>
           <svg ref={svgRef} width="100%" height="100%" viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
                style={{ display: 'block' }}>
             <defs>

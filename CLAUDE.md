@@ -219,6 +219,33 @@ re-queries anything. `SubcontractorAnalysis.tsx` and `MaterialAnalysis.tsx` are 
 usage: a `<KpiStrip>` and any context banners stay above the tab strip (they're portfolio
 context, not sheet-specific), and the tabs switch only the charts/tables below.
 
+For a pannable/zoomable node-and-edge canvas (`SchemaDiagram.tsx`, `LineageGraph.tsx`), use
+`useGraphCanvas` + `buildExportSvg`/`rasterizeSvgToPng` from
+`src/renderer/src/components/GraphCanvas.tsx` rather than re-deriving wheel-zoom/drag-pan/SVG
+export a third time — it owns the viewBox math, the click-vs-drag guard, and the "clone the
+`<svg>`, strip it to its natural size, give it an opaque background" export step. A page only
+supplies its own node/edge layout (`useMemo` keyed on its data) and calls `canvas.fitTo(w, h)`
+when that layout changes.
+
+## Data lineage (`LineageGraph.tsx` / `src/main/services/lineage.ts`)
+
+The Lineage page draws a source report's path — report → staging → fact table → views → the
+queries that read them — entirely from introspection, the same "don't duplicate what's already
+true in the schema" principle as the Schema diagram. Two things are worth knowing before
+touching either side of it:
+
+- **`FACT_TABLE`** in `src/main/ingest/importer.ts` (exported) is the one place that says which
+  fact table a module writes to — `postBatch` and the lineage graph both read this same map, so
+  a new module updates it once and both sides pick it up. `MASTER` has no fact table (it writes
+  `dim_wbs` via `postWbsMaster`) and is special-cased as a dimension node.
+- **Which queries read a view is found by scanning SQL text, not a stored mapping.**
+  `query_library.module` is a display grouping only (a query tagged `ACTUAL` can and does also
+  read `v_service_line`/`v_order_line`) — `buildLineage()` instead scans every `FROM`/`JOIN`
+  token in a query's `sql_text` (not just the outer clause, so a CTE that unions several views,
+  like `UNIFIED_COST_REGISTER`, still resolves correctly) and keeps the ones matching a real
+  `sqlite_master` name. Never add a hand-curated "this query depends on these views" field —
+  the whole point is that it can't drift from what a query's SQL actually does.
+
 ## Explainable anomaly detection
 
 `ANOMALY_TRANSACTIONS` and `MATERIAL_RATE_OUTLIERS` (in `systemQueries.ts`) are the

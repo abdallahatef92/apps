@@ -11,6 +11,7 @@ import { DataRegister } from './pages/DataRegister';
 import { Settings } from './pages/Settings';
 import { SchemaDiagram } from './pages/SchemaDiagram';
 import { PivotBuilder } from './pages/PivotBuilder';
+import { LineageGraph } from './pages/LineageGraph';
 
 export interface ProjectRow {
   project_key: number;
@@ -38,7 +39,7 @@ export const useApp = (): AppState => {
 };
 
 type PageId = 'dashboard' | 'upload' | 'analysis' | 'reports' | 'subcontractor' | 'material'
-  | 'queries' | 'register' | 'schema' | 'pivot' | 'settings';
+  | 'queries' | 'register' | 'schema' | 'pivot' | 'lineage' | 'settings';
 
 /**
  * Groups double as nav sections and as the collapse unit below — "Advanced"
@@ -57,6 +58,7 @@ const PAGES: { id: PageId; label: string; glyph: string; group: string; subtitle
   { id: 'pivot', label: 'Pivot builder', glyph: '⊞', group: 'Advanced', subtitle: 'Build a free-form cross-tab from any view' },
   { id: 'queries', label: 'Query library', glyph: '⌗', group: 'Advanced', subtitle: 'The SQL behind every report, stored in the database' },
   { id: 'schema', label: 'Schema diagram', glyph: '⛓', group: 'Advanced', subtitle: 'How the tables in the database relate to each other' },
+  { id: 'lineage', label: 'Data lineage', glyph: '⤳', group: 'Advanced', subtitle: 'From an uploaded report through to every query that reads it' },
   { id: 'settings', label: 'Settings', glyph: '⚙', group: 'Admin', subtitle: 'Projects, database and backups' },
 ];
 const COLLAPSIBLE_GROUP = 'Advanced';
@@ -192,6 +194,7 @@ export default function App() {
             {page === 'queries' && <QueryLibrary />}
             {page === 'schema' && <SchemaDiagram />}
             {page === 'pivot' && <PivotBuilder />}
+            {page === 'lineage' && <LineageGraph />}
             {page === 'settings' && <Settings />}
           </div>
         </main>

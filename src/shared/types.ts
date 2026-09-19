@@ -283,6 +283,29 @@ export interface SchemaDescription {
   tables: SchemaTable[];
 }
 
+export interface LineageView {
+  name: string;
+  /** The fact table or view this one was found reading from — the edge to draw. */
+  from: string;
+}
+
+export interface LineageQueryRef {
+  code: string;
+  name: string;
+  category: string | null;
+  description: string | null;
+  /** Which fact table / view names this query's SQL actually references, of the ones in scope. */
+  sources: string[];
+}
+
+export interface LineageResult {
+  report: { report_definition_id: number; name: string; module: string; description: string | null; source_system: string };
+  latestBatch: { import_batch_id: number; status: string; data_date: string; imported_at: string; row_count_posted: number } | null;
+  fact: { name: string; isDimension: boolean } | null;
+  views: LineageView[];
+  queries: LineageQueryRef[];
+}
+
 export interface ExportDiagramRequest {
   format: 'svg' | 'png';
   /** Raw SVG markup for 'svg'; base64-encoded PNG bytes (no data: prefix) for 'png'. */
