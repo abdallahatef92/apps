@@ -57,6 +57,19 @@ function PackagePicker({ types, value, onChange, clearLabel = 'clear' }: {
   );
 }
 
+/** The unallocated equivalent of PackageBadge — same pill shape, warning-tinted rather than a package's own color, so an uncoded row reads as "unresolved" rather than just plainer text. */
+function UnallocatedBadge() {
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', fontSize: 11, fontWeight: 600,
+      color: 'var(--warning)', background: '#fab21922', border: '1px solid #fab21955',
+      borderRadius: 5, padding: '2px 8px', whiteSpace: 'nowrap',
+    }}>
+      UNALLOCATED
+    </span>
+  );
+}
+
 function PackageBadge({ types, code }: { types: WorkPackageDef[]; code: string }) {
   const meta = lookupPackage(types, code);
   if (!meta) return <span className="faint mono">{code}</span>;
@@ -223,7 +236,10 @@ interface MaterialGroup {
   uniformPackage: WorkPackage | '';
 }
 
-function buildMaterialGroups(rows: MaterialPackageCombination[], groupBy: MaterialGroupKind, types: WorkPackageDef[]): MaterialGroup[] {
+function buildMaterialGroups(
+  rows: MaterialPackageCombination[], groupBy: MaterialGroupKind, types: WorkPackageDef[],
+  sort: { col: MaterialSortCol; dir: 1 | -1 },
+): MaterialGroup[] {
   const map = new Map<string, MaterialGroup>();
   for (const r of rows) {
     const key = groupBy === 'prefix' ? r.prefix : (r.resolved_work_package ?? 'UNALLOCATED');
@@ -236,6 +252,16 @@ function buildMaterialGroups(rows: MaterialPackageCombination[], groupBy: Materi
   for (const g of map.values()) {
     const first = g.rows[0]?.resolved_work_package ?? null;
     g.uniformPackage = first && g.rows.every((r) => r.resolved_work_package === first) ? first : '';
+  }
+  // A click on Amount/Postings should reorder the groups themselves, not
+  // just the rows inside each one — otherwise the header's sort arrow
+  // claims an order the group list doesn't actually show. Every other
+  // sort column falls back to identity ordering (CSI order for a package
+  // group, numeric prefix order otherwise), since a group has no single
+  // code/description of its own to sort by.
+  if (sort.col === 'amount' || sort.col === 'postings') {
+    const col = sort.col;
+    return [...map.values()].sort((a, b) => (a[col] - b[col]) * sort.dir);
   }
   if (groupBy === 'package') {
     const order = ['UNALLOCATED', ...types.map((t) => t.code)];
@@ -315,8 +341,8 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
   const effectiveGroupBy2: MaterialGroupBy = groupBy1 === 'none' || groupBy2 === groupBy1 ? 'none' : groupBy2;
 
   const groups = useMemo(
-    () => (groupBy1 === 'none' ? null : buildMaterialGroups(sorted, groupBy1, types)),
-    [sorted, groupBy1, types],
+    () => (groupBy1 === 'none' ? null : buildMaterialGroups(sorted, groupBy1, types, sort)),
+    [sorted, groupBy1, types, sort],
   );
 
   const isOpen = (key: string) => collapsed[key] !== undefined ? !collapsed[key] : !allCollapsed;
@@ -347,11 +373,24 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
   const toggleRow = (code: string, checked: boolean) =>
     setSelected((s) => { const next = new Set(s); checked ? next.add(code) : next.delete(code); return next; });
 
+  /** Small coded/uncoded fill — a scanning aid next to a group's own count, not a chart: one fill (severity color), track is the same color at low alpha rather than a second hue. */
+  const CoverageMeter = ({ coded, total }: { coded: number; total: number }) => {
+    const donePct = total > 0 ? (coded / total) * 100 : 0;
+    // Actual hex, not var(--good)/var(--warning) — a CSS variable can't be
+    // alpha-suffixed the way PackageBadge tints a data-driven hex color.
+    const color = coded === total ? '#0ca30c' : '#fab219';
+    return (
+      <span title={`${coded} of ${total} coded`}
+            style={{ display: 'inline-block', width: 44, height: 6, borderRadius: 3,
+                     background: `${color}33`, verticalAlign: 'middle', marginLeft: 8, overflow: 'hidden' }}>
+        <span style={{ display: 'block', width: `${donePct}%`, height: '100%', background: color, borderRadius: 3 }} />
+      </span>
+    );
+  };
+
   const groupLabel = (kind: MaterialGroupKind, key: string) =>
     kind === 'package'
-      ? (key === 'UNALLOCATED'
-          ? <span className="faint mono" style={{ fontWeight: 700 }}>UNALLOCATED</span>
-          : <PackageBadge types={types} code={key} />)
+      ? (key === 'UNALLOCATED' ? <UnallocatedBadge /> : <PackageBadge types={types} code={key} />)
       : <span className="mono" style={{ fontWeight: 700 }}>{key}xxxxx</span>;
 
   const renderRow = (c: MaterialPackageCombination, depth: number) => {
@@ -371,7 +410,7 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             {c.resolved_work_package
               ? <PackageBadge types={types} code={c.resolved_work_package} />
-              : <span className="faint mono">UNALLOCATED</span>}
+              : <UnallocatedBadge />}
             {!c.assigned_work_package && c.resolved_work_package && (
               <span className="faint" style={{ fontSize: 10 }}>(default)</span>
             )}
@@ -407,9 +446,12 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
           {groupLabel(kind, g.key)}
           <span className="faint" style={{ fontSize: 11, marginLeft: 8 }}>
             {g.rows.length} material{g.rows.length === 1 ? '' : 's'}
-            {groupUnallocated > 0 && ` · ${groupUnallocated} unallocated`}
+            {groupUnallocated > 0 && (
+              <span style={{ color: 'var(--warning)' }}> · {groupUnallocated} unallocated</span>
+            )}
             {' · '}{pct(g.amount)}% of total
           </span>
+          <CoverageMeter coded={g.rows.length - groupUnallocated} total={g.rows.length} />
           {groupSaving && <span className="faint" style={{ fontSize: 10, marginLeft: 8 }}>saving…</span>}
         </td>
         <td style={{ verticalAlign: 'top' }}></td>
@@ -460,7 +502,10 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
         <span className="faint" style={{ fontSize: 11, alignSelf: 'center' }}>
           {sorted.length.toLocaleString()} of {combos.length.toLocaleString()} materials
           {groups && ` across ${groups.length} group${groups.length === 1 ? '' : 's'}`}
-          {' · '}{unallocated.length.toLocaleString()} unallocated ({pct(unallocatedAmount)}% of total spend)
+          {' · '}
+          <span style={{ color: 'var(--warning)' }}>
+            {unallocated.length.toLocaleString()} unallocated ({pct(unallocatedAmount)}% of total spend)
+          </span>
         </span>
       </div>
       <div className="sel-bar" ref={selBarRef}>
@@ -503,7 +548,7 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
           )}
           {groups ? groups.map((g) => {
             const open = isOpen(g.key);
-            const subGroups = effectiveGroupBy2 === 'none' ? null : buildMaterialGroups(g.rows, effectiveGroupBy2, types);
+            const subGroups = effectiveGroupBy2 === 'none' ? null : buildMaterialGroups(g.rows, effectiveGroupBy2, types, sort);
             return (
               <Fragment key={g.key}>
                 {renderGroupHeader(g, groupBy1 as MaterialGroupKind, g.key, 0)}

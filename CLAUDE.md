@@ -142,6 +142,21 @@ the reconciliation. The files are not in the repo, so this is a manual check.
   of total spend (of the whole tab's total, not the current filter), and a leaf row
   with its own explicit assignment carries a small inline "✕" next to its badge to
   clear just that row, without needing the checkbox+bar flow for a single undo.
+  `buildMaterialGroups()` takes the table's active `sort` and, when the sorted
+  column is Amount or Postings, orders the groups themselves by that same
+  total — a click on those headers otherwise only reordered rows inside each
+  group while the groups stayed in identity order (prefix numeric, or CSI
+  order for a package group), which looked like the sort silently did nothing.
+  Every other sort column keeps identity ordering, since a group has no single
+  code/description of its own to rank by. Unallocated gets weight beyond plain
+  text: the "N unallocated" clause (group header and page summary) renders in
+  the reserved `--warning` token, a leaf row's own `UNALLOCATED` is a tinted
+  pill (`UnallocatedBadge`, `PackageBadge`'s shape in warning color) rather
+  than plain text, and a group header carries a small coded/uncoded meter —
+  one fill whose color is the severity (`--good` once the group is fully
+  coded, `--warning` otherwise), track the same color at low alpha rather
+  than a second hue, per the dataviz skill's meter contract, not a two-tone
+  stacked bar.
 - **Accrual is a manual estimate, but it still goes through staging.** `ACCRUAL` is a
   module like any other — `fact_accrual` / `v_accrual`, staged and posted via the normal
   upload wizard — for cost incurred but not yet posted in SAP (e.g. "ADD/OMM",
