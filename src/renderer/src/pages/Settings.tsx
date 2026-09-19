@@ -1,7 +1,7 @@
 import { Fragment, useMemo, useEffect, useState } from 'react';
 import { useApp } from '../App';
 import { api, call } from '../lib/api';
-import type { CostType, CostTypeCombination, CostTypeDef, WorkPackage, WorkPackageCombination, WorkPackageDef } from '@shared/types';
+import type { CostType, CostTypeCombination, CostTypeDef } from '@shared/types';
 
 const money = (n: number) =>
   n.toLocaleString(undefined, { maximumFractionDigits: 0 });
@@ -334,303 +334,6 @@ function CostTypeManager({ types, onCreate, onUpdate, onDelete, busy }: {
   );
 }
 
-const lookupWorkPackage = (types: WorkPackageDef[], code: string) => types.find((t) => t.code === code);
-
-/** Same one-click assign pattern as CostTypePicker, over dim_work_package instead. */
-function WorkPackagePicker({ types, value, onChange, clearLabel = 'inherit' }: {
-  types: WorkPackageDef[];
-  value: WorkPackage | '';
-  onChange: (v: WorkPackage | '') => void;
-  clearLabel?: string;
-}) {
-  return (
-    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
-      {types.map((t) => {
-        const selected = value === t.code;
-        return (
-          <button key={t.code} type="button" title={t.label}
-                  onClick={() => onChange(selected ? '' : t.code)}
-                  style={{
-                    fontSize: 13, lineHeight: 1, padding: '4px 7px', borderRadius: 6,
-                    cursor: 'pointer', fontFamily: 'inherit',
-                    background: selected ? t.color : 'var(--surface-3)',
-                    border: `1px solid ${selected ? t.color : 'var(--border)'}`,
-                    filter: selected ? 'none' : 'grayscale(0.4) opacity(0.75)',
-                  }}>
-            {t.icon}
-          </button>
-        );
-      })}
-      {value !== '' && (
-        <button type="button" title={`Clear — ${clearLabel}`} onClick={() => onChange('')}
-                style={{ fontSize: 10, padding: '4px 6px', borderRadius: 6, cursor: 'pointer',
-                         fontFamily: 'inherit', background: 'transparent', color: 'var(--text-3)',
-                         border: '1px solid var(--border)' }}>
-          ✕
-        </button>
-      )}
-    </div>
-  );
-}
-
-function WorkPackageBadge({ types, type }: { types: WorkPackageDef[]; type: string }) {
-  const meta = lookupWorkPackage(types, type);
-  if (!meta) {
-    return <span className="faint mono">{type}</span>;
-  }
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600,
-      color: meta.color, background: `${meta.color}22`, border: `1px solid ${meta.color}55`,
-      borderRadius: 5, padding: '2px 8px', whiteSpace: 'nowrap',
-    }}>
-      <span>{meta.icon}</span>{meta.label}
-    </span>
-  );
-}
-
-interface WorkPackageGroup {
-  type: WorkPackage | 'UNALLOCATED';
-  rows: WorkPackageCombination[];
-  postings: number;
-  amount: number;
-}
-
-const wbsLabel = (c: { wbs_code: string; wbs_name?: string | null }) =>
-  c.wbs_name ? `${c.wbs_name} (${c.wbs_code})` : c.wbs_code || '(none)';
-
-/** Same grouping shape as groupByCostType, keyed on the resolved work package. */
-function groupByWorkPackage(combos: WorkPackageCombination[], types: WorkPackageDef[]): WorkPackageGroup[] {
-  const map = new Map<string, WorkPackageGroup>();
-  for (const c of combos) {
-    const key = c.resolved_work_package ?? 'UNALLOCATED';
-    const g = map.get(key) ?? { type: key, rows: [], postings: 0, amount: 0 };
-    g.rows.push(c);
-    g.postings += c.postings;
-    g.amount += c.amount;
-    map.set(key, g);
-  }
-  for (const g of map.values()) {
-    g.rows.sort((a, b) => glLabel(a).localeCompare(glLabel(b)) || wbsLabel(a).localeCompare(wbsLabel(b)));
-  }
-  const order = ['UNALLOCATED', ...types.map((t) => t.code)];
-  return [...map.values()].sort((a, b) => order.indexOf(a.type) - order.indexOf(b.type));
-}
-
-type WorkPackageAllocateFn = (items: { cost_element_code: string; wbs_code: string; work_package: WorkPackage | null }[]) => void;
-
-/** Mirrors GroupedAllocationTable, keyed on (cost element, WBS) instead of (cost element, document type). */
-function GroupedWorkPackageAllocationTable({ combos, types, savingKeys, allocate, comboKey }: {
-  combos: WorkPackageCombination[];
-  types: WorkPackageDef[];
-  savingKeys: Set<string>;
-  allocate: WorkPackageAllocateFn;
-  comboKey: (c: { cost_element_code: string; wbs_code: string }) => string;
-}) {
-  const groups = useMemo(() => groupByWorkPackage(combos, types), [combos, types]);
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  const [allCollapsed, setAllCollapsed] = useState(true);
-
-  const isOpen = (type: string) => collapsed[type] !== undefined ? !collapsed[type] : !allCollapsed;
-  const toggle = (type: string) => setCollapsed((c) => ({ ...c, [type]: isOpen(type) }));
-  const expandAll = () => { setAllCollapsed(false); setCollapsed({}); };
-  const collapseAll = () => { setAllCollapsed(true); setCollapsed({}); };
-
-  return (
-    <div className="table-wrap">
-      <div className="row" style={{ marginBottom: 8, gap: 8 }}>
-        <button className="btn sm" onClick={expandAll}>Expand all</button>
-        <button className="btn sm" onClick={collapseAll}>Collapse all</button>
-        <span className="faint" style={{ fontSize: 11, alignSelf: 'center' }}>
-          {combos.length} combination{combos.length === 1 ? '' : 's'} across {groups.length} work package{groups.length === 1 ? '' : 's'}
-        </span>
-      </div>
-      <table>
-        <thead>
-          <tr>
-            <th style={{ width: 24 }}></th>
-            <th>Work package / GL</th>
-            <th>WBS</th>
-            <th style={{ textAlign: 'right' }}>Postings</th>
-            <th style={{ textAlign: 'right' }}>Amount</th>
-            <th style={{ width: 150 }}>Now</th>
-            <th style={{ width: 240 }}>Allocate</th>
-          </tr>
-        </thead>
-        <tbody>
-          {groups.length === 0 && (
-            <tr><td colSpan={7}><div className="empty">No actual cost loaded yet.</div></td></tr>
-          )}
-          {groups.map((g) => {
-            const open = isOpen(g.type);
-            const groupSaving = g.rows.some((r) => savingKeys.has(comboKey(r)));
-            return (
-              <Fragment key={g.type}>
-                <tr style={{ background: 'var(--surface-2)', cursor: 'pointer' }}
-                    onClick={() => toggle(g.type)}>
-                  <td className="faint" style={{ textAlign: 'center' }}>{open ? '▾' : '▸'}</td>
-                  <td colSpan={2}>
-                    {g.type === 'UNALLOCATED'
-                      ? <span className="faint mono" style={{ fontWeight: 700 }}>UNALLOCATED</span>
-                      : <WorkPackageBadge types={types} type={g.type} />}
-                    <span className="faint" style={{ fontSize: 11, marginLeft: 8 }}>
-                      {g.rows.length} GL/WBS combination{g.rows.length === 1 ? '' : 's'}
-                    </span>
-                    {groupSaving && <span className="faint" style={{ fontSize: 10, marginLeft: 8 }}>saving…</span>}
-                  </td>
-                  <td className="mono" style={{ textAlign: 'right' }}>{g.postings.toLocaleString()}</td>
-                  <td className="mono" style={{ textAlign: 'right' }}>{money(g.amount)}</td>
-                  <td></td>
-                  <td onClick={(e) => e.stopPropagation()}
-                      style={groupSaving ? { opacity: .5, pointerEvents: 'none' } : undefined}>
-                    <WorkPackagePicker types={types} value={g.type === 'UNALLOCATED' ? '' : g.type} clearLabel="per-row"
-                      onChange={(v) => allocate(g.rows.map((r) => ({
-                        cost_element_code: r.cost_element_code, wbs_code: r.wbs_code,
-                        work_package: v || null,
-                      })))} />
-                  </td>
-                </tr>
-                {open && g.rows.map((c) => {
-                  const key = comboKey(c);
-                  const saving = savingKeys.has(key);
-                  return (
-                    <tr key={key}>
-                      <td></td>
-                      <td className="mono" style={{ paddingLeft: 20 }} title={c.cost_element_code}>
-                        {glLabel(c)}
-                      </td>
-                      <td className="mono faint">{wbsLabel(c)}</td>
-                      <td className="mono" style={{ textAlign: 'right' }}>{c.postings.toLocaleString()}</td>
-                      <td className="mono" style={{ textAlign: 'right' }}>{money(c.amount)}</td>
-                      <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          {c.resolved_work_package
-                            ? <WorkPackageBadge types={types} type={c.resolved_work_package} />
-                            : <span className="faint mono">UNALLOCATED</span>}
-                          {!c.assigned_work_package && c.resolved_work_package && (
-                            <span className="faint" style={{ fontSize: 10 }}>(pattern)</span>
-                          )}
-                          {saving && <span className="faint" style={{ fontSize: 10 }}>saving…</span>}
-                        </div>
-                      </td>
-                      <td style={saving ? { opacity: .5, pointerEvents: 'none' } : undefined}>
-                        <WorkPackagePicker types={types} value={c.assigned_work_package ?? ''}
-                          onChange={(v) => allocate([{
-                            cost_element_code: c.cost_element_code, wbs_code: c.wbs_code,
-                            work_package: v || null,
-                          }])} />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </Fragment>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-/** Mirrors CostTypeManager over dim_work_package — no built-in rows, so every one is deletable. */
-function WorkPackageManager({ types, onCreate, onUpdate, onDelete, busy }: {
-  types: WorkPackageDef[];
-  onCreate: (input: { label: string; icon: string; color: string }) => void;
-  onUpdate: (input: { code: string; label: string; icon: string; color: string }) => void;
-  onDelete: (code: string) => void;
-  busy: boolean;
-}) {
-  const [editingCode, setEditingCode] = useState<string | null>(null);
-  const [draft, setDraft] = useState({ label: '', icon: '', color: '' });
-  const [newType, setNewType] = useState({ label: '', icon: '📦', color: '#8fa8f0' });
-
-  const startEdit = (t: WorkPackageDef) => {
-    setEditingCode(t.code);
-    setDraft({ label: t.label, icon: t.icon, color: t.color });
-  };
-  const saveEdit = () => {
-    if (!editingCode) return;
-    onUpdate({ code: editingCode, ...draft });
-    setEditingCode(null);
-  };
-
-  return (
-    <div className="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th style={{ width: 60 }}>Icon</th>
-            <th>Name</th>
-            <th style={{ width: 90 }}>Colour</th>
-            <th style={{ width: 170 }}></th>
-          </tr>
-        </thead>
-        <tbody>
-          {types.map((t) => {
-            const editing = editingCode === t.code;
-            return (
-              <tr key={t.code}>
-                <td style={{ textAlign: 'center', fontSize: 16 }}>
-                  {editing
-                    ? <input value={draft.icon} style={{ width: 44, textAlign: 'center' }}
-                             onChange={(e) => setDraft((d) => ({ ...d, icon: e.target.value }))} />
-                    : t.icon}
-                </td>
-                <td>
-                  {editing
-                    ? <input value={draft.label} style={{ width: '100%' }}
-                             onChange={(e) => setDraft((d) => ({ ...d, label: e.target.value }))} />
-                    : <WorkPackageBadge types={types} type={t.code} />}
-                </td>
-                <td>
-                  {editing
-                    ? <input type="color" value={draft.color}
-                             onChange={(e) => setDraft((d) => ({ ...d, color: e.target.value }))} />
-                    : <span style={{ display: 'inline-block', width: 18, height: 18, borderRadius: 4,
-                                      background: t.color, verticalAlign: 'middle' }} />}
-                </td>
-                <td>
-                  {editing ? (
-                    <div className="row" style={{ gap: 6 }}>
-                      <button className="btn sm primary" onClick={saveEdit} disabled={busy}>Save</button>
-                      <button className="btn sm ghost" onClick={() => setEditingCode(null)} disabled={busy}>Cancel</button>
-                    </div>
-                  ) : (
-                    <div className="row" style={{ gap: 6 }}>
-                      <button className="btn sm" onClick={() => startEdit(t)} disabled={busy}>Edit</button>
-                      <button className="btn sm ghost" onClick={() => onDelete(t.code)} disabled={busy}>Delete</button>
-                    </div>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-          <tr>
-            <td style={{ textAlign: 'center' }}>
-              <input value={newType.icon} style={{ width: 44, textAlign: 'center' }}
-                     onChange={(e) => setNewType((s) => ({ ...s, icon: e.target.value }))} />
-            </td>
-            <td>
-              <input placeholder="New work package name" style={{ width: '100%' }} value={newType.label}
-                     onChange={(e) => setNewType((s) => ({ ...s, label: e.target.value }))} />
-            </td>
-            <td>
-              <input type="color" value={newType.color}
-                     onChange={(e) => setNewType((s) => ({ ...s, color: e.target.value }))} />
-            </td>
-            <td>
-              <button className="btn sm primary" disabled={busy || !newType.label.trim()}
-                      onClick={() => { onCreate(newType); setNewType({ label: '', icon: '📦', color: '#8fa8f0' }); }}>
-                + Add
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 export function Settings() {
   const { projects, refresh } = useApp();
   const [info, setInfo] = useState<{ version: string; dbPath: string; userData: string } | null>(null);
@@ -643,14 +346,8 @@ export function Settings() {
   const [combos, setCombos] = useState<CostTypeCombination[]>([]);
   const [savingKeys, setSavingKeys] = useState<Set<string>>(new Set());
 
-  const [wpTypes, setWpTypes] = useState<WorkPackageDef[]>([]);
-  const [wpCombos, setWpCombos] = useState<WorkPackageCombination[]>([]);
-  const [wpSavingKeys, setWpSavingKeys] = useState<Set<string>>(new Set());
-
   const comboKey = (c: { cost_element_code: string; document_type: string }) =>
     `${c.cost_element_code} ${c.document_type}`;
-  const wpComboKey = (c: { cost_element_code: string; wbs_code: string }) =>
-    `${c.cost_element_code} ${c.wbs_code}`;
 
   const loadCostTypes = async () => {
     const c = await api.costTypes.combinations();
@@ -702,50 +399,10 @@ export function Settings() {
       : 'Export cancelled.');
   });
 
-  const loadWorkPackageCombos = async () => {
-    const c = await api.workPackages.combinations();
-    if (c.ok) setWpCombos(c.data);
-  };
-  const loadWorkPackageTypes = async () => {
-    const r = await api.workPackages.types();
-    if (r.ok) setWpTypes(r.data);
-  };
-
-  const allocateWorkPackage: WorkPackageAllocateFn = (items) => {
-    const keys = items.map(wpComboKey);
-    setWpSavingKeys((s) => new Set([...s, ...keys]));
-    setError(null);
-    (async () => {
-      try {
-        await call(api.workPackages.assign(items));
-        await loadWorkPackageCombos();
-      } catch (e) {
-        setError((e as Error).message);
-      } finally {
-        setWpSavingKeys((s) => { const n = new Set(s); keys.forEach((k) => n.delete(k)); return n; });
-      }
-    })();
-  };
-
-  const createWorkPackage = (input: { label: string; icon: string; color: string }) => guard(async () => {
-    setWpTypes(await call(api.workPackages.typeCreate(input)));
-    setNote(`Added "${input.label}" as a work package.`);
-  });
-  const updateWorkPackage = (input: { code: string; label: string; icon: string; color: string }) => guard(async () => {
-    setWpTypes(await call(api.workPackages.typeUpdate(input)));
-    setNote(`"${input.label}" updated.`);
-  });
-  const deleteWorkPackage = (code: string) => guard(async () => {
-    setWpTypes(await call(api.workPackages.typeDelete(code)));
-    setNote('Work package removed.');
-  });
-
   useEffect(() => {
     api.app.info().then((r) => { if (r.ok) setInfo(r.data); });
     loadTypes();
     loadCostTypes();
-    loadWorkPackageTypes();
-    loadWorkPackageCombos();
   }, []);
 
   const guard = async (fn: () => Promise<void>) => {
@@ -820,31 +477,6 @@ export function Settings() {
             ⤓ Export to Excel
           </button>
         </div>
-      </div>
-
-      <div className="card">
-        <h3>Work packages</h3>
-        <p className="hint">
-          A coding layer over actual/budget cost — masonry, concrete, earthwork, or whatever
-          breakdown this project uses — entirely project-specific, so there is no default list
-          the way cost types have. Define the ones this project needs, then allocate cost to
-          them below.
-        </p>
-        <WorkPackageManager types={wpTypes} onCreate={createWorkPackage} onUpdate={updateWorkPackage}
-          onDelete={deleteWorkPackage} busy={busy} />
-      </div>
-
-      <div className="card">
-        <h3>Allocate work packages</h3>
-        <p className="hint">
-          Every combination of cost element and WBS that actually occurs in the cost already
-          loaded — {wpCombos.length} of them, grouped by their current work package (UNALLOCATED
-          first). Pick one and it saves immediately, the same way cost type allocation does;
-          nothing coded yet stays UNALLOCATED rather than being guessed at.
-        </p>
-
-        <GroupedWorkPackageAllocationTable combos={wpCombos} types={wpTypes} savingKeys={wpSavingKeys}
-          allocate={allocateWorkPackage} comboKey={wpComboKey} />
       </div>
 
       <div className="card">

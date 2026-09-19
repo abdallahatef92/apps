@@ -1,4 +1,4 @@
-import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, ExportDiagramRequest, IpcResult, LineageResult, PivotSource, SchemaDescription, WorkPackageAssignment, WorkPackageCombination, WorkPackageDef } from '@shared/types';
+import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, ExportDiagramRequest, IpcResult, LineageResult, MaterialPackageAssignment, MaterialPackageCombination, OtherPackageCombination, PivotSource, SchemaDescription, ServicePackageAssignment, ServicePackageCombination, WorkPackageDef } from '@shared/types';
 
 // Shape exposed by the preload bridge.
 type Bridge = {
@@ -16,12 +16,15 @@ type Bridge = {
     typeDelete(code: string): Promise<IpcResult<CostTypeDef[]>>;
   };
   workPackages: {
-    combinations(): Promise<IpcResult<WorkPackageCombination[]>>;
-    assign(items: WorkPackageAssignment[]): Promise<IpcResult<{ assigned: number; cleared: number }>>;
     types(): Promise<IpcResult<WorkPackageDef[]>>;
-    typeCreate(input: { label: string; icon: string; color: string }): Promise<IpcResult<WorkPackageDef[]>>;
-    typeUpdate(input: { code: string; label: string; icon: string; color: string }): Promise<IpcResult<WorkPackageDef[]>>;
+    typeCreate(input: { code: string; label: string; group_label: string; icon: string; color: string }): Promise<IpcResult<WorkPackageDef[]>>;
+    typeUpdate(input: { code: string; label: string; group_label: string; icon: string; color: string }): Promise<IpcResult<WorkPackageDef[]>>;
     typeDelete(code: string): Promise<IpcResult<WorkPackageDef[]>>;
+    materialCombinations(): Promise<IpcResult<MaterialPackageCombination[]>>;
+    otherCombinations(): Promise<IpcResult<OtherPackageCombination[]>>;
+    assignElement(items: MaterialPackageAssignment[]): Promise<IpcResult<{ assigned: number; cleared: number }>>;
+    serviceCombinations(): Promise<IpcResult<ServicePackageCombination[]>>;
+    assignService(items: ServicePackageAssignment[]): Promise<IpcResult<{ assigned: number; cleared: number }>>;
   };
   settings: {
     list(): Promise<IpcResult<{ key: string; value: string }[]>>;

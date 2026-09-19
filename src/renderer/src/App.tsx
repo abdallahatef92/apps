@@ -13,6 +13,7 @@ import { SchemaDiagram } from './pages/SchemaDiagram';
 import { PivotBuilder } from './pages/PivotBuilder';
 import { LineageGraph } from './pages/LineageGraph';
 import { CostReport } from './pages/CostReport';
+import { PackageMapping } from './pages/PackageMapping';
 
 export interface ProjectRow {
   project_key: number;
@@ -39,7 +40,7 @@ export const useApp = (): AppState => {
   return v;
 };
 
-type PageId = 'dashboard' | 'upload' | 'analysis' | 'reports' | 'costreport' | 'subcontractor' | 'material'
+type PageId = 'dashboard' | 'upload' | 'packages' | 'analysis' | 'reports' | 'costreport' | 'subcontractor' | 'material'
   | 'queries' | 'register' | 'schema' | 'pivot' | 'lineage' | 'settings';
 
 /**
@@ -52,6 +53,7 @@ const PAGES: { id: PageId; label: string; glyph: string; group: string; subtitle
   { id: 'dashboard', label: 'Dashboard', glyph: '◈', group: 'Overview', subtitle: 'Portfolio position and data freshness' },
   { id: 'upload', label: 'Upload data', glyph: '↥', group: 'Data', subtitle: 'Bring a report in, map it, review it, post it' },
   { id: 'register', label: 'Data register', glyph: '▤', group: 'Data', subtitle: 'Every import, its data date and audit trail' },
+  { id: 'packages', label: 'Work packages', glyph: '⛁', group: 'Data', subtitle: 'Code materials and subcontractor service items into work packages' },
   { id: 'reports', label: 'Reports', glyph: '▦', group: 'Reports', subtitle: 'Cost type by GL by month, and the transactions behind it' },
   { id: 'costreport', label: 'Cost Report', glyph: '◫', group: 'Reports', subtitle: 'Work packages, accrual and indirect against plan — the numbers behind the issued report' },
   { id: 'subcontractor', label: 'Subcontractor Analysis', glyph: '▨', group: 'Reports', subtitle: 'Certified work, supplier concentration and PO reconciliation' },
@@ -189,6 +191,7 @@ export default function App() {
             {page === 'dashboard' && <Dashboard />}
             {page === 'upload' && <Upload onDone={() => { state.touch(); refresh(); }} />}
             {page === 'register' && <DataRegister />}
+            {page === 'packages' && <PackageMapping />}
             {page === 'analysis' && <Analysis />}
             {page === 'reports' && <Reports />}
             {page === 'costreport' && <CostReport />}

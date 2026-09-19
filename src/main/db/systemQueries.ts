@@ -417,7 +417,11 @@ ORDER BY p.project_code`,
     module: 'CROSS',
     category: 'Overview',
     description: 'Budget vs. actual + accrued cost per work package (masonry, concrete, earthwork, ...), '
-      + 'with an (unallocated) row for cost no rule has coded yet — the coding work still to do.',
+      + 'with an (unallocated) row for cost nobody has coded yet — the coding work still to do. '
+      + 'Subcontract cost is pulled from the PO detail report, not the CJI3 posting, the same '
+      + 'detail-substitution rule UNIFIED_COST_REGISTER uses, since that is where subcontract '
+      + 'package coding actually lives; a PO with no detail loaded yet falls into (unallocated) '
+      + 'rather than being silently dropped.',
     params: [P_PROJECT],
     viz: { kind: 'bar', label: 'work_package', value: 'variance_amount', diverging: true,
       headline: 'COST_REPORT_SUMMARY' },
@@ -427,10 +431,38 @@ WITH bud AS (
   FROM v_budget WHERE project_key = :project_key AND is_current = 1
   GROUP BY COALESCE(work_package,'(unallocated)')
 ),
-act AS (
+po_with_detail AS (
+  SELECT DISTINCT po_no FROM v_service_line
+  WHERE project_key = :project_key AND po_no IS NOT NULL AND po_no <> ''
+),
+mat_other_act AS (
+  -- Material and "other" cost types resolve directly off the cost element.
+  -- Subcontract is excluded here — its package coding lives on the PO's
+  -- own detail report, picked up by sub_detail/sub_missing below instead.
   SELECT COALESCE(work_package,'(unallocated)') AS work_package, SUM(amount) AS actual_amount
-  FROM v_actual WHERE project_key = :project_key
+  FROM v_actual WHERE project_key = :project_key AND cost_type <> 'SUBCONTRACT'
   GROUP BY COALESCE(work_package,'(unallocated)')
+),
+sub_detail AS (
+  -- The subcontract package split, from the PO's own detail report.
+  SELECT COALESCE(work_package,'(unallocated)') AS work_package, SUM(amount_net) AS actual_amount
+  FROM v_service_line WHERE project_key = :project_key
+  GROUP BY COALESCE(work_package,'(unallocated)')
+),
+sub_missing AS (
+  -- A subcontract PO with no detail report loaded yet can't be package-coded —
+  -- keep its cost visible as unallocated rather than dropping it.
+  SELECT '(unallocated)' AS work_package, SUM(amount) AS actual_amount
+  FROM v_actual
+  WHERE project_key = :project_key AND cost_type = 'SUBCONTRACT'
+    AND (po_no IS NULL OR po_no = '' OR po_no NOT IN (SELECT po_no FROM po_with_detail))
+),
+act AS (
+  SELECT work_package, SUM(actual_amount) AS actual_amount FROM (
+    SELECT * FROM mat_other_act
+    UNION ALL SELECT * FROM sub_detail
+    UNION ALL SELECT * FROM sub_missing
+  ) GROUP BY work_package
 ),
 acc AS (
   SELECT COALESCE(work_package,'(unallocated)') AS work_package, SUM(amount) AS accrual_amount
@@ -444,6 +476,8 @@ pkgs AS (
 )
 SELECT
   p.work_package,
+  wp.label AS work_package_label,
+  wp.group_label AS work_package_group,
   COALESCE(b.budget_amount,0)   AS budget_amount,
   COALESCE(a.actual_amount,0)   AS actual_amount,
   COALESCE(c.accrual_amount,0)  AS accrual_amount,
@@ -453,6 +487,7 @@ FROM pkgs p
 LEFT JOIN bud b ON b.work_package = p.work_package
 LEFT JOIN act a ON a.work_package = p.work_package
 LEFT JOIN acc c ON c.work_package = p.work_package
+LEFT JOIN dim_work_package wp ON wp.code = p.work_package
 ORDER BY (p.work_package = '(unallocated)'), variance_amount ASC`,
   },
   {

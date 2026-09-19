@@ -42,12 +42,10 @@ SELECT
   p.project_key, p.project_code, p.project_name,
   w.wbs_key, w.wbs_code, w.wbs_name, w.wbs_path, w.discipline, w.package,
   ce.cost_element_key, ce.cost_element_code, ce.cost_element_name, ce.cost_type,
-  (SELECT r.work_package FROM work_package_rule r
-    WHERE r.is_active = 1
-      AND (r.cost_element_glob IS NULL OR ce.cost_element_code GLOB r.cost_element_glob)
-      AND (r.wbs_glob          IS NULL OR w.wbs_code           GLOB r.wbs_glob)
-    ORDER BY r.priority, r.rule_id
-    LIMIT 1) AS work_package,
+  COALESCE(
+    (SELECT m.work_package FROM cost_element_work_package m
+      WHERE m.cost_element_code = ce.cost_element_code),
+    CASE WHEN ce.cost_type <> 'MATERIAL' THEN 'INDIRECT' ELSE NULL END) AS work_package,
   f.period_key, f.accrual_type, f.amount, f.description
 FROM fact_accrual f
 JOIN import_batch b ON b.import_batch_id = f.import_batch_id

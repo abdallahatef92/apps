@@ -121,6 +121,12 @@ const ACTUAL_FIELDS: FieldDef[] = [
 
 const BUDGET_FIELDS: FieldDef[] = [
   ...COMMON_DIMS,
+  { field: 'work_package', label: 'Work package code', type: 'text', required: false,
+    description: 'The budget\'s own work-package / cost code (e.g. "S.03"), distinct from the '
+      + 'WBS-level "Package" field above. Created automatically if it is not already defined.',
+    // Deliberately not bare "package" — COMMON_DIMS' own package field already claims that
+    // for dim_wbs.package, an unrelated free-text WBS attribute.
+    synonyms: ['cost code', 'work package code', 'package code'] },
   { field: 'period_key', label: 'Period (YYYY-MM)', type: 'period', required: false,
     description: 'Only for a time-phased budget. Leave unmapped for a lump-sum budget.',
     synonyms: ['period', 'month', 'yearmonth', 'fiscal period'] },

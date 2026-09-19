@@ -554,6 +554,18 @@ function ensurePeriod(periodKey: string): string {
 }
 
 /**
+ * The budget file states its own work-package code directly — auto-vivify a
+ * bare dim_work_package row for it the same way wbsKey()/costElementKey()
+ * create a dimension member on first sight, so an upload never fails just
+ * because nobody has defined that package yet on the Work packages page.
+ */
+function ensureWorkPackage(code: string | null): string | null {
+  if (!code) return null;
+  getDb().prepare(`INSERT OR IGNORE INTO dim_work_package (code, label) VALUES (?, ?)`).run(code, code);
+  return code;
+}
+
+/**
  * Move a staged batch into the fact tables.
  *
  * Any earlier POSTED batch from the same report covering the same project and
@@ -715,13 +727,15 @@ export function postBatch(batchId: number, options: { allowDuplicate?: boolean }
         const scenarioKey = ensureScenario(projectKey, 'BUDGET', batch.data_date);
         const period = toPeriod(mapped.period_key) ?? batch.period_key;
         if (period) ensurePeriod(period);
+        const workPackage = ensureWorkPackage(toText(mapped.work_package));
         db.prepare(`INSERT INTO fact_budget
           (import_batch_id, scenario_key, project_key, wbs_key, cost_element_key, currency_key,
-           period_key, budget_quantity, uom, unit_rate, budget_amount, description, source_row_no)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+           period_key, budget_quantity, uom, unit_rate, budget_amount, description, source_row_no,
+           work_package)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
           batchId, scenarioKey, projectKey, wbsKey, ceKey, currencyKey, period,
           toNumber(mapped.budget_quantity), toText(mapped.uom), toNumber(mapped.unit_rate),
-          toNumber(mapped.budget_amount) ?? 0, toText(mapped.description), s.row_no);
+          toNumber(mapped.budget_amount) ?? 0, toText(mapped.description), s.row_no, workPackage);
         posted++;
       } else if (batch.module === 'ACCRUAL') {
         // No scenario — an accrual is one running set of estimates, not

@@ -71,17 +71,30 @@ the reconciliation. The files are not in the repo, so this is a manual check.
   a type; the original six (`LABOR`, `MATERIAL`, `SUBCONTRACT`, `EQUIPMENT`, `INDIRECT`,
   `OTHER`) are seeded with `is_system = 1` and can be renamed but never deleted — the
   account-range rules and `OTHER`'s role as the resolver's catch-all name them by code.
-- **Work package is a coding layer, resolved the same way cost type is — never baked
-  into the dimension.** `work_package_rule` mirrors `cost_type_rule` exactly (ordered,
-  `GLOB`-matched, first match wins), except it matches on `cost_element_glob` *and/or*
-  `wbs_glob` — work-package coding depends on where the cost sits, not just its GL
-  account — and no source file ever states a work package directly, so there is no
-  "explicit value wins" branch and no seeded catch-all: `dim_work_package` starts empty
-  because the breakdown (masonry, concrete, earthwork, ...) is entirely project-specific.
-  `v_posting` (→ `v_actual`/`v_revenue`) and `v_budget` resolve it per row; `v_forecast`,
-  `v_service_line` and `v_order_line` deliberately do not. Settings › Allocate work
-  packages writes exact, priority-1 rules the same way Settings › Allocate cost types
-  does — never touch `dim_wbs.package`, which is a free-text WBS-master field and not
+- **Work package coding is keyed on the line's own identity, not its GL pattern or WBS
+  location.** Unlike cost type, there is no `GLOB` rule engine here — `cost_element_work_package`
+  maps one exact `cost_element_code` to a package (a CO line item carries no separate
+  material number, so for MATERIAL cost the cost element itself *is* the material), and
+  `service_work_package` maps one exact `(service_code, service_text)` pair from
+  `fact_service_line` (a PO's own GL account is usually one generic subcontract account
+  shared by many different service items, so subcontract package identity lives one
+  level down, on the PO's detail report, not on the posting). Every cost type other than
+  MATERIAL/SUBCONTRACT defaults to the seeded `INDIRECT` catch-all (`is_system = 1`,
+  undeletable, same role `cost_type`'s `OTHER` plays) but stays reviewable via
+  `cost_element_work_package` too. `v_posting` (→ `v_actual`/`v_revenue`) resolves
+  MATERIAL/other work packages per row but leaves SUBCONTRACT rows `NULL` — that split
+  is resolved later, off `v_service_line` detail, mirroring the Detail Substitution
+  pattern (`PKG_SUMMARY` pulls subcontract package cost from `v_service_line`, excluding
+  the matching PO's `v_actual` posting, exactly like `UNIFIED_COST_REGISTER` does for
+  actual cost itself — a PO with no detail loaded yet falls into `(unallocated)`, never
+  silently dropped). Budget carries its own package code directly (a mapped upload
+  column, `fact_budget.work_package`, auto-vivifying a bare `dim_work_package` row the
+  same way `wbsKey()`/`costElementKey()` auto-vivify their own dimensions) — there is no
+  GL-level ambiguity on the budget side the way there is for a posted SAP actual line.
+  The Work packages page (`src/renderer/src/pages/PackageMapping.tsx`, its own nav entry
+  under **Data** — not Settings, since this is a recurring classification workflow, not
+  an admin setting) is where packages are defined and where materials/service items are
+  coded; never touch `dim_wbs.package`, which is a free-text WBS-master field and not
   this system.
 - **Accrual is a manual estimate, but it still goes through staging.** `ACCRUAL` is a
   module like any other — `fact_accrual` / `v_accrual`, staged and posted via the normal

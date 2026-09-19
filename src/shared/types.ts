@@ -262,13 +262,16 @@ export interface CostTypeAssignment {
 /**
  * A work package is a row in dim_work_package — entirely project-specific
  * (masonry/concrete/earthwork for one project, something else entirely for
- * another), so unlike cost type there is no seeded default set.
+ * another), so unlike cost type there is no seeded default set except the
+ * INDIRECT catch-all. `code` is the package's own short code (e.g. "S.03"),
+ * typed directly rather than derived from the label.
  */
 export type WorkPackage = string;
 
 export interface WorkPackageDef {
   code: string;
   label: string;
+  group_label: string | null;
   icon: string;
   color: string;
   sort_order: number;
@@ -276,26 +279,54 @@ export interface WorkPackageDef {
 }
 
 /**
- * One (cost element, WBS) pair that actually occurs in posted actual cost,
- * with what work_package_rule currently resolves it to. Mirrors
- * CostTypeCombination exactly, keyed on the pair that actually drives
- * work-package coding rather than (cost element, document type).
+ * One material (cost element under cost type MATERIAL) that actually occurs
+ * in posted actual cost, with what cost_element_work_package resolves it to.
+ * A CO line item carries no separate material number, so the cost element
+ * itself is the material's identity here.
  */
-export interface WorkPackageCombination {
+export interface MaterialPackageCombination {
   cost_element_code: string;
   cost_element_name: string | null;
-  wbs_code: string;
-  wbs_name: string | null;
   postings: number;
   amount: number;
   resolved_work_package: string | null;
   assigned_work_package: WorkPackage | null;
 }
 
-/** `work_package: null` removes the assignment, leaving the pair unallocated. */
-export interface WorkPackageAssignment {
+/**
+ * Same shape as MaterialPackageCombination, for every cost type other than
+ * MATERIAL/SUBCONTRACT — these default to the INDIRECT catch-all but stay
+ * reviewable here in case one is really package work miscoded elsewhere.
+ */
+export interface OtherPackageCombination extends MaterialPackageCombination {
+  cost_type: string | null;
+}
+
+/**
+ * One (service code, service text) pair that actually occurs in subcontract
+ * PO detail (fact_service_line) — the unit of work for subcontract package
+ * coding, since the PO's own GL account is usually one generic subcontract
+ * account shared by many different service items.
+ */
+export interface ServicePackageCombination {
+  service_code: string;
+  service_text: string;
+  postings: number;
+  amount: number;
+  resolved_work_package: string | null;
+  assigned_work_package: WorkPackage | null;
+}
+
+/** `work_package: null` removes the assignment, leaving the cost element unallocated. */
+export interface MaterialPackageAssignment {
   cost_element_code: string;
-  wbs_code: string;
+  work_package: WorkPackage | null;
+}
+
+/** `work_package: null` removes the assignment, leaving the service item unallocated. */
+export interface ServicePackageAssignment {
+  service_code: string;
+  service_text: string;
   work_package: WorkPackage | null;
 }
 

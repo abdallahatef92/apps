@@ -10,7 +10,7 @@ import { buildLineage } from './services/lineage';
 import { readWorkbook } from './ingest/workbook';
 import { deleteBatch, loadColumnMapping, postBatch, revenueAccountPattern, saveColumnMapping, stageFile } from './ingest/importer';
 import { suggestMapping, targetFields } from './ingest/targetFields';
-import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, ExportDiagramRequest, IpcResult, LineageResult, Module, QueryResult, SchemaDescription, SchemaTable, StageRequest, WorkPackageAssignment, WorkPackageCombination, WorkPackageDef } from '../shared/types';
+import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, ExportDiagramRequest, IpcResult, LineageResult, MaterialPackageAssignment, MaterialPackageCombination, Module, OtherPackageCombination, QueryResult, SchemaDescription, SchemaTable, ServicePackageAssignment, ServicePackageCombination, StageRequest, WorkPackageDef } from '../shared/types';
 
 /** Wrap a handler so the renderer always gets {ok,data} | {ok,error} instead of a rejection. */
 function handle<T>(channel: string, fn: (...args: any[]) => T | Promise<T>): void {
@@ -53,33 +53,66 @@ function slugifyCostType(label: string): string {
   return label.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
 
-/** Shared by the work-package combinations list, same reasoning as loadCostTypeCombinations. */
-function loadWorkPackageCombinations(): WorkPackageCombination[] {
+/**
+ * Every material (a cost element under cost type MATERIAL) that actually
+ * occurs in posted actual cost, with what cost_element_work_package resolves
+ * it to. A CO line item carries no separate material number, so the cost
+ * element itself is the material's identity here.
+ */
+function loadMaterialPackageCombinations(): MaterialPackageCombination[] {
   return getDb().prepare(`
     SELECT a.cost_element_code, a.cost_element_name,
-           COALESCE(a.wbs_code,'') AS wbs_code, a.wbs_name,
            COUNT(*) AS postings, SUM(a.amount) AS amount,
            a.work_package AS resolved_work_package,
-           (SELECT r.work_package FROM work_package_rule r
-             WHERE r.is_active = 1
-               AND r.cost_element_glob = a.cost_element_code
-               AND r.wbs_glob = COALESCE(a.wbs_code,'')
-             ORDER BY r.priority, r.rule_id LIMIT 1) AS assigned_work_package
+           (SELECT m.work_package FROM cost_element_work_package m
+             WHERE m.cost_element_code = a.cost_element_code) AS assigned_work_package
     FROM v_actual a
-    GROUP BY a.cost_element_code, a.cost_element_name,
-             COALESCE(a.wbs_code,''), a.wbs_name, a.work_package
-    ORDER BY ABS(SUM(a.amount)) DESC`).all() as WorkPackageCombination[];
+    WHERE a.cost_type = 'MATERIAL'
+    GROUP BY a.cost_element_code, a.cost_element_name, a.work_package
+    ORDER BY ABS(SUM(a.amount)) DESC`).all() as MaterialPackageCombination[];
+}
+
+/**
+ * Same shape, for every cost type other than MATERIAL/SUBCONTRACT — these
+ * default to the INDIRECT catch-all but stay reviewable here, in case one is
+ * really package work miscoded under another cost type.
+ */
+function loadOtherPackageCombinations(): OtherPackageCombination[] {
+  return getDb().prepare(`
+    SELECT a.cost_element_code, a.cost_element_name, a.cost_type,
+           COUNT(*) AS postings, SUM(a.amount) AS amount,
+           a.work_package AS resolved_work_package,
+           (SELECT m.work_package FROM cost_element_work_package m
+             WHERE m.cost_element_code = a.cost_element_code) AS assigned_work_package
+    FROM v_actual a
+    WHERE a.cost_type NOT IN ('MATERIAL','SUBCONTRACT')
+    GROUP BY a.cost_element_code, a.cost_element_name, a.cost_type, a.work_package
+    ORDER BY ABS(SUM(a.amount)) DESC`).all() as OtherPackageCombination[];
+}
+
+/**
+ * Every (service code, service text) pair that actually occurs in
+ * subcontract PO detail — the unit of work for subcontract package coding,
+ * since the PO's own GL account is usually one generic subcontract account
+ * shared by many different service items.
+ */
+function loadServicePackageCombinations(): ServicePackageCombination[] {
+  return getDb().prepare(`
+    SELECT COALESCE(s.service_code,'') AS service_code, COALESCE(s.service_text,'') AS service_text,
+           COUNT(*) AS postings, SUM(s.amount_net) AS amount,
+           s.work_package AS resolved_work_package,
+           (SELECT m.work_package FROM service_work_package m
+             WHERE m.service_code = COALESCE(s.service_code,'')
+               AND m.service_text = COALESCE(s.service_text,'')) AS assigned_work_package
+    FROM v_service_line s
+    GROUP BY COALESCE(s.service_code,''), COALESCE(s.service_text,''), s.work_package
+    ORDER BY ABS(SUM(s.amount_net)) DESC`).all() as ServicePackageCombination[];
 }
 
 function loadWorkPackageDefs(): WorkPackageDef[] {
   return getDb().prepare(
-    `SELECT code, label, icon, color, sort_order, is_system FROM dim_work_package ORDER BY sort_order, code`,
+    `SELECT code, label, group_label, icon, color, sort_order, is_system FROM dim_work_package ORDER BY sort_order, code`,
   ).all() as WorkPackageDef[];
-}
-
-/** Same slugging rule as cost types, so a work package code reads the same way. */
-function slugifyWorkPackage(label: string): string {
-  return label.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
 
 export function registerIpc(): void {
@@ -279,48 +312,50 @@ export function registerIpc(): void {
     return { assigned, cleared };
   });
 
-  /**
-   * Every (cost element, WBS) pair that actually occurs in posted actual cost —
-   * the work-package allocation screen's unit of work, mirroring costTypes:*
-   * exactly but keyed on where the cost sits rather than its document type.
-   */
-  handle('workPackages:combinations', () => loadWorkPackageCombinations());
-
   /** The work packages available to pick from, in display order. */
   handle('workPackages:types', () => loadWorkPackageDefs());
 
-  handle('workPackages:typeCreate', (input: { label: string; icon: string; color: string }) => {
+  /**
+   * Add a work package. Unlike a cost type, the code is typed directly by
+   * the user (e.g. "S.03") rather than derived from the label — that code is
+   * what the budget file itself states, so it has to be exactly what the
+   * user says, not a slug of the display name.
+   */
+  handle('workPackages:typeCreate', (input: { code: string; label: string; group_label: string; icon: string; color: string }) => {
     const db = getDb();
+    const code = (input.code ?? '').trim();
     const label = (input.label ?? '').trim();
+    if (!code) throw new Error('A work package needs a code.');
     if (!label) throw new Error('A work package needs a name.');
-    const code = slugifyWorkPackage(label);
-    if (!code) throw new Error('That name has no usable letters or numbers.');
     if (db.prepare('SELECT 1 FROM dim_work_package WHERE code = ?').get(code)) {
-      throw new Error(`A work package named "${label}" already exists.`);
+      throw new Error(`A work package coded "${code}" already exists.`);
     }
     const { m } = db.prepare('SELECT COALESCE(MAX(sort_order),0) AS m FROM dim_work_package').get() as { m: number };
-    db.prepare(`INSERT INTO dim_work_package (code, label, icon, color, sort_order, is_system)
-                VALUES (?, ?, ?, ?, ?, 0)`)
-      .run(code, label, input.icon || '📦', input.color || '#9aa5b1', m + 10);
+    db.prepare(`INSERT INTO dim_work_package (code, label, group_label, icon, color, sort_order, is_system)
+                VALUES (?, ?, ?, ?, ?, ?, 0)`)
+      .run(code, label, (input.group_label ?? '').trim() || null, input.icon || '📦', input.color || '#9aa5b1', m + 10);
     return loadWorkPackageDefs();
   });
 
-  handle('workPackages:typeUpdate', (input: { code: string; label: string; icon: string; color: string }) => {
+  /** Rename, re-group or re-colour a work package — the code never changes once created. */
+  handle('workPackages:typeUpdate', (input: { code: string; label: string; group_label: string; icon: string; color: string }) => {
     const db = getDb();
     const row = db.prepare('SELECT code FROM dim_work_package WHERE code = ?').get(input.code);
     if (!row) throw new Error('That work package no longer exists.');
     const label = (input.label ?? '').trim();
     if (!label) throw new Error('A work package needs a name.');
-    db.prepare('UPDATE dim_work_package SET label = ?, icon = ?, color = ? WHERE code = ?')
-      .run(label, input.icon || '📦', input.color || '#9aa5b1', input.code);
+    db.prepare('UPDATE dim_work_package SET label = ?, group_label = ?, icon = ?, color = ? WHERE code = ?')
+      .run(label, (input.group_label ?? '').trim() || null, input.icon || '📦', input.color || '#9aa5b1', input.code);
     return loadWorkPackageDefs();
   });
 
+  /** Only a user-added work package can be deleted — INDIRECT is the built-in catch-all. */
   handle('workPackages:typeDelete', (code: string) => {
     const db = getDb();
     const row = db.prepare('SELECT is_system FROM dim_work_package WHERE code = ?').get(code) as
       { is_system: number } | undefined;
     if (!row) return loadWorkPackageDefs();
+    if (row.is_system) throw new Error('This is the built-in Indirect catch-all and cannot be deleted.');
     try {
       db.prepare('DELETE FROM dim_work_package WHERE code = ?').run(code);
     } catch {
@@ -329,34 +364,60 @@ export function registerIpc(): void {
     return loadWorkPackageDefs();
   });
 
+  /** Every material (cost type MATERIAL) that occurs in posted actual cost — the Materials tab's unit of work. */
+  handle('workPackages:materialCombinations', () => loadMaterialPackageCombinations());
+
+  /** Every other-cost-type cost element — the Other (auto-indirect) tab's unit of work. */
+  handle('workPackages:otherCombinations', () => loadOtherPackageCombinations());
+
   /**
-   * Allocate a work package to named pairs — exact rules at priority 1, same
-   * reasoning as costTypes:assign: an allocation and a rule are the same kind
-   * of thing, and a pair occurs once so two allocations can never disagree.
+   * Code a material (or "other") cost element into a work package — an
+   * exact row in cost_element_work_package, since the mapping key here is
+   * the cost element's own identity, not a pattern.
    */
-  handle('workPackages:assign', (items: WorkPackageAssignment[]) => {
+  handle('workPackages:assignElement', (items: MaterialPackageAssignment[]) => {
     const db = getDb();
     const known = new Set(loadWorkPackageDefs().map((t) => t.code));
     for (const it of items) {
       if (it.work_package !== null && !known.has(it.work_package)) {
         throw new Error(`"${it.work_package}" is not a work package.`);
       }
-      for (const v of [it.cost_element_code, it.wbs_code]) {
-        if (/[*?[\]]/.test(v)) throw new Error(`"${v}" contains a wildcard character and cannot be allocated directly.`);
-      }
     }
-    const del = db.prepare(`DELETE FROM work_package_rule
-                            WHERE cost_element_glob = ? AND wbs_glob = ?`);
-    const ins = db.prepare(`INSERT INTO work_package_rule
-      (priority, cost_element_glob, wbs_glob, work_package, note)
-      VALUES (1, ?, ?, ?, ?)`);
+    const del = db.prepare(`DELETE FROM cost_element_work_package WHERE cost_element_code = ?`);
+    const ins = db.prepare(`INSERT INTO cost_element_work_package (cost_element_code, work_package) VALUES (?, ?)`);
     let assigned = 0, cleared = 0;
     const run = db.transaction(() => {
       for (const it of items) {
-        del.run(it.cost_element_code, it.wbs_code);
+        del.run(it.cost_element_code);
         if (it.work_package === null) { cleared++; continue; }
-        ins.run(it.cost_element_code, it.wbs_code, it.work_package,
-          `Allocated for WBS ${it.wbs_code || '(none)'}`);
+        ins.run(it.cost_element_code, it.work_package);
+        assigned++;
+      }
+    });
+    run();
+    return { assigned, cleared };
+  });
+
+  /** Every (service code, service text) pair in subcontract PO detail — the Subcontractors tab's unit of work. */
+  handle('workPackages:serviceCombinations', () => loadServicePackageCombinations());
+
+  /** Code a subcontract service item into a work package — an exact row in service_work_package. */
+  handle('workPackages:assignService', (items: ServicePackageAssignment[]) => {
+    const db = getDb();
+    const known = new Set(loadWorkPackageDefs().map((t) => t.code));
+    for (const it of items) {
+      if (it.work_package !== null && !known.has(it.work_package)) {
+        throw new Error(`"${it.work_package}" is not a work package.`);
+      }
+    }
+    const del = db.prepare(`DELETE FROM service_work_package WHERE service_code = ? AND service_text = ?`);
+    const ins = db.prepare(`INSERT INTO service_work_package (service_code, service_text, work_package) VALUES (?, ?, ?)`);
+    let assigned = 0, cleared = 0;
+    const run = db.transaction(() => {
+      for (const it of items) {
+        del.run(it.service_code, it.service_text);
+        if (it.work_package === null) { cleared++; continue; }
+        ins.run(it.service_code, it.service_text, it.work_package);
         assigned++;
       }
     });
