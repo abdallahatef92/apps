@@ -311,6 +311,14 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
 
   const sortArrow = (col: MaterialSortCol) => (sort.col === col ? (sort.dir === 1 ? ' ▲' : ' ▼') : '');
 
+  // Denominator/whole-tab aggregates for the "% of total" and "unallocated"
+  // indicators — computed over the full unfiltered list, matching how the
+  // existing "X of Y materials" count already reasons about the whole tab.
+  const grandTotal = useMemo(() => combos.reduce((s, c) => s + c.amount, 0), [combos]);
+  const unallocated = useMemo(() => combos.filter((c) => !c.resolved_work_package), [combos]);
+  const unallocatedAmount = useMemo(() => unallocated.reduce((s, c) => s + c.amount, 0), [unallocated]);
+  const pct = (amount: number) => (grandTotal > 0 ? ((amount / grandTotal) * 100).toFixed(1) : '0.0');
+
   const selectionState = (rows: MaterialPackageCombination[]): 'all' | 'some' | 'none' => {
     const n = rows.filter((r) => selected.has(r.material_code)).length;
     return n === 0 ? 'none' : n === rows.length ? 'all' : 'some';
@@ -352,6 +360,14 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
             {!c.assigned_work_package && c.resolved_work_package && (
               <span className="faint" style={{ fontSize: 10 }}>(default)</span>
             )}
+            {c.assigned_work_package && (
+              <button type="button" title="Clear this row's allocation" onClick={() => onAllocate([c], null)}
+                      style={{ fontSize: 10, padding: '2px 5px', borderRadius: 5, cursor: 'pointer',
+                               fontFamily: 'inherit', background: 'transparent', color: 'var(--text-3)',
+                               border: '1px solid var(--border)' }}>
+                ✕
+              </button>
+            )}
             {saving && <span className="faint" style={{ fontSize: 10 }}>saving…</span>}
           </div>
         </td>
@@ -364,6 +380,7 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
   const renderGroupHeader = (g: MaterialGroup, kind: MaterialGroupKind, collapseKey: string, depth: number) => {
     const open = isOpen(collapseKey);
     const groupSaving = g.rows.some((r) => savingKeys.has(r.material_code));
+    const groupUnallocated = g.rows.filter((r) => !r.resolved_work_package).length;
     return (
       <tr key={collapseKey} style={{ background: depth ? 'var(--surface-1)' : 'var(--surface-2)', cursor: 'pointer' }}
           onClick={() => toggleGroup(collapseKey)}>
@@ -376,6 +393,8 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
           {groupLabel(kind, g.key)}
           <span className="faint" style={{ fontSize: 11, marginLeft: 8 }}>
             {g.rows.length} material{g.rows.length === 1 ? '' : 's'}
+            {groupUnallocated > 0 && ` · ${groupUnallocated} unallocated`}
+            {' · '}{pct(g.amount)}% of total
           </span>
           {groupSaving && <span className="faint" style={{ fontSize: 10, marginLeft: 8 }}>saving…</span>}
         </td>
@@ -405,7 +424,7 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
       .map((v) => <option key={v} value={v}>{groupByOptionLabels[v]}</option>);
 
   return (
-    <div className="table-wrap">
+    <div className="table-wrap" style={{ overflow: 'visible' }}>
       <div className="row" style={{ marginBottom: 8, gap: 8, flexWrap: 'wrap' }}>
         <input placeholder="Filter code or description…" value={filter}
                onChange={(e) => setFilter(e.target.value)} style={{ width: 240 }} />
@@ -432,24 +451,30 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
         <span className="faint" style={{ fontSize: 11, alignSelf: 'center' }}>
           {sorted.length.toLocaleString()} of {combos.length.toLocaleString()} materials
           {groups && ` across ${groups.length} group${groups.length === 1 ? '' : 's'}`}
+          {' · '}{unallocated.length.toLocaleString()} unallocated ({pct(unallocatedAmount)}% of total spend)
         </span>
       </div>
-      {selected.size > 0 && (
-        <div className="row" style={{ marginBottom: 8, gap: 10, alignItems: 'center', background: 'var(--surface-2)',
-                                       borderRadius: 6, padding: '6px 10px', flexWrap: 'wrap' }}>
-          <strong style={{ fontSize: 12 }}>{selected.size} selected</strong>
-          <PackagePicker types={types} value="" clearLabel="selection"
-            onChange={(v) => {
-              if (!v) return;
-              const rows = sorted.filter((r) => selected.has(r.material_code));
-              onAllocate(rows, v);
-              setSelected(new Set());
-            }} />
-          <button className="btn sm ghost" onClick={() => setSelected(new Set())}>Clear selection</button>
-        </div>
-      )}
+      <div className="sel-bar">
+        {selected.size > 0 ? (
+          <>
+            <strong style={{ fontSize: 12 }}>{selected.size} selected</strong>
+            <PackagePicker types={types} value="" clearLabel="selection"
+              onChange={(v) => {
+                if (!v) return;
+                const rows = sorted.filter((r) => selected.has(r.material_code));
+                onAllocate(rows, v);
+                setSelected(new Set());
+              }} />
+            <button className="btn sm ghost" onClick={() => setSelected(new Set())}>Clear selection</button>
+          </>
+        ) : (
+          <span className="faint" style={{ fontSize: 12 }}>
+            Select rows to assign a package to several at once.
+          </span>
+        )}
+      </div>
       <table>
-        <thead>
+        <thead className="material-thead">
           <tr>
             <th style={{ width: 28, textAlign: 'center' }}>
               <TriCheckbox state={selectionState(sorted)} onChange={(checked) => setRowsSelected(sorted, checked)}

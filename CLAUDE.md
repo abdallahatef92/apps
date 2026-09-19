@@ -129,7 +129,19 @@ the reconciliation. The files are not in the repo, so this is a manual check.
   prefix/package" fast path is still the primary way most materials get coded; the
   checkbox+toolbar path is for what doesn't fit a whole group. A group header's own
   checkbox (tri-state: all/some/none of its rows selected) is a shortcut into the same
-  shared selection set, not a separate mechanism.
+  shared selection set, not a separate mechanism. The toolbar and the column-header row
+  are both `position: sticky`, stacked so they stay visible together while a long,
+  scrolled list is checked — this only works because the Materials tab's own
+  `.table-wrap` overrides the shared class's `overflow: auto` back to `visible`
+  (`overflow: auto` makes an element the containing block for its own sticky
+  descendants regardless of whether it ever actually scrolls, which silently breaks
+  `position: sticky` whenever, as here, the real scrolling happens on `.content`
+  instead); the toolbar always renders, in an idle or an active state, so its height —
+  and therefore the header row's sticky offset below it — never shifts. A group header
+  and the page-level summary line both report their own unallocated count and % of
+  total spend (of the whole tab's total, not the current filter), and a leaf row with
+  its own explicit assignment carries a small inline "✕" next to its badge to clear
+  just that row, without needing the checkbox+toolbar flow for a single undo.
 - **Accrual is a manual estimate, but it still goes through staging.** `ACCRUAL` is a
   module like any other — `fact_accrual` / `v_accrual`, staged and posted via the normal
   upload wizard — for cost incurred but not yet posted in SAP (e.g. "ADD/OMM",

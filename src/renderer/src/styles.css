@@ -265,6 +265,18 @@ thead th {
   padding: 9px 12px; border-bottom: 1px solid var(--border); white-space: nowrap;
 }
 thead th.num { text-align: right; }
+
+/* The Materials tab's selection bar sticks above its own column-header row
+   (which normally sticks at top:0, see `thead th` above) — its fixed height
+   is what the header row's own top offset below is measured against, so the
+   two must be changed together. */
+.sel-bar {
+  height: 37px; box-sizing: border-box; display: flex; align-items: center; gap: 10px;
+  position: sticky; top: 0; z-index: 2; background: var(--surface-2);
+  border-bottom: 1px solid var(--border-soft); border-radius: var(--radius) var(--radius) 0 0;
+  padding: 0 10px; flex-wrap: wrap;
+}
+.material-thead th { top: 37px; }
 tbody td { padding: 8px 12px; border-bottom: 1px solid var(--border-soft); white-space: nowrap; }
 tbody td.num { text-align: right; font-variant-numeric: tabular-nums;
                font-family: var(--mono); font-size: 12px; }
