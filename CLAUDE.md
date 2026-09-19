@@ -118,7 +118,18 @@ the reconciliation. The files are not in the repo, so this is a manual check.
   in `MaterialCodingTable`) — group by package, then by code prefix within each, or the
   reverse — reusing `buildMaterialGroups()` for both levels rather than a second grouping
   function; picking the same dimension for both collapses back to one level rather than
-  showing a pointless single-item nesting.
+  showing a pointless single-item nesting. A leaf row never renders its own `PackagePicker`
+  — at CSI's 16-plus-INDIRECT scale that icon grid wraps across several lines and makes
+  every row unreadable — it carries only a plain checkbox instead. Assigning a package to
+  specific rows (a handful of exceptions cutting across groups, not "this whole group")
+  goes through one shared `PackagePicker` in a toolbar that appears above the table
+  whenever any row is checked, applying to every currently-checked row at once and then
+  clearing the selection. Group and sub-group headers keep their own scoped bulk
+  `PackagePicker` in the Allocate column unchanged — that "code this whole
+  prefix/package" fast path is still the primary way most materials get coded; the
+  checkbox+toolbar path is for what doesn't fit a whole group. A group header's own
+  checkbox (tri-state: all/some/none of its rows selected) is a shortcut into the same
+  shared selection set, not a separate mechanism.
 - **Accrual is a manual estimate, but it still goes through staging.** `ACCRUAL` is a
   module like any other — `fact_accrual` / `v_accrual`, staged and posted via the normal
   upload wizard — for cost incurred but not yet posted in SAP (e.g. "ADD/OMM",

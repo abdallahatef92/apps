@@ -252,6 +252,15 @@ function buildMaterialGroups(rows: MaterialPackageCombination[], groupBy: Materi
  * category — so a bulk pick on one group header codes dozens of materials
  * in one click instead of one at a time.
  */
+/** A checkbox that can also render the "some but not all" indeterminate state — plain <input> has no prop for that, only a DOM property. */
+function TriCheckbox({ state, onChange, title }: { state: 'all' | 'some' | 'none'; onChange: (checked: boolean) => void; title?: string }) {
+  return (
+    <input type="checkbox" title={title} checked={state === 'all'}
+           ref={(el) => { if (el) el.indeterminate = state === 'some'; }}
+           onChange={(e) => onChange(e.target.checked)} />
+  );
+}
+
 function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
   combos: MaterialPackageCombination[];
   types: WorkPackageDef[];
@@ -264,6 +273,7 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
   const [groupBy2, setGroupBy2] = useState<MaterialGroupBy>('none');
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [allCollapsed, setAllCollapsed] = useState(true);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const filtered = useMemo(() => {
     const f = filter.trim().toLowerCase();
@@ -301,6 +311,19 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
 
   const sortArrow = (col: MaterialSortCol) => (sort.col === col ? (sort.dir === 1 ? ' ▲' : ' ▼') : '');
 
+  const selectionState = (rows: MaterialPackageCombination[]): 'all' | 'some' | 'none' => {
+    const n = rows.filter((r) => selected.has(r.material_code)).length;
+    return n === 0 ? 'none' : n === rows.length ? 'all' : 'some';
+  };
+  const setRowsSelected = (rows: MaterialPackageCombination[], checked: boolean) =>
+    setSelected((s) => {
+      const next = new Set(s);
+      for (const r of rows) checked ? next.add(r.material_code) : next.delete(r.material_code);
+      return next;
+    });
+  const toggleRow = (code: string, checked: boolean) =>
+    setSelected((s) => { const next = new Set(s); checked ? next.add(code) : next.delete(code); return next; });
+
   const groupLabel = (kind: MaterialGroupKind, key: string) =>
     kind === 'package'
       ? (key === 'UNALLOCATED'
@@ -312,7 +335,10 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
     const key = c.material_code;
     const saving = savingKeys.has(key);
     return (
-      <tr key={key}>
+      <tr key={key} style={saving ? { opacity: .5 } : undefined}>
+        <td style={{ textAlign: 'center' }}>
+          <input type="checkbox" checked={selected.has(key)} onChange={(e) => toggleRow(key, e.target.checked)} />
+        </td>
         <td className="mono" style={{ paddingLeft: depth ? depth * 20 : undefined }}>{c.material_code}</td>
         <td>{c.material_name ?? <span className="faint">—</span>}</td>
         <td className="mono faint">{c.prefix}</td>
@@ -329,10 +355,7 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
             {saving && <span className="faint" style={{ fontSize: 10 }}>saving…</span>}
           </div>
         </td>
-        <td style={saving ? { opacity: .5, pointerEvents: 'none' } : undefined}>
-          <PackagePicker types={types} value={c.assigned_work_package ?? ''}
-            onChange={(v) => onAllocate([c], v || null)} />
-        </td>
+        <td></td>
       </tr>
     );
   };
@@ -344,6 +367,10 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
     return (
       <tr key={collapseKey} style={{ background: depth ? 'var(--surface-1)' : 'var(--surface-2)', cursor: 'pointer' }}
           onClick={() => toggleGroup(collapseKey)}>
+        <td style={{ textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+          <TriCheckbox state={selectionState(g.rows)} onChange={(checked) => setRowsSelected(g.rows, checked)}
+                       title="Select all rows in this group" />
+        </td>
         <td colSpan={2} style={{ paddingLeft: depth ? depth * 20 : undefined }}>
           <span style={{ marginRight: 6 }}>{open ? '▾' : '▸'}</span>
           {groupLabel(kind, g.key)}
@@ -407,9 +434,27 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
           {groups && ` across ${groups.length} group${groups.length === 1 ? '' : 's'}`}
         </span>
       </div>
+      {selected.size > 0 && (
+        <div className="row" style={{ marginBottom: 8, gap: 10, alignItems: 'center', background: 'var(--surface-2)',
+                                       borderRadius: 6, padding: '6px 10px', flexWrap: 'wrap' }}>
+          <strong style={{ fontSize: 12 }}>{selected.size} selected</strong>
+          <PackagePicker types={types} value="" clearLabel="selection"
+            onChange={(v) => {
+              if (!v) return;
+              const rows = sorted.filter((r) => selected.has(r.material_code));
+              onAllocate(rows, v);
+              setSelected(new Set());
+            }} />
+          <button className="btn sm ghost" onClick={() => setSelected(new Set())}>Clear selection</button>
+        </div>
+      )}
       <table>
         <thead>
           <tr>
+            <th style={{ width: 28, textAlign: 'center' }}>
+              <TriCheckbox state={selectionState(sorted)} onChange={(checked) => setRowsSelected(sorted, checked)}
+                           title="Select all visible rows" />
+            </th>
             {headerCell('Code', 'material_code')}
             {headerCell('Description', 'material_name')}
             {headerCell('Prefix', 'prefix', { width: 70 })}
@@ -421,7 +466,7 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
         </thead>
         <tbody>
           {sorted.length === 0 && (
-            <tr><td colSpan={7}><div className="empty">No materials match.</div></td></tr>
+            <tr><td colSpan={8}><div className="empty">No materials match.</div></td></tr>
           )}
           {groups ? groups.map((g) => {
             const open = isOpen(g.key);
