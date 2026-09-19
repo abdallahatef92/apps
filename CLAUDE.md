@@ -109,7 +109,16 @@ the reconciliation. The files are not in the repo, so this is a manual check.
   exported `work_package` column is what a re-imported file is matched back on, so never
   rename it without updating both sides. A row with no `material_code` is filtered out of
   this tab's query entirely (there's nothing to key a coding on), not shown as a dead-end
-  bucket the way `service_work_package`'s uncoded-detail case is.
+  bucket the way `service_work_package`'s uncoded-detail case is. `dim_work_package` ships
+  seeded with the 16 CSI MasterFormat divisions (`015_csi_packages.sql`) alongside
+  `INDIRECT`, `is_system = 1` with the same rename-but-not-delete protection cost type's
+  six get, `group_label` set to Civil/Arch/MEP straight from CSI's own grouping — so a
+  fresh database's Packages tab isn't empty and a package-grouped report already reads in
+  a sensible hierarchy. The Materials tab's grouping is two levels (`groupBy1`/`groupBy2`
+  in `MaterialCodingTable`) — group by package, then by code prefix within each, or the
+  reverse — reusing `buildMaterialGroups()` for both levels rather than a second grouping
+  function; picking the same dimension for both collapses back to one level rather than
+  showing a pointless single-item nesting.
 - **Accrual is a manual estimate, but it still goes through staging.** `ACCRUAL` is a
   module like any other — `fact_accrual` / `v_accrual`, staged and posted via the normal
   upload wizard — for cost incurred but not yet posted in SAP (e.g. "ADD/OMM",

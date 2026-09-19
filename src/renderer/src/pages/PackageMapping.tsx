@@ -210,7 +210,8 @@ function GroupedPackageTable<T extends { resolved_work_package: string | null; a
 }
 
 type MaterialSortCol = 'material_code' | 'material_name' | 'prefix' | 'postings' | 'amount';
-type MaterialGroupBy = 'prefix' | 'package' | 'none';
+type MaterialGroupKind = 'prefix' | 'package';
+type MaterialGroupBy = MaterialGroupKind | 'none';
 
 interface MaterialGroup {
   key: string;
@@ -221,7 +222,7 @@ interface MaterialGroup {
   uniformPackage: WorkPackage | '';
 }
 
-function buildMaterialGroups(rows: MaterialPackageCombination[], groupBy: 'prefix' | 'package', types: WorkPackageDef[]): MaterialGroup[] {
+function buildMaterialGroups(rows: MaterialPackageCombination[], groupBy: MaterialGroupKind, types: WorkPackageDef[]): MaterialGroup[] {
   const map = new Map<string, MaterialGroup>();
   for (const r of rows) {
     const key = groupBy === 'prefix' ? r.prefix : (r.resolved_work_package ?? 'UNALLOCATED');
@@ -259,7 +260,8 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
 }) {
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState<{ col: MaterialSortCol; dir: 1 | -1 }>({ col: 'amount', dir: -1 });
-  const [groupBy, setGroupBy] = useState<MaterialGroupBy>('prefix');
+  const [groupBy1, setGroupBy1] = useState<MaterialGroupBy>('prefix');
+  const [groupBy2, setGroupBy2] = useState<MaterialGroupBy>('none');
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [allCollapsed, setAllCollapsed] = useState(true);
 
@@ -282,9 +284,14 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
   const toggleSort = (col: MaterialSortCol) =>
     setSort((s) => (s.col === col ? { col, dir: s.dir === 1 ? -1 : 1 } : { col, dir: col === 'amount' || col === 'postings' ? -1 : 1 }));
 
+  // groupBy2 only makes sense as a second, different dimension — picking the
+  // same one as groupBy1 (or picking a second level with no first level)
+  // collapses back to a single level rather than showing a pointless one-item nesting.
+  const effectiveGroupBy2: MaterialGroupBy = groupBy1 === 'none' || groupBy2 === groupBy1 ? 'none' : groupBy2;
+
   const groups = useMemo(
-    () => (groupBy === 'none' ? null : buildMaterialGroups(sorted, groupBy, types)),
-    [sorted, groupBy, types],
+    () => (groupBy1 === 'none' ? null : buildMaterialGroups(sorted, groupBy1, types)),
+    [sorted, groupBy1, types],
   );
 
   const isOpen = (key: string) => collapsed[key] !== undefined ? !collapsed[key] : !allCollapsed;
@@ -294,12 +301,19 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
 
   const sortArrow = (col: MaterialSortCol) => (sort.col === col ? (sort.dir === 1 ? ' ▲' : ' ▼') : '');
 
-  const renderRow = (c: MaterialPackageCombination, indent: boolean) => {
+  const groupLabel = (kind: MaterialGroupKind, key: string) =>
+    kind === 'package'
+      ? (key === 'UNALLOCATED'
+          ? <span className="faint mono" style={{ fontWeight: 700 }}>UNALLOCATED</span>
+          : <PackageBadge types={types} code={key} />)
+      : <span className="mono" style={{ fontWeight: 700 }}>{key}xxxxx</span>;
+
+  const renderRow = (c: MaterialPackageCombination, depth: number) => {
     const key = c.material_code;
     const saving = savingKeys.has(key);
     return (
       <tr key={key}>
-        <td className="mono" style={{ paddingLeft: indent ? 20 : undefined }}>{c.material_code}</td>
+        <td className="mono" style={{ paddingLeft: depth ? depth * 20 : undefined }}>{c.material_code}</td>
         <td>{c.material_name ?? <span className="faint">—</span>}</td>
         <td className="mono faint">{c.prefix}</td>
         <td className="mono" style={{ textAlign: 'right' }}>{c.postings.toLocaleString()}</td>
@@ -323,9 +337,45 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
     );
   };
 
+  /** One collapsible group header, at either nesting level — a bulk picker scoped to just this group's rows. */
+  const renderGroupHeader = (g: MaterialGroup, kind: MaterialGroupKind, collapseKey: string, depth: number) => {
+    const open = isOpen(collapseKey);
+    const groupSaving = g.rows.some((r) => savingKeys.has(r.material_code));
+    return (
+      <tr key={collapseKey} style={{ background: depth ? 'var(--surface-1)' : 'var(--surface-2)', cursor: 'pointer' }}
+          onClick={() => toggleGroup(collapseKey)}>
+        <td colSpan={2} style={{ paddingLeft: depth ? depth * 20 : undefined }}>
+          <span style={{ marginRight: 6 }}>{open ? '▾' : '▸'}</span>
+          {groupLabel(kind, g.key)}
+          <span className="faint" style={{ fontSize: 11, marginLeft: 8 }}>
+            {g.rows.length} material{g.rows.length === 1 ? '' : 's'}
+          </span>
+          {groupSaving && <span className="faint" style={{ fontSize: 10, marginLeft: 8 }}>saving…</span>}
+        </td>
+        <td></td>
+        <td className="mono" style={{ textAlign: 'right' }}>{g.postings.toLocaleString()}</td>
+        <td className="mono" style={{ textAlign: 'right' }}>{money(g.amount)}</td>
+        <td></td>
+        <td onClick={(e) => e.stopPropagation()}
+            style={groupSaving ? { opacity: .5, pointerEvents: 'none' } : undefined}>
+          <PackagePicker types={types} value={g.uniformPackage} clearLabel="whole group"
+            onChange={(v) => onAllocate(g.rows, v || null)} />
+        </td>
+      </tr>
+    );
+  };
+
   const headerCell = (label: string, col: MaterialSortCol, style?: React.CSSProperties) => (
     <th style={{ cursor: 'pointer', ...style }} onClick={() => toggleSort(col)}>{label}{sortArrow(col)}</th>
   );
+
+  const groupByOptionLabels: Record<MaterialGroupBy, string> = {
+    prefix: 'Code prefix (first 2 digits)', package: 'Current work package', none: 'None',
+  };
+  const groupByOptions = (exclude?: MaterialGroupBy) =>
+    (['prefix', 'package', 'none'] as MaterialGroupBy[])
+      .filter((v) => v !== exclude)
+      .map((v) => <option key={v} value={v}>{groupByOptionLabels[v]}</option>);
 
   return (
     <div className="table-wrap">
@@ -334,12 +384,18 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
                onChange={(e) => setFilter(e.target.value)} style={{ width: 240 }} />
         <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
           <span className="faint" style={{ fontSize: 12 }}>Group by</span>
-          <select value={groupBy} onChange={(e) => { setGroupBy(e.target.value as MaterialGroupBy); setCollapsed({}); }}>
-            <option value="prefix">Code prefix (first 2 digits)</option>
-            <option value="package">Current work package</option>
-            <option value="none">None</option>
+          <select value={groupBy1} onChange={(e) => { setGroupBy1(e.target.value as MaterialGroupBy); setCollapsed({}); }}>
+            {groupByOptions()}
           </select>
         </label>
+        {groupBy1 !== 'none' && (
+          <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <span className="faint" style={{ fontSize: 12 }}>Then by</span>
+            <select value={effectiveGroupBy2} onChange={(e) => { setGroupBy2(e.target.value as MaterialGroupBy); setCollapsed({}); }}>
+              {groupByOptions(groupBy1)}
+            </select>
+          </label>
+        )}
         {groups && (
           <>
             <button className="btn sm" onClick={expandAll}>Expand all</button>
@@ -369,36 +425,25 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
           )}
           {groups ? groups.map((g) => {
             const open = isOpen(g.key);
-            const groupSaving = g.rows.some((r) => savingKeys.has(r.material_code));
+            const subGroups = effectiveGroupBy2 === 'none' ? null : buildMaterialGroups(g.rows, effectiveGroupBy2, types);
             return (
               <Fragment key={g.key}>
-                <tr style={{ background: 'var(--surface-2)', cursor: 'pointer' }} onClick={() => toggleGroup(g.key)}>
-                  <td colSpan={2}>
-                    <span style={{ marginRight: 6 }}>{open ? '▾' : '▸'}</span>
-                    {groupBy === 'package'
-                      ? (g.key === 'UNALLOCATED'
-                          ? <span className="faint mono" style={{ fontWeight: 700 }}>UNALLOCATED</span>
-                          : <PackageBadge types={types} code={g.key} />)
-                      : <span className="mono" style={{ fontWeight: 700 }}>{g.key}xxxxx</span>}
-                    <span className="faint" style={{ fontSize: 11, marginLeft: 8 }}>
-                      {g.rows.length} material{g.rows.length === 1 ? '' : 's'}
-                    </span>
-                    {groupSaving && <span className="faint" style={{ fontSize: 10, marginLeft: 8 }}>saving…</span>}
-                  </td>
-                  <td></td>
-                  <td className="mono" style={{ textAlign: 'right' }}>{g.postings.toLocaleString()}</td>
-                  <td className="mono" style={{ textAlign: 'right' }}>{money(g.amount)}</td>
-                  <td></td>
-                  <td onClick={(e) => e.stopPropagation()}
-                      style={groupSaving ? { opacity: .5, pointerEvents: 'none' } : undefined}>
-                    <PackagePicker types={types} value={g.uniformPackage} clearLabel="whole group"
-                      onChange={(v) => onAllocate(g.rows, v || null)} />
-                  </td>
-                </tr>
-                {open && g.rows.map((c) => renderRow(c, true))}
+                {renderGroupHeader(g, groupBy1 as MaterialGroupKind, g.key, 0)}
+                {open && (subGroups
+                  ? subGroups.map((sg) => {
+                      const subKey = `${g.key}::${sg.key}`;
+                      const subOpen = isOpen(subKey);
+                      return (
+                        <Fragment key={subKey}>
+                          {renderGroupHeader(sg, effectiveGroupBy2 as MaterialGroupKind, subKey, 1)}
+                          {subOpen && sg.rows.map((c) => renderRow(c, 2))}
+                        </Fragment>
+                      );
+                    })
+                  : g.rows.map((c) => renderRow(c, 1)))}
               </Fragment>
             );
-          }) : sorted.map((c) => renderRow(c, false))}
+          }) : sorted.map((c) => renderRow(c, 0))}
         </tbody>
       </table>
     </div>

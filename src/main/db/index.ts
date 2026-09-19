@@ -18,6 +18,7 @@ import workPackagesSql from './migrations/011_work_packages.sql?raw';
 import accrualSql from './migrations/012_accrual.sql?raw';
 import workPackageReworkSql from './migrations/013_work_package_rework.sql?raw';
 import materialSql from './migrations/014_material.sql?raw';
+import csiPackagesSql from './migrations/015_csi_packages.sql?raw';
 import { SYSTEM_QUERIES } from './systemQueries';
 
 interface Migration {
@@ -46,6 +47,7 @@ const MIGRATIONS: Migration[] = [
   { version: 12, name: '012_accrual', sql: accrualSql },
   { version: 13, name: '013_work_package_rework', sql: workPackageReworkSql },
   { version: 14, name: '014_material', sql: materialSql },
+  { version: 15, name: '015_csi_packages', sql: csiPackagesSql },
 ];
 
 let db: DB | null = null;
