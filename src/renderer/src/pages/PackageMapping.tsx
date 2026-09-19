@@ -60,12 +60,12 @@ function PackageBadge({ types, code }: { types: WorkPackageDef[]; code: string }
   const meta = lookupPackage(types, code);
   if (!meta) return <span className="faint mono">{code}</span>;
   return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600,
+    <span title={meta.label} style={{
+      display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 600,
       color: meta.color, background: `${meta.color}22`, border: `1px solid ${meta.color}55`,
       borderRadius: 5, padding: '2px 8px', whiteSpace: 'nowrap',
     }}>
-      <span>{meta.icon}</span>{meta.code} — {meta.label}
+      <span style={{ fontSize: 9 }}>{meta.icon}</span>{meta.code}
     </span>
   );
 }
