@@ -341,6 +341,25 @@ const ORDER_FIELDS: FieldDef[] = [
     synonyms: ['currency', 'curr', 'crcy'] },
 ];
 
+const ACCRUAL_FIELDS: FieldDef[] = [
+  ...COMMON_DIMS,
+  { field: 'period_key', label: 'Period (YYYY-MM)', type: 'period', required: false,
+    description: 'Period the accrual applies to.',
+    synonyms: ['period', 'month', 'yearmonth', 'fiscal period'] },
+  { field: 'accrual_type', label: 'Accrual type', type: 'text', required: false,
+    description: 'Free text, e.g. ADD/OMM, Provision.',
+    synonyms: ['accrual type', 'type', 'provision type', 'add/omm'] },
+  { field: 'amount', label: 'Accrual amount', type: 'number', required: true,
+    description: 'Estimated cost not yet posted in SAP.',
+    synonyms: ['accrual', 'accrual amount', 'accrued cost', 'provision', 'provision amount', 'amount', 'value'] },
+  { field: 'description', label: 'Description', type: 'text', required: false,
+    description: 'Free text.',
+    synonyms: ['description', 'text', 'remarks'] },
+  { field: 'currency_code', label: 'Currency', type: 'text', required: false,
+    description: 'ISO currency of the amount.',
+    synonyms: ['currency', 'curr', 'crcy'] },
+];
+
 const BY_MODULE: Record<string, FieldDef[]> = {
   ACTUAL: ACTUAL_FIELDS,
   BUDGET: BUDGET_FIELDS,
@@ -349,6 +368,7 @@ const BY_MODULE: Record<string, FieldDef[]> = {
   SERVICE: SERVICE_FIELDS,
   MASTER: WBS_MASTER_FIELDS,
   ORDER: ORDER_FIELDS,
+  ACCRUAL: ACCRUAL_FIELDS,
 };
 
 export function targetFields(module: Module): TargetField[] {

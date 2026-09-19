@@ -12,6 +12,7 @@ import { Settings } from './pages/Settings';
 import { SchemaDiagram } from './pages/SchemaDiagram';
 import { PivotBuilder } from './pages/PivotBuilder';
 import { LineageGraph } from './pages/LineageGraph';
+import { CostReport } from './pages/CostReport';
 
 export interface ProjectRow {
   project_key: number;
@@ -38,7 +39,7 @@ export const useApp = (): AppState => {
   return v;
 };
 
-type PageId = 'dashboard' | 'upload' | 'analysis' | 'reports' | 'subcontractor' | 'material'
+type PageId = 'dashboard' | 'upload' | 'analysis' | 'reports' | 'costreport' | 'subcontractor' | 'material'
   | 'queries' | 'register' | 'schema' | 'pivot' | 'lineage' | 'settings';
 
 /**
@@ -52,6 +53,7 @@ const PAGES: { id: PageId; label: string; glyph: string; group: string; subtitle
   { id: 'upload', label: 'Upload data', glyph: '↥', group: 'Data', subtitle: 'Bring a report in, map it, review it, post it' },
   { id: 'register', label: 'Data register', glyph: '▤', group: 'Data', subtitle: 'Every import, its data date and audit trail' },
   { id: 'reports', label: 'Reports', glyph: '▦', group: 'Reports', subtitle: 'Cost type by GL by month, and the transactions behind it' },
+  { id: 'costreport', label: 'Cost Report', glyph: '◫', group: 'Reports', subtitle: 'Work packages, accrual and indirect against plan — the numbers behind the issued report' },
   { id: 'subcontractor', label: 'Subcontractor Analysis', glyph: '▨', group: 'Reports', subtitle: 'Certified work, supplier concentration and PO reconciliation' },
   { id: 'material', label: 'Material Analysis', glyph: '▩', group: 'Reports', subtitle: 'Material spend by GL, WBS and vendor, with rate outliers' },
   { id: 'analysis', label: 'Analysis', glyph: '◨', group: 'Advanced', subtitle: 'Run a saved analysis and export it' },
@@ -189,6 +191,7 @@ export default function App() {
             {page === 'register' && <DataRegister />}
             {page === 'analysis' && <Analysis />}
             {page === 'reports' && <Reports />}
+            {page === 'costreport' && <CostReport />}
             {page === 'subcontractor' && <SubcontractorAnalysis />}
             {page === 'material' && <MaterialAnalysis />}
             {page === 'queries' && <QueryLibrary />}

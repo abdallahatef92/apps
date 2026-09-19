@@ -10,7 +10,7 @@ import { buildLineage } from './services/lineage';
 import { readWorkbook } from './ingest/workbook';
 import { deleteBatch, loadColumnMapping, postBatch, revenueAccountPattern, saveColumnMapping, stageFile } from './ingest/importer';
 import { suggestMapping, targetFields } from './ingest/targetFields';
-import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, ExportDiagramRequest, IpcResult, LineageResult, Module, QueryResult, SchemaDescription, SchemaTable, StageRequest } from '../shared/types';
+import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, ExportDiagramRequest, IpcResult, LineageResult, Module, QueryResult, SchemaDescription, SchemaTable, StageRequest, WorkPackageAssignment, WorkPackageCombination, WorkPackageDef } from '../shared/types';
 
 /** Wrap a handler so the renderer always gets {ok,data} | {ok,error} instead of a rejection. */
 function handle<T>(channel: string, fn: (...args: any[]) => T | Promise<T>): void {
@@ -50,6 +50,35 @@ function loadCostTypeDefs(): CostTypeDef[] {
 
 /** A₋Z 0-9 upper-snake code from a display name, e.g. "Asset Depreciation" → ASSET_DEPRECIATION. */
 function slugifyCostType(label: string): string {
+  return label.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+/** Shared by the work-package combinations list, same reasoning as loadCostTypeCombinations. */
+function loadWorkPackageCombinations(): WorkPackageCombination[] {
+  return getDb().prepare(`
+    SELECT a.cost_element_code, a.cost_element_name,
+           COALESCE(a.wbs_code,'') AS wbs_code, a.wbs_name,
+           COUNT(*) AS postings, SUM(a.amount) AS amount,
+           a.work_package AS resolved_work_package,
+           (SELECT r.work_package FROM work_package_rule r
+             WHERE r.is_active = 1
+               AND r.cost_element_glob = a.cost_element_code
+               AND r.wbs_glob = COALESCE(a.wbs_code,'')
+             ORDER BY r.priority, r.rule_id LIMIT 1) AS assigned_work_package
+    FROM v_actual a
+    GROUP BY a.cost_element_code, a.cost_element_name,
+             COALESCE(a.wbs_code,''), a.wbs_name, a.work_package
+    ORDER BY ABS(SUM(a.amount)) DESC`).all() as WorkPackageCombination[];
+}
+
+function loadWorkPackageDefs(): WorkPackageDef[] {
+  return getDb().prepare(
+    `SELECT code, label, icon, color, sort_order, is_system FROM dim_work_package ORDER BY sort_order, code`,
+  ).all() as WorkPackageDef[];
+}
+
+/** Same slugging rule as cost types, so a work package code reads the same way. */
+function slugifyWorkPackage(label: string): string {
   return label.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
 
@@ -243,6 +272,91 @@ export function registerIpc(): void {
         if (it.cost_type === null) { cleared++; continue; }
         ins.run(it.cost_element_code, it.document_type, it.cost_type,
           `Allocated for document type ${it.document_type || '(none)'}`);
+        assigned++;
+      }
+    });
+    run();
+    return { assigned, cleared };
+  });
+
+  /**
+   * Every (cost element, WBS) pair that actually occurs in posted actual cost —
+   * the work-package allocation screen's unit of work, mirroring costTypes:*
+   * exactly but keyed on where the cost sits rather than its document type.
+   */
+  handle('workPackages:combinations', () => loadWorkPackageCombinations());
+
+  /** The work packages available to pick from, in display order. */
+  handle('workPackages:types', () => loadWorkPackageDefs());
+
+  handle('workPackages:typeCreate', (input: { label: string; icon: string; color: string }) => {
+    const db = getDb();
+    const label = (input.label ?? '').trim();
+    if (!label) throw new Error('A work package needs a name.');
+    const code = slugifyWorkPackage(label);
+    if (!code) throw new Error('That name has no usable letters or numbers.');
+    if (db.prepare('SELECT 1 FROM dim_work_package WHERE code = ?').get(code)) {
+      throw new Error(`A work package named "${label}" already exists.`);
+    }
+    const { m } = db.prepare('SELECT COALESCE(MAX(sort_order),0) AS m FROM dim_work_package').get() as { m: number };
+    db.prepare(`INSERT INTO dim_work_package (code, label, icon, color, sort_order, is_system)
+                VALUES (?, ?, ?, ?, ?, 0)`)
+      .run(code, label, input.icon || '📦', input.color || '#9aa5b1', m + 10);
+    return loadWorkPackageDefs();
+  });
+
+  handle('workPackages:typeUpdate', (input: { code: string; label: string; icon: string; color: string }) => {
+    const db = getDb();
+    const row = db.prepare('SELECT code FROM dim_work_package WHERE code = ?').get(input.code);
+    if (!row) throw new Error('That work package no longer exists.');
+    const label = (input.label ?? '').trim();
+    if (!label) throw new Error('A work package needs a name.');
+    db.prepare('UPDATE dim_work_package SET label = ?, icon = ?, color = ? WHERE code = ?')
+      .run(label, input.icon || '📦', input.color || '#9aa5b1', input.code);
+    return loadWorkPackageDefs();
+  });
+
+  handle('workPackages:typeDelete', (code: string) => {
+    const db = getDb();
+    const row = db.prepare('SELECT is_system FROM dim_work_package WHERE code = ?').get(code) as
+      { is_system: number } | undefined;
+    if (!row) return loadWorkPackageDefs();
+    try {
+      db.prepare('DELETE FROM dim_work_package WHERE code = ?').run(code);
+    } catch {
+      throw new Error('This work package is still assigned to some cost — clear those allocations first.');
+    }
+    return loadWorkPackageDefs();
+  });
+
+  /**
+   * Allocate a work package to named pairs — exact rules at priority 1, same
+   * reasoning as costTypes:assign: an allocation and a rule are the same kind
+   * of thing, and a pair occurs once so two allocations can never disagree.
+   */
+  handle('workPackages:assign', (items: WorkPackageAssignment[]) => {
+    const db = getDb();
+    const known = new Set(loadWorkPackageDefs().map((t) => t.code));
+    for (const it of items) {
+      if (it.work_package !== null && !known.has(it.work_package)) {
+        throw new Error(`"${it.work_package}" is not a work package.`);
+      }
+      for (const v of [it.cost_element_code, it.wbs_code]) {
+        if (/[*?[\]]/.test(v)) throw new Error(`"${v}" contains a wildcard character and cannot be allocated directly.`);
+      }
+    }
+    const del = db.prepare(`DELETE FROM work_package_rule
+                            WHERE cost_element_glob = ? AND wbs_glob = ?`);
+    const ins = db.prepare(`INSERT INTO work_package_rule
+      (priority, cost_element_glob, wbs_glob, work_package, note)
+      VALUES (1, ?, ?, ?, ?)`);
+    let assigned = 0, cleared = 0;
+    const run = db.transaction(() => {
+      for (const it of items) {
+        del.run(it.cost_element_code, it.wbs_code);
+        if (it.work_package === null) { cleared++; continue; }
+        ins.run(it.cost_element_code, it.wbs_code, it.work_package,
+          `Allocated for WBS ${it.wbs_code || '(none)'}`);
         assigned++;
       }
     });

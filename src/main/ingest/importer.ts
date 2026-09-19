@@ -723,6 +723,19 @@ export function postBatch(batchId: number, options: { allowDuplicate?: boolean }
           toNumber(mapped.budget_quantity), toText(mapped.uom), toNumber(mapped.unit_rate),
           toNumber(mapped.budget_amount) ?? 0, toText(mapped.description), s.row_no);
         posted++;
+      } else if (batch.module === 'ACCRUAL') {
+        // No scenario — an accrual is one running set of estimates, not
+        // multiple named versions the way budget/forecast are.
+        const period = toPeriod(mapped.period_key) ?? batch.period_key;
+        if (period) ensurePeriod(period);
+        db.prepare(`INSERT INTO fact_accrual
+          (import_batch_id, project_key, wbs_key, cost_element_key, currency_key,
+           period_key, accrual_type, amount, description, source_row_no)
+          VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
+          batchId, projectKey, wbsKey, ceKey, currencyKey, period,
+          toText(mapped.accrual_type), toNumber(mapped.amount) ?? 0,
+          toText(mapped.description), s.row_no);
+        posted++;
       } else if (batch.module === 'SERVICE') {
         const certDate = toDate(mapped.invoice_date);
         const period = toPeriod(mapped.period_key) ?? certDate?.slice(0, 7) ?? batch.period_key;
@@ -900,6 +913,7 @@ export const FACT_TABLE: Record<string, string | null> = {
   FORECAST: 'fact_forecast',
   SERVICE: 'fact_service_line',
   ORDER: 'fact_order_line',
+  ACCRUAL: 'fact_accrual',
   MASTER: null, // writes dimensions, not facts
 };
 

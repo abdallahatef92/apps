@@ -1,4 +1,4 @@
-export type Module = 'ACTUAL' | 'BUDGET' | 'FORECAST' | 'COMMITMENT' | 'SERVICE' | 'MASTER' | 'ORDER';
+export type Module = 'ACTUAL' | 'BUDGET' | 'FORECAST' | 'COMMITMENT' | 'SERVICE' | 'MASTER' | 'ORDER' | 'ACCRUAL';
 
 export interface QueryResult {
   columns: string[];
@@ -257,6 +257,46 @@ export interface CostTypeAssignment {
   cost_element_code: string;
   document_type: string;
   cost_type: CostType | null;
+}
+
+/**
+ * A work package is a row in dim_work_package — entirely project-specific
+ * (masonry/concrete/earthwork for one project, something else entirely for
+ * another), so unlike cost type there is no seeded default set.
+ */
+export type WorkPackage = string;
+
+export interface WorkPackageDef {
+  code: string;
+  label: string;
+  icon: string;
+  color: string;
+  sort_order: number;
+  is_system: number;
+}
+
+/**
+ * One (cost element, WBS) pair that actually occurs in posted actual cost,
+ * with what work_package_rule currently resolves it to. Mirrors
+ * CostTypeCombination exactly, keyed on the pair that actually drives
+ * work-package coding rather than (cost element, document type).
+ */
+export interface WorkPackageCombination {
+  cost_element_code: string;
+  cost_element_name: string | null;
+  wbs_code: string;
+  wbs_name: string | null;
+  postings: number;
+  amount: number;
+  resolved_work_package: string | null;
+  assigned_work_package: WorkPackage | null;
+}
+
+/** `work_package: null` removes the assignment, leaving the pair unallocated. */
+export interface WorkPackageAssignment {
+  cost_element_code: string;
+  wbs_code: string;
+  work_package: WorkPackage | null;
 }
 
 export interface SchemaColumn {

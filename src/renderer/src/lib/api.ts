@@ -1,4 +1,4 @@
-import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, ExportDiagramRequest, IpcResult, LineageResult, PivotSource, SchemaDescription } from '@shared/types';
+import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, ExportDiagramRequest, IpcResult, LineageResult, PivotSource, SchemaDescription, WorkPackageAssignment, WorkPackageCombination, WorkPackageDef } from '@shared/types';
 
 // Shape exposed by the preload bridge.
 type Bridge = {
@@ -14,6 +14,14 @@ type Bridge = {
     typeCreate(input: { label: string; icon: string; color: string }): Promise<IpcResult<CostTypeDef[]>>;
     typeUpdate(input: { code: string; label: string; icon: string; color: string }): Promise<IpcResult<CostTypeDef[]>>;
     typeDelete(code: string): Promise<IpcResult<CostTypeDef[]>>;
+  };
+  workPackages: {
+    combinations(): Promise<IpcResult<WorkPackageCombination[]>>;
+    assign(items: WorkPackageAssignment[]): Promise<IpcResult<{ assigned: number; cleared: number }>>;
+    types(): Promise<IpcResult<WorkPackageDef[]>>;
+    typeCreate(input: { label: string; icon: string; color: string }): Promise<IpcResult<WorkPackageDef[]>>;
+    typeUpdate(input: { code: string; label: string; icon: string; color: string }): Promise<IpcResult<WorkPackageDef[]>>;
+    typeDelete(code: string): Promise<IpcResult<WorkPackageDef[]>>;
   };
   settings: {
     list(): Promise<IpcResult<{ key: string; value: string }[]>>;

@@ -32,6 +32,14 @@ const api = {
     typeUpdate: (input: unknown) => invoke<any[]>('costTypes:typeUpdate', input),
     typeDelete: (code: string) => invoke<any[]>('costTypes:typeDelete', code),
   },
+  workPackages: {
+    combinations: () => invoke<any[]>('workPackages:combinations'),
+    assign: (items: unknown[]) => invoke<{ assigned: number; cleared: number }>('workPackages:assign', items),
+    types: () => invoke<any[]>('workPackages:types'),
+    typeCreate: (input: unknown) => invoke<any[]>('workPackages:typeCreate', input),
+    typeUpdate: (input: unknown) => invoke<any[]>('workPackages:typeUpdate', input),
+    typeDelete: (code: string) => invoke<any[]>('workPackages:typeDelete', code),
+  },
   settings: {
     list: () => invoke<{ key: string; value: string }[]>('settings:list'),
     set: (key: string, value: string) => invoke<void>('settings:set', key, value),

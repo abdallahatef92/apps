@@ -14,6 +14,8 @@ import costTypeRulesSql from './migrations/007_cost_type_rules.sql?raw';
 import partnerObjectSql from './migrations/008_partner_object.sql?raw';
 import orderSettlementSql from './migrations/009_order_settlement.sql?raw';
 import costTypeRegistrySql from './migrations/010_cost_type_registry.sql?raw';
+import workPackagesSql from './migrations/011_work_packages.sql?raw';
+import accrualSql from './migrations/012_accrual.sql?raw';
 import { SYSTEM_QUERIES } from './systemQueries';
 
 interface Migration {
@@ -38,6 +40,8 @@ const MIGRATIONS: Migration[] = [
   { version: 8, name: '008_partner_object', sql: partnerObjectSql },
   { version: 9, name: '009_order_settlement', sql: orderSettlementSql },
   { version: 10, name: '010_cost_type_registry', sql: costTypeRegistrySql, selfTransacting: true },
+  { version: 11, name: '011_work_packages', sql: workPackagesSql },
+  { version: 12, name: '012_accrual', sql: accrualSql },
 ];
 
 let db: DB | null = null;

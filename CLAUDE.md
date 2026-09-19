@@ -71,6 +71,26 @@ the reconciliation. The files are not in the repo, so this is a manual check.
   a type; the original six (`LABOR`, `MATERIAL`, `SUBCONTRACT`, `EQUIPMENT`, `INDIRECT`,
   `OTHER`) are seeded with `is_system = 1` and can be renamed but never deleted — the
   account-range rules and `OTHER`'s role as the resolver's catch-all name them by code.
+- **Work package is a coding layer, resolved the same way cost type is — never baked
+  into the dimension.** `work_package_rule` mirrors `cost_type_rule` exactly (ordered,
+  `GLOB`-matched, first match wins), except it matches on `cost_element_glob` *and/or*
+  `wbs_glob` — work-package coding depends on where the cost sits, not just its GL
+  account — and no source file ever states a work package directly, so there is no
+  "explicit value wins" branch and no seeded catch-all: `dim_work_package` starts empty
+  because the breakdown (masonry, concrete, earthwork, ...) is entirely project-specific.
+  `v_posting` (→ `v_actual`/`v_revenue`) and `v_budget` resolve it per row; `v_forecast`,
+  `v_service_line` and `v_order_line` deliberately do not. Settings › Allocate work
+  packages writes exact, priority-1 rules the same way Settings › Allocate cost types
+  does — never touch `dim_wbs.package`, which is a free-text WBS-master field and not
+  this system.
+- **Accrual is a manual estimate, but it still goes through staging.** `ACCRUAL` is a
+  module like any other — `fact_accrual` / `v_accrual`, staged and posted via the normal
+  upload wizard — for cost incurred but not yet posted in SAP (e.g. "ADD/OMM",
+  "Provision"). It carries no scenario, unlike budget/forecast, because it is one
+  running set of estimates rather than multiple named versions, so it falls back to
+  batch superseding like budget/forecast/master data. `fact_actual.is_accrual` is
+  unrelated dead weight from an earlier idea — never wire it up; a real accrual belongs
+  in `fact_accrual`, not stamped onto a posted SAP extract.
 - **Source reports interleave subtotal rows.** Anything that reads a spreadsheet must
   respect `report_definition.detail_key_fields`; rows with those fields blank are
   SKIPPED, and only rows with `stg_row.status = 'VALID'` may post.

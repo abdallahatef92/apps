@@ -412,6 +412,114 @@ WHERE p.is_active = 1
 ORDER BY p.project_code`,
   },
   {
+    code: 'PKG_SUMMARY',
+    name: 'Cost by work package',
+    module: 'CROSS',
+    category: 'Overview',
+    description: 'Budget vs. actual + accrued cost per work package (masonry, concrete, earthwork, ...), '
+      + 'with an (unallocated) row for cost no rule has coded yet — the coding work still to do.',
+    params: [P_PROJECT],
+    viz: { kind: 'bar', label: 'work_package', value: 'variance_amount', diverging: true,
+      headline: 'COST_REPORT_SUMMARY' },
+    sql: `
+WITH bud AS (
+  SELECT COALESCE(work_package,'(unallocated)') AS work_package, SUM(budget_amount) AS budget_amount
+  FROM v_budget WHERE project_key = :project_key AND is_current = 1
+  GROUP BY COALESCE(work_package,'(unallocated)')
+),
+act AS (
+  SELECT COALESCE(work_package,'(unallocated)') AS work_package, SUM(amount) AS actual_amount
+  FROM v_actual WHERE project_key = :project_key
+  GROUP BY COALESCE(work_package,'(unallocated)')
+),
+acc AS (
+  SELECT COALESCE(work_package,'(unallocated)') AS work_package, SUM(amount) AS accrual_amount
+  FROM v_accrual WHERE project_key = :project_key
+  GROUP BY COALESCE(work_package,'(unallocated)')
+),
+pkgs AS (
+  SELECT work_package FROM bud
+  UNION SELECT work_package FROM act
+  UNION SELECT work_package FROM acc
+)
+SELECT
+  p.work_package,
+  COALESCE(b.budget_amount,0)   AS budget_amount,
+  COALESCE(a.actual_amount,0)   AS actual_amount,
+  COALESCE(c.accrual_amount,0)  AS accrual_amount,
+  COALESCE(a.actual_amount,0) + COALESCE(c.accrual_amount,0) AS committed_amount,
+  COALESCE(b.budget_amount,0) - (COALESCE(a.actual_amount,0) + COALESCE(c.accrual_amount,0)) AS variance_amount
+FROM pkgs p
+LEFT JOIN bud b ON b.work_package = p.work_package
+LEFT JOIN act a ON a.work_package = p.work_package
+LEFT JOIN acc c ON c.work_package = p.work_package
+ORDER BY (p.work_package = '(unallocated)'), variance_amount ASC`,
+  },
+  {
+    code: 'INDIRECT_SUMMARY',
+    name: 'Indirect cost vs. plan',
+    module: 'CROSS',
+    category: 'Overview',
+    description: 'Indirect budget vs. actual + accrued indirect cost per WBS — indirect cost is never '
+      + 'coded to a work package, so this compares against the indirect plan instead.',
+    params: [P_PROJECT],
+    viz: { kind: 'bar', label: 'wbs_name', value: 'variance_amount', diverging: true,
+      headline: 'COST_REPORT_SUMMARY' },
+    sql: `
+WITH bud AS (
+  SELECT wbs_key, wbs_code, wbs_name, SUM(budget_amount) AS budget_amount
+  FROM v_budget WHERE project_key = :project_key AND is_current = 1 AND cost_type = 'INDIRECT'
+  GROUP BY wbs_key, wbs_code, wbs_name
+),
+act AS (
+  SELECT wbs_key, SUM(amount) AS actual_amount
+  FROM v_actual WHERE project_key = :project_key AND cost_type = 'INDIRECT'
+  GROUP BY wbs_key
+),
+acc AS (
+  SELECT wbs_key, SUM(amount) AS accrual_amount
+  FROM v_accrual WHERE project_key = :project_key AND cost_type = 'INDIRECT'
+  GROUP BY wbs_key
+)
+SELECT
+  b.wbs_code, b.wbs_name,
+  b.budget_amount,
+  COALESCE(a.actual_amount,0)  AS actual_amount,
+  COALESCE(c.accrual_amount,0) AS accrual_amount,
+  COALESCE(a.actual_amount,0) + COALESCE(c.accrual_amount,0) AS committed_amount,
+  b.budget_amount - (COALESCE(a.actual_amount,0) + COALESCE(c.accrual_amount,0)) AS variance_amount
+FROM bud b
+LEFT JOIN act a ON a.wbs_key IS b.wbs_key
+LEFT JOIN acc c ON c.wbs_key IS b.wbs_key
+ORDER BY variance_amount ASC`,
+  },
+  {
+    code: 'COST_REPORT_SUMMARY',
+    name: 'Cost report headline figures',
+    module: 'CROSS',
+    category: 'Headline',
+    description: 'The Summary node of the cost-report flow: BAC, actual cost, accrued cost, EAC and '
+      + 'VAC across the whole project — reuses the same EAC/BAC math as the Dashboard, plus accrual.',
+    params: [P_PROJECT],
+    viz: { kind: 'table' },
+    sql: `
+WITH b AS (SELECT SUM(budget_amount) AS total FROM v_budget
+           WHERE project_key = :project_key AND is_current = 1),
+     a AS (SELECT COALESCE(SUM(amount),0) AS total FROM v_actual WHERE project_key = :project_key),
+     c AS (SELECT COALESCE(SUM(amount),0) AS total FROM v_accrual WHERE project_key = :project_key),
+     f AS (SELECT COALESCE(SUM(forecast_amount),0) AS total FROM v_forecast
+           WHERE project_key = :project_key AND is_current = 1)
+SELECT
+  (SELECT total FROM b) AS bac,
+  (SELECT total FROM a) AS actual_cost,
+  (SELECT total FROM c) AS accrued_cost,
+  (SELECT total FROM f) AS etc,
+  (SELECT total FROM a) + (SELECT total FROM c) + (SELECT total FROM f) AS eac,
+  CASE WHEN (SELECT total FROM b) IS NULL THEN NULL
+       ELSE (SELECT total FROM b)
+         - ((SELECT total FROM a) + (SELECT total FROM c) + (SELECT total FROM f)) END AS vac`,
+  },
+  {
     code: 'COST_VS_REVENUE',
     name: 'Cost vs revenue by period',
     module: 'CROSS',
