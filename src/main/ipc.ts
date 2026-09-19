@@ -115,21 +115,28 @@ function loadOtherPackageCombinations(): OtherPackageCombination[] {
 }
 
 /**
- * Every (service code, service text) pair that actually occurs in
- * subcontract PO detail — the unit of work for subcontract package coding,
- * since the PO's own GL account is usually one generic subcontract account
- * shared by many different service items.
+ * Every (po_no, service code, service text) row that actually occurs in
+ * subcontract PO detail. The browsing/display grain includes po_no for
+ * context (which PO a slice of cost came from, and an optional "group by
+ * PO" view) — the coding key stays (service_code, service_text) alone
+ * (`service_work_package`'s own primary key), since the PO's own GL
+ * account is usually one generic subcontract account shared by many
+ * different service items and the same service item can recur across
+ * several POs under one shared code; assigning a package from any one of
+ * this pair's rows applies to every row sharing that same code/text,
+ * across every PO, immediately.
  */
 function loadServicePackageCombinations(): ServicePackageCombination[] {
   return getDb().prepare(`
-    SELECT COALESCE(s.service_code,'') AS service_code, COALESCE(s.service_text,'') AS service_text,
+    SELECT COALESCE(s.po_no,'') AS po_no,
+           COALESCE(s.service_code,'') AS service_code, COALESCE(s.service_text,'') AS service_text,
            COUNT(*) AS postings, SUM(s.amount_net) AS amount,
            s.work_package AS resolved_work_package,
            (SELECT m.work_package FROM service_work_package m
              WHERE m.service_code = COALESCE(s.service_code,'')
                AND m.service_text = COALESCE(s.service_text,'')) AS assigned_work_package
     FROM v_service_line s
-    GROUP BY COALESCE(s.service_code,''), COALESCE(s.service_text,''), s.work_package
+    GROUP BY COALESCE(s.po_no,''), COALESCE(s.service_code,''), COALESCE(s.service_text,''), s.work_package
     ORDER BY ABS(SUM(s.amount_net)) DESC`).all() as ServicePackageCombination[];
 }
 

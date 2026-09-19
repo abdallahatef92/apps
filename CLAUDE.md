@@ -178,9 +178,23 @@ the reconciliation. The files are not in the repo, so this is a manual check.
   them (Subcontractors: the service code's own first three characters, e.g.
   `S0401` → `S04` — a service item's real category prefix, the direct
   analog of a material's two-digit prefix) the table gets the same
-  two-level `groupBy1`/`groupBy2` selector Materials has (`'key' | 'package'
-  | 'none'`); when omitted (Other — no natural prefix asked for there) it
-  keeps exactly one grouping, by current package, unchanged from before.
+  two-level `groupBy1`/`groupBy2` selector Materials has (`'key' | 'po' |
+  'package' | 'none'`); when omitted (Other — no natural prefix asked for
+  there) it keeps exactly one grouping, by current package, unchanged from
+  before. A group header also carries `{pct(g.amount)}% of total`, matching
+  Materials exactly. `ServicePackageCombination` (Subcontractors) carries
+  its own `po_no` too — `loadServicePackageCombinations()`
+  (`src/main/ipc.ts`) groups `v_service_line` by `(po_no, service_code,
+  service_text, work_package)` rather than collapsing `po_no` away, purely
+  so the browsing grain can show which PO a slice of cost came from and
+  offer PO as a third `GroupedPackageTable` dimension (`poColumn`) — the
+  coding key itself is still `(service_code, service_text)` alone
+  (`service_work_package`'s own primary key), unchanged: the same service
+  item recurring across several POs shares one assignment, and assigning
+  from any one of its PO-rows updates every row sharing that code/text,
+  across every PO, immediately. `rowKey`/`savingKeys` for this tab include
+  `po_no` too, so two rows that happen to share a code/text but sit on
+  different POs never collide in the selection or saving-indicator state.
 - **Accrual is a manual estimate, but it still goes through staging.** `ACCRUAL` is a
   module like any other — `fact_accrual` / `v_accrual`, staged and posted via the normal
   upload wizard — for cost incurred but not yet posted in SAP (e.g. "ADD/OMM",

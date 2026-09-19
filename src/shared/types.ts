@@ -331,12 +331,17 @@ export interface MaterialImportResult {
 }
 
 /**
- * One (service code, service text) pair that actually occurs in subcontract
- * PO detail (fact_service_line) — the unit of work for subcontract package
- * coding, since the PO's own GL account is usually one generic subcontract
- * account shared by many different service items.
+ * One (po_no, service code, service text) row that actually occurs in
+ * subcontract PO detail (fact_service_line). `po_no` is carried purely for
+ * context/browsing (which PO a slice of cost came from, and an optional
+ * "group by PO" view) — the coding key itself stays `(service_code,
+ * service_text)` alone, since the PO's own GL account is usually one
+ * generic subcontract account shared by many different service items and
+ * the same service item can recur across several POs under one shared
+ * code.
  */
 export interface ServicePackageCombination {
+  po_no: string;
   service_code: string;
   service_text: string;
   postings: number;

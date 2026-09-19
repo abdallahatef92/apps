@@ -107,16 +107,16 @@ interface Group<T> {
 }
 
 type PkgSortCol = 'key' | 'postings' | 'amount';
-/** 'key' = the caller's own grouping dimension (only offered when `groupKey` is supplied), 'package' = by current resolved package (the only dimension when `groupKey` isn't supplied), 'none' = flat. */
-type PkgGroupBy = 'key' | 'package' | 'none';
+/** 'key' = the caller's own grouping dimension (`groupKey`), 'po' = the caller's PO dimension (`poColumn`), 'package' = by current resolved package (the only dimension when neither is supplied), 'none' = flat. */
+type PkgGroupBy = 'key' | 'po' | 'package' | 'none';
 
 function buildGenericGroups<T extends { resolved_work_package: string | null; amount: number; postings: number }>(
-  rows: T[], groupBy: 'key' | 'package', keyOf: (c: T) => string, types: WorkPackageDef[],
+  rows: T[], keyOf: (c: T) => string, useCsiOrder: boolean, types: WorkPackageDef[],
   sort: { col: PkgSortCol; dir: 1 | -1 },
 ): Group<T>[] {
   const map = new Map<string, Group<T>>();
   for (const r of rows) {
-    const key = groupBy === 'key' ? keyOf(r) : (r.resolved_work_package ?? 'UNALLOCATED');
+    const key = keyOf(r);
     const g = map.get(key) ?? { key, rows: [], postings: 0, amount: 0 };
     g.rows.push(r);
     g.postings += r.postings;
@@ -133,7 +133,7 @@ function buildGenericGroups<T extends { resolved_work_package: string | null; am
     for (const g of map.values()) g.rows.sort((a, b) => (a[col] - b[col]) * sort.dir);
     return [...map.values()].sort((a, b) => (a[col] - b[col]) * sort.dir);
   }
-  if (groupBy === 'package') {
+  if (useCsiOrder) {
     const order = ['UNALLOCATED', ...types.map((t) => t.code)];
     return [...map.values()].sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key));
   }
@@ -145,15 +145,18 @@ function buildGenericGroups<T extends { resolved_work_package: string | null; am
  * collapsible row per group, its unique lines nested beneath. Mirrors
  * `MaterialCodingTable`'s own shape (checkbox rows, one sticky toolbar
  * picker, sortable columns, code/description as two real columns,
- * unallocated visual treatment) rather than carrying its own separate,
- * older pattern. `groupKey`/`groupKeyLabel` are optional — when supplied
- * (Subcontractors: the service code's own prefix), the table gets the same
- * two-level `groupBy1`/`groupBy2` selector Materials has; when omitted
- * (Other), it keeps a single grouping by current package, unchanged.
+ * unallocated visual treatment, per-group "% of total") rather than
+ * carrying its own separate, older pattern. `groupKey`/`groupKeyLabel` and
+ * `poColumn` are both optional, independent extra grouping dimensions —
+ * when supplied (Subcontractors: the service code's own prefix, and the
+ * PO number), the table gets the same two-level `groupBy1`/`groupBy2`
+ * selector Materials has, offering whichever of `'key'`/`'po'`/`'package'`
+ * the caller actually wired up; when neither is supplied (Other), it keeps
+ * a single grouping by current package, unchanged.
  */
 function GroupedPackageTable<T extends { resolved_work_package: string | null; assigned_work_package: string | null; amount: number; postings: number }>({
   combos, types, savingKeys, onAllocate, rowKey, sortKey, codeLabel, renderCode, descLabel, renderDescription,
-  unitNoun, groupKey, groupKeyLabel,
+  unitNoun, groupKey, groupKeyLabel, poColumn,
 }: {
   combos: T[];
   types: WorkPackageDef[];
@@ -168,6 +171,8 @@ function GroupedPackageTable<T extends { resolved_work_package: string | null; a
   unitNoun: string;
   groupKey?: (c: T) => string;
   groupKeyLabel?: string;
+  /** An optional always-visible context column (e.g. PO number) that doubles as a third grouping dimension. */
+  poColumn?: { label: string; value: (c: T) => string };
 }) {
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState<{ col: PkgSortCol; dir: 1 | -1 }>({ col: 'amount', dir: -1 });
@@ -176,6 +181,7 @@ function GroupedPackageTable<T extends { resolved_work_package: string | null; a
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [allCollapsed, setAllCollapsed] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const columnCount = poColumn ? 7 : 6;
 
   const selBarRef = useRef<HTMLDivElement>(null);
   const [selBarHeight, setSelBarHeight] = useState(0);
@@ -197,9 +203,14 @@ function GroupedPackageTable<T extends { resolved_work_package: string | null; a
   // MaterialCodingTable applies.
   const effectiveGroupBy2: PkgGroupBy = groupBy1 === 'none' || groupBy2 === groupBy1 ? 'none' : groupBy2;
 
+  const keyOfForDim = (dim: PkgGroupBy): ((c: T) => string) =>
+    dim === 'po' ? (poColumn?.value ?? (() => ''))
+    : dim === 'package' ? ((c) => c.resolved_work_package ?? 'UNALLOCATED')
+    : (groupKey ?? (() => ''));
+
   const groups = useMemo(
-    () => (groupBy1 === 'none' ? null : buildGenericGroups(filtered, groupBy1, groupKey ?? (() => ''), types, sort)),
-    [filtered, groupBy1, groupKey, types, sort],
+    () => (groupBy1 === 'none' ? null : buildGenericGroups(filtered, keyOfForDim(groupBy1), groupBy1 === 'package', types, sort)),
+    [filtered, groupBy1, groupKey, poColumn, types, sort],
   );
   const grandTotal = useMemo(() => combos.reduce((s, c) => s + c.amount, 0), [combos]);
   const unallocated = useMemo(() => combos.filter((c) => !c.resolved_work_package), [combos]);
@@ -228,18 +239,19 @@ function GroupedPackageTable<T extends { resolved_work_package: string | null; a
     setSelected((s) => { const next = new Set(s); checked ? next.add(key) : next.delete(key); return next; });
 
   const groupByOptionLabels: Record<PkgGroupBy, string> = {
-    key: groupKeyLabel ?? 'Key', package: 'Current work package', none: 'None',
+    key: groupKeyLabel ?? 'Key', po: poColumn?.label ?? 'PO', package: 'Current work package', none: 'None',
   };
   const groupByOptions = (exclude?: PkgGroupBy) =>
-    (['key', 'package', 'none'] as PkgGroupBy[])
+    (['key', 'po', 'package', 'none'] as PkgGroupBy[])
       .filter((v) => v !== 'key' || !!groupKey)
+      .filter((v) => v !== 'po' || !!poColumn)
       .filter((v) => v !== exclude)
       .map((v) => <option key={v} value={v}>{groupByOptionLabels[v]}</option>);
 
-  const groupLabel = (kind: 'key' | 'package', key: string) =>
+  const groupLabel = (kind: PkgGroupBy, key: string) =>
     kind === 'package'
       ? (key === 'UNALLOCATED' ? <UnallocatedBadge /> : <PackageBadge types={types} code={key} />)
-      : <span className="mono" style={{ fontWeight: 700 }}>{key}*</span>;
+      : <span className="mono" style={{ fontWeight: 700 }}>{key || '(none)'}{kind === 'key' ? '*' : ''}</span>;
 
   const renderRow = (c: T, depth: number) => {
     const key = rowKey(c);
@@ -251,6 +263,7 @@ function GroupedPackageTable<T extends { resolved_work_package: string | null; a
         </td>
         <td className="mono" style={{ paddingLeft: depth ? depth * 20 : undefined }}>{renderCode(c)}</td>
         <td>{renderDescription(c)}</td>
+        {poColumn && <td className="mono faint">{poColumn.value(c) || '—'}</td>}
         <td className="mono" style={{ textAlign: 'right' }}>{c.postings.toLocaleString()}</td>
         <td className="mono" style={{ textAlign: 'right' }}>{money(c.amount)}</td>
         <td>
@@ -276,7 +289,7 @@ function GroupedPackageTable<T extends { resolved_work_package: string | null; a
     );
   };
 
-  const renderGroupHeader = (g: Group<T>, kind: 'key' | 'package', collapseKey: string, depth: number) => {
+  const renderGroupHeader = (g: Group<T>, kind: PkgGroupBy, collapseKey: string, depth: number) => {
     const open = isOpen(collapseKey);
     const groupSaving = g.rows.some((r) => savingKeys.has(rowKey(r)));
     const groupUnallocated = g.rows.filter((r) => !r.resolved_work_package).length;
@@ -295,10 +308,12 @@ function GroupedPackageTable<T extends { resolved_work_package: string | null; a
             {groupUnallocated > 0 && (
               <span style={{ color: 'var(--warning)' }}> · {groupUnallocated} unallocated</span>
             )}
+            {' · '}{pct(g.amount)}% of total
           </span>
           <CoverageMeter coded={g.rows.length - groupUnallocated} total={g.rows.length} />
           {groupSaving && <span className="faint" style={{ fontSize: 10, marginLeft: 8 }}>saving…</span>}
         </td>
+        {poColumn && <td style={{ verticalAlign: 'top' }}></td>}
         <td className="mono" style={{ textAlign: 'right', verticalAlign: 'top' }}>{g.postings.toLocaleString()}</td>
         <td className="mono" style={{ textAlign: 'right', verticalAlign: 'top' }}>{money(g.amount)}</td>
         <td style={{ verticalAlign: 'top' }}></td>
@@ -311,7 +326,7 @@ function GroupedPackageTable<T extends { resolved_work_package: string | null; a
       <div className="row" style={{ marginBottom: 8, gap: 8, flexWrap: 'wrap' }}>
         <input placeholder={`Filter ${codeLabel.toLowerCase()} or ${descLabel.toLowerCase()}…`} value={filter}
                onChange={(e) => setFilter(e.target.value)} style={{ width: 240 }} />
-        {groupKey && (
+        {(groupKey || poColumn) && (
           <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <span className="faint" style={{ fontSize: 12 }}>Group by</span>
             <select value={groupBy1} onChange={(e) => { setGroupBy1(e.target.value as PkgGroupBy); setCollapsed({}); }}>
@@ -319,7 +334,7 @@ function GroupedPackageTable<T extends { resolved_work_package: string | null; a
             </select>
           </label>
         )}
-        {groupKey && groupBy1 !== 'none' && (
+        {(groupKey || poColumn) && groupBy1 !== 'none' && (
           <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <span className="faint" style={{ fontSize: 12 }}>Then by</span>
             <select value={effectiveGroupBy2} onChange={(e) => { setGroupBy2(e.target.value as PkgGroupBy); setCollapsed({}); }}>
@@ -370,6 +385,7 @@ function GroupedPackageTable<T extends { resolved_work_package: string | null; a
             </th>
             <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('key')}>{codeLabel}{sortArrow('key')}</th>
             <th>{descLabel}</th>
+            {poColumn && <th style={{ width: 110 }}>{poColumn.label}</th>}
             <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('postings')}>
               Postings{sortArrow('postings')}
             </th>
@@ -381,22 +397,22 @@ function GroupedPackageTable<T extends { resolved_work_package: string | null; a
         </thead>
         <tbody>
           {filtered.length === 0 && (
-            <tr><td colSpan={6}><div className="empty">No cost loaded yet.</div></td></tr>
+            <tr><td colSpan={columnCount}><div className="empty">No cost loaded yet.</div></td></tr>
           )}
           {groups ? groups.map((g) => {
             const open = isOpen(g.key);
             const subGroups = effectiveGroupBy2 === 'none' ? null
-              : buildGenericGroups(g.rows, effectiveGroupBy2 as 'key' | 'package', groupKey ?? (() => ''), types, sort);
+              : buildGenericGroups(g.rows, keyOfForDim(effectiveGroupBy2), effectiveGroupBy2 === 'package', types, sort);
             return (
               <Fragment key={g.key}>
-                {renderGroupHeader(g, groupBy1 as 'key' | 'package', g.key, 0)}
+                {renderGroupHeader(g, groupBy1, g.key, 0)}
                 {open && (subGroups
                   ? subGroups.map((sg) => {
                       const subKey = `${g.key}::${sg.key}`;
                       const subOpen = isOpen(subKey);
                       return (
                         <Fragment key={subKey}>
-                          {renderGroupHeader(sg, effectiveGroupBy2 as 'key' | 'package', subKey, 1)}
+                          {renderGroupHeader(sg, effectiveGroupBy2, subKey, 1)}
                           {subOpen && sg.rows.map((c) => renderRow(c, 2))}
                         </Fragment>
                       );
@@ -964,7 +980,7 @@ export function PackageMapping() {
   });
 
   const allocateService = (rows: ServicePackageCombination[], value: WorkPackage | null) => {
-    const keys = rows.map((r) => `${r.service_code}\u0000${r.service_text}`);
+    const keys = rows.map((r) => `${r.po_no}\u0000${r.service_code}\u0000${r.service_text}`);
     setSavingService((s) => new Set([...s, ...keys]));
     setError(null);
     (async () => {
@@ -1046,20 +1062,25 @@ export function PackageMapping() {
             <div className="card">
               <h3>Code subcontractor service items into packages</h3>
               <p className="hint">
-                Every unique (service code, service text) pair from the PO detail report — not the
-                GL account the PO posts to, which is usually one generic subcontract account shared
-                by many different service items. {services.length} of them, grouped by their
-                current work package. A PO with no detail report loaded yet can't be coded here —
-                it shows up as (unallocated) on the Cost Report until its detail is uploaded.
+                Every (PO, service code, service text) row from the PO detail report — not the GL
+                account the PO posts to, which is usually one generic subcontract account shared by
+                many different service items. {services.length} of them. PO number is shown for
+                context only — coding is still keyed on the service code/text pair alone, so
+                assigning one row applies to every PO that carries the same service item. Group by
+                the service code's own prefix to bulk-code a whole category, or by PO to code
+                everything on one purchase order in one pass. A PO with no detail report loaded yet
+                can't be coded here — it shows up as (unallocated) on the Cost Report until its
+                detail is uploaded.
               </p>
               <GroupedPackageTable combos={services} types={types} savingKeys={savingService}
                 onAllocate={allocateService}
-                rowKey={(c) => `${c.service_code}\u0000${c.service_text}`}
+                rowKey={(c) => `${c.po_no}\u0000${c.service_code}\u0000${c.service_text}`}
                 sortKey={(c) => c.service_text || c.service_code}
                 codeLabel="Service code" renderCode={(c) => c.service_code || '(no code)'}
                 descLabel="Description" renderDescription={(c) => c.service_text || <span className="faint">—</span>}
                 groupKey={(c) => (c.service_code || '').slice(0, 3) || '(no code)'}
                 groupKeyLabel="Service code prefix (first 3 chars)"
+                poColumn={{ label: 'PO', value: (c) => c.po_no }}
                 unitNoun="service item" />
             </div>
           ),
