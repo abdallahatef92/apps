@@ -33,6 +33,7 @@ type Bridge = {
     stage(req: unknown): Promise<IpcResult<any>>;
     post(id: number, allowDuplicate?: boolean): Promise<IpcResult<any>>;
     remove(id: number): Promise<IpcResult<void>>;
+    preview(id: number, limit?: number): Promise<IpcResult<Record<string, unknown>[]>>;
   };
   queries: {
     list(): Promise<IpcResult<any[]>>;

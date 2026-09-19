@@ -52,6 +52,7 @@ export function Upload({ onDone }: { onDone: () => void }) {
   const [allowDuplicate, setAllowDuplicate] = useState(false);
   const [staged, setStaged] = useState<StageResult | null>(null);
   const [posted, setPosted] = useState<PostResult | null>(null);
+  const [stagedPreview, setStagedPreview] = useState<Record<string, unknown>[]>([]);
 
   useEffect(() => {
     call(api.reports.list())
@@ -143,6 +144,7 @@ export function Upload({ onDone }: { onDone: () => void }) {
     })) as StageResult;
     setStaged(result);
     setAllowDuplicate(false);
+    setStagedPreview(await call(api.imports.preview(result.importBatchId, 8)));
     setStep(4);
   });
 
@@ -159,10 +161,21 @@ export function Upload({ onDone }: { onDone: () => void }) {
 
   const reset = () => {
     setStep(1); setPreview(null); setStaged(null); setPosted(null);
-    setMapping({}); setNotes(''); setAllowDuplicate(false);
+    setMapping({}); setNotes(''); setAllowDuplicate(false); setStagedPreview([]);
   };
 
   const missingRequired = targets.filter((t) => t.required && !mapping[t.field]);
+
+  // A client-side projection of the same mapping that will be sent to staging —
+  // lets the user see the table change shape as they map columns, before
+  // spending a round-trip on validate & stage. Not a substitute for the real
+  // staging preview below (which also applies transforms/defaults/validation).
+  const mappedTargets = useMemo(() => targets.filter((t) => mapping[t.field]), [targets, mapping]);
+  const mappedPreviewRows = useMemo(() => {
+    if (!sheet) return [];
+    return sheet.rows.slice(0, 8).map((r) =>
+      Object.fromEntries(mappedTargets.map((t) => [t.field, r[mapping[t.field]]])));
+  }, [sheet, mappedTargets, mapping]);
 
   return (
     <>
@@ -388,6 +401,31 @@ export function Upload({ onDone }: { onDone: () => void }) {
             </label>
           </div>
 
+          {mappedTargets.length > 0 && (
+            <div className="card">
+              <h3>Preview</h3>
+              <p className="hint">
+                The first {Math.min(8, mappedPreviewRows.length)} rows reshaped onto the fields you've
+                mapped so far — updates as you change a mapping below. This is the file's raw values
+                only; validation and transforms happen for real once you stage.
+              </p>
+              <div className="table-wrap" style={{ maxHeight: 300 }}>
+                <table>
+                  <thead>
+                    <tr>{mappedTargets.map((t) => <th key={t.field}>{t.label}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {mappedPreviewRows.map((r, i) => (
+                      <tr key={i}>{mappedTargets.map((t) => (
+                        <td key={t.field}>{r[t.field] === null || r[t.field] === undefined ? '—' : String(r[t.field])}</td>
+                      ))}</tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           <div className="row">
             <button className="btn ghost" onClick={() => setStep(2)}>← Back</button>
             <button className="btn primary" onClick={stage} disabled={busy || missingRequired.length > 0}>
@@ -431,6 +469,30 @@ export function Upload({ onDone }: { onDone: () => void }) {
               {staged.amountTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
           </div>
+
+          {stagedPreview.length > 0 && (
+            <div className="card">
+              <h3>Staged rows</h3>
+              <p className="hint">
+                The first {stagedPreview.length} of {staged.validCount.toLocaleString()} valid rows,
+                exactly as they'll post — mapping, transforms and defaults already applied.
+              </p>
+              <div className="table-wrap" style={{ maxHeight: 300 }}>
+                <table>
+                  <thead>
+                    <tr>{Object.keys(stagedPreview[0]).map((c) => <th key={c}>{c.replace(/_/g, ' ')}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {stagedPreview.map((r, i) => (
+                      <tr key={i}>{Object.keys(stagedPreview[0]).map((c) => (
+                        <td key={c}>{r[c] === null || r[c] === undefined ? '—' : String(r[c])}</td>
+                      ))}</tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           {!posted && (
             <div className={`banner ${staged.lineKey.usable ? 'info' : 'warn'}`}>

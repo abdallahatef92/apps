@@ -59,6 +59,8 @@ const api = {
     post: (batchId: number, allowDuplicate = false) =>
       invoke<any>('import:post', batchId, allowDuplicate),
     remove: (batchId: number) => invoke<void>('import:delete', batchId),
+    preview: (batchId: number, limit?: number) =>
+      invoke<Record<string, unknown>[]>('import:preview', batchId, limit),
   },
   queries: {
     list: () => invoke<any[]>('query:list'),

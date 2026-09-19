@@ -291,6 +291,19 @@ export function registerIpc(): void {
                      WHERE import_batch_id = ? AND status IN ('ERROR','WARN')
                      ORDER BY row_no LIMIT ?`).all(batchId, limit));
 
+  // A sample of the actually-staged, post-mapping/post-transform rows for a
+  // batch — what Upload.tsx's review step shows so the user sees real staged
+  // data, not just a client-side guess at the mapping.
+  handle('import:preview', (batchId: number, limit = 8): Record<string, unknown>[] => {
+    const rows = getDb().prepare(`SELECT raw_json FROM stg_row
+                     WHERE import_batch_id = ? AND status = 'VALID'
+                     ORDER BY row_no LIMIT ?`).all(batchId, limit) as { raw_json: string }[];
+    return rows.map((r) => {
+      const { mapped } = JSON.parse(r.raw_json) as { mapped: Record<string, unknown> };
+      return Object.fromEntries(Object.entries(mapped ?? {}).filter(([k]) => !k.startsWith('__')));
+    });
+  });
+
   // --- query library -------------------------------------------------------
   handle('query:list', () =>
     getDb().prepare('SELECT * FROM query_library WHERE is_active = 1 ORDER BY module, category, name').all());
