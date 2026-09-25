@@ -221,6 +221,29 @@ the reconciliation. The files are not in the repo, so this is a manual check.
   assignment made before this migration was copied forward onto every
   project already in the database (rather than dropped), so each project
   starts from that shared history as its own independent baseline.
+- **The subcontract cost report is SQL over two uploads.** Certificate lines (ZSCPROG01,
+  SERVICE) carry the approval flag (`is_approved`, 'Character 1' = X), opening flag
+  (`is_opening`, 'Flag' = X), `tax_code`, `profit_center`, `package_no` and `split_count`
+  (017_subcontract_report.sql). A flag is parsed at staging only when its column is
+  mapped; a NULL flag means an older upload without the column, and the views read a NULL
+  approval as approved rather than turning old lines into pending. The report's rules
+  are columns of `v_service_line`, not TypeScript: `net_rate` (an A2 contract's gross
+  price divided back by `dim_tax_code.vat_rate`), `line_class` (Adjustment / Qty only /
+  Normal), `report_qty` (a Normal line whose amount is not qty × rate is reported at
+  amount ÷ net rate), `trade` (chars 2–3 of an S-code, else the first char, labelled
+  from `dim_sc_trade`), `bucket` (PENDING / OPENING / period) and `is_other_pc` (not the
+  project's most common profit centre). The PO service-line register (ZSCSRV1) is its
+  own module, `PO_SERVICE` → `fact_po_service_line` / `v_po_service_line`, keyed on
+  PO + item + service line. `v_service_line_po_match` matches each certificate line to
+  it in tiers: Exact (PO + item + code + text + price), Text (price differs), Service
+  code only, Not found; item numbers are compared without leading zeros. Staging keeps
+  the largest subtotal row as `import_batch.control_total` when it is at least the size
+  of the lines themselves (SAP's grand-total footer, split repeats included), so the
+  Checks tab can compare the file's own total. Every posted SERVICE batch is copied into
+  `service_line_snapshot`, because the fact table keeps only each line's latest version;
+  "changes since last load" diffs two snapshots. 'Profit Ctr' no longer maps to the
+  project on a SERVICE upload (the project comes from the wizard); 'Tx' is the tax code,
+  and caption matching keeps non-Latin letters so 'نوع العقد' maps to `contract_type`.
 - **Accrual is a manual estimate, but it still goes through staging.** `ACCRUAL` is a
   module like any other — `fact_accrual` / `v_accrual`, staged and posted via the normal
   upload wizard — for cost incurred but not yet posted in SAP (e.g. "ADD/OMM",
@@ -240,7 +263,12 @@ the reconciliation. The files are not in the repo, so this is a manual check.
   period, or by batch when the rows carry a key.
 - **Never trust a key that repeats.** If `line_uid` collides inside one file, the key
   does not identify a line and using it would silently drop real rows. `postBatch` falls
-  back to plain inserts plus batch superseding, and the import screen says so.
+  back to plain inserts plus batch superseding, and the import screen says so. The one
+  exception is SAP's subcontractor report (SERVICE, `SPLIT_COLLAPSE_MODULES` in
+  `importer.ts`): it prints one certificate line once per WBS element it is charged to,
+  with identical amount, quantity and VAT. Staging recognises such a repeat, stages it
+  SKIPPED ("counted once") and records `split_count` on the kept row. A repeat that
+  differs in any of those values is still a real collision.
 - **Batch superseding is the fallback only.** It runs when a source has no usable line
   identity. It is scoped by the projects the facts actually landed on, never by
   `import_batch.project_key` — that is a wizard hint and differs between two uploads of

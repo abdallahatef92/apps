@@ -39,11 +39,12 @@ const REQUIRED: Record<string, string[]> = {
   // wbs_code is deliberately not required here: a line still sitting on a cost
   // centre (category = CTR) has no WBS yet and is still a real, valid row.
   ORDER: ['order_no', 'amount'],
+  PO_SERVICE: ['po_no', 'po_item', 'po_line_no'],
 };
 
 const AMOUNT_FIELD: Record<string, string> = {
   ACTUAL: 'amount', BUDGET: 'budget_amount', FORECAST: 'forecast_amount',
-  COMMITMENT: 'amount', SERVICE: 'amount_net', MASTER: '', ORDER: 'amount',
+  COMMITMENT: 'amount', SERVICE: 'amount_net', MASTER: '', ORDER: 'amount', PO_SERVICE: '',
 };
 
 /**
@@ -68,7 +69,23 @@ const NATURAL_KEY: Record<string, string[]> = {
   // genuinely different postings can share order, cost element and period —
   // so this also keeps batch-level replacement rather than trust a false key.
   ORDER: [],
+  // One PO service line: SAP's own PO + item + service-line number.
+  PO_SERVICE: ['po_no', 'po_item', 'po_line_no'],
 };
+
+/**
+ * SAP's subcontractor report prints one certificate line once per WBS element
+ * it is charged to, with identical amounts — a split, not two lines. Repeats
+ * of a line whose amount, quantity and VAT all match the first are recognised
+ * at staging and counted once. A repeat that differs in any of those is a real
+ * key collision and still disables line identity for the file.
+ */
+const SPLIT_COLLAPSE_MODULES = new Set(['SERVICE']);
+const splitSignature = (c: Canonical) =>
+  [toNumber(c.amount_net) ?? 0, toNumber(c.quantity_current) ?? 0, toNumber(c.amount_vat) ?? 0].join('|');
+
+/** SAP marks a flag with "X"; anything else is off. Only called when the column is mapped. */
+const xFlag = (v: unknown): number => (toText(v)?.toUpperCase() === 'X' ? 1 : 0);
 
 /**
  * Build the line identity for a row, scoped to its project so two projects can
@@ -179,8 +196,16 @@ export async function stageFile(req: StageRequest, importedBy: string | null): P
   const unresolvedWbs = new Set<string>();
   const unresolvedCe = new Set<string>();
   const seenUids = new Map<string, number>();
+  // First row per identity, for recognising WBS-split repeats.
+  const firstByUid = new Map<string, { rowNo: number; sig: string; count: number }>();
+  const collapseSplits = SPLIT_COLLAPSE_MODULES.has(req.module);
+  // The file's own grand total: the largest subtotal row. Checked against the
+  // lines actually loaded on the Checks tab.
+  let largestSubtotal: number | null = null;
 
   const amountField = AMOUNT_FIELD[req.module];
+  const flagFields = req.module === 'SERVICE'
+    ? ['is_approved', 'is_opening'].filter((f) => mappedFields.has(f)) : [];
 
   const write = db.transaction(() => {
     rows.forEach((raw, i) => {
@@ -188,14 +213,38 @@ export async function stageFile(req: StageRequest, importedBy: string | null): P
       const mapped = applyMapping(raw, req.mapping);
 
       if (isSubtotalRow(mapped, detailKeyFields)) {
+        if (amountField) {
+          const amt = toNumber(mapped[amountField]);
+          if (amt !== null && (largestSubtotal === null || Math.abs(amt) > Math.abs(largestSubtotal))) {
+            largestSubtotal = amt;
+          }
+        }
         skipped++;
         insStg.run(batchId, rowNo, JSON.stringify({ raw, mapped }), 'SKIPPED',
           `Subtotal or non-data row: ${detailKeyFields.join(', ')} empty.`);
         return;
       }
 
+      for (const f of flagFields) mapped[f] = xFlag(mapped[f]);
+
       const rowIssues = validateRow(req.module, mapped, rowNo, req.periodKey, req.projectKey);
       const hasError = rowIssues.some((x) => x.severity === 'ERROR');
+
+      if (!hasError && collapseSplits) {
+        const uid = lineUid(req.module, req.projectKey, mapped, keyFields);
+        if (uid) {
+          const sig = splitSignature(mapped);
+          const first = firstByUid.get(uid);
+          if (first && first.sig === sig) {
+            first.count++;
+            skipped++;
+            insStg.run(batchId, rowNo, JSON.stringify({ raw, mapped }), 'SKIPPED',
+              `Repeat of row ${first.rowNo} on another WBS element (SAP split) — counted once.`);
+            return;
+          }
+          if (!first) firstByUid.set(uid, { rowNo, sig, count: 1 });
+        }
+      }
 
       if (hasError) error++; else valid++;
       if (rowIssues.some((x) => x.severity === 'WARN')) warn++;
@@ -221,11 +270,27 @@ export async function stageFile(req: StageRequest, importedBy: string | null): P
         rowIssues.map((x) => x.message).join(' ') || null);
     });
 
+    // Record on each kept line how many WBS rows it stood for.
+    const setSplit = db.prepare(`UPDATE stg_row SET raw_json = json_set(raw_json, '$.mapped.__split_count', ?)
+                                 WHERE import_batch_id = ? AND row_no = ?`);
+    let splitRepeatAmount = 0;
+    for (const f of firstByUid.values()) {
+      if (f.count < 2) continue;
+      setSplit.run(f.count, batchId, f.rowNo);
+      splitRepeatAmount += (Number(f.sig.split('|')[0]) || 0) * (f.count - 1);
+    }
+
+    // Only a subtotal at least as large as the lines themselves can be the
+    // file's grand total; anything smaller is a per-certificate subtotal.
+    const fileTotal = amountTotal + splitRepeatAmount;
+    const controlTotal = largestSubtotal !== null && Math.abs(largestSubtotal) >= Math.abs(fileTotal) - 1
+      ? largestSubtotal : null;
+
     db.prepare(`UPDATE import_batch
                 SET row_count_rejected = ?, row_count_skipped = ?, amount_total = ?,
-                    status = 'MAPPED'
+                    control_total = ?, status = 'MAPPED'
                 WHERE import_batch_id = ?`)
-      .run(error, skipped, amountTotal, batchId);
+      .run(error, skipped, amountTotal, controlTotal, batchId);
 
     if (req.saveMapping) saveColumnMapping(req.reportDefinitionId, req.mapping);
   });
@@ -343,6 +408,7 @@ export function saveColumnMapping(reportDefinitionId: number, mapping: ColumnMap
 
 const FACT_FOR_UPSERT: Record<string, string> = {
   ACTUAL: 'fact_actual', COMMITMENT: 'fact_actual', SERVICE: 'fact_service_line',
+  PO_SERVICE: 'fact_po_service_line',
 };
 
 /** How many of a staged batch's lines already exist in the warehouse. */
@@ -630,6 +696,7 @@ export function postBatch(batchId: number, options: { allowDuplicate?: boolean }
 
   const existsActual = db.prepare('SELECT 1 FROM fact_actual WHERE line_uid = ?');
   const existsService = db.prepare('SELECT 1 FROM fact_service_line WHERE line_uid = ?');
+  const existsPoService = db.prepare('SELECT 1 FROM fact_po_service_line WHERE line_uid = ?');
 
   // ON CONFLICT on line_uid turns a re-import into a replacement of that exact
   // line. A NULL uid never conflicts, so keyless rows still simply insert.
@@ -662,11 +729,13 @@ export function postBatch(batchId: number, options: { allowDuplicate?: boolean }
      period_key, po_no, invoice_no, entry_sheet_no, invoice_serial, invoice_date_key,
      item_no, line_no, service_code, service_text, category, contract_type, uom,
      unit_rate, quantity_total, quantity_previous, quantity_current, progress_pct,
-     amount_net, amount_vat, amount_gross, source_row_no, line_uid)
+     amount_net, amount_vat, amount_gross, source_row_no, line_uid,
+     is_approved, is_opening, tax_code, profit_center, package_no, split_count)
     VALUES (@batch, @project, @wbs, @ce, @vendor, @currency, @period, @poNo, @invoiceNo,
             @entrySheet, @serial, @invoiceDateKey, @itemNo, @lineNo, @serviceCode, @serviceText,
             @category, @contractType, @uom, @unitRate, @qtyTotal, @qtyPrev, @qtyCurrent,
-            @progress, @net, @vat, @gross, @rowNo, @uid)
+            @progress, @net, @vat, @gross, @rowNo, @uid,
+            @approved, @opening, @taxCode, @profitCenter, @packageNo, @splitCount)
     ON CONFLICT(line_uid) DO UPDATE SET
       import_batch_id = excluded.import_batch_id, project_key = excluded.project_key,
       wbs_key = excluded.wbs_key, cost_element_key = excluded.cost_element_key,
@@ -680,7 +749,28 @@ export function postBatch(batchId: number, options: { allowDuplicate?: boolean }
       quantity_total = excluded.quantity_total, quantity_previous = excluded.quantity_previous,
       quantity_current = excluded.quantity_current, progress_pct = excluded.progress_pct,
       amount_net = excluded.amount_net, amount_vat = excluded.amount_vat,
-      amount_gross = excluded.amount_gross, source_row_no = excluded.source_row_no`);
+      amount_gross = excluded.amount_gross, source_row_no = excluded.source_row_no,
+      is_approved = excluded.is_approved, is_opening = excluded.is_opening,
+      tax_code = excluded.tax_code, profit_center = excluded.profit_center,
+      package_no = excluded.package_no, split_count = excluded.split_count`);
+
+  const upsertPoService = db.prepare(`INSERT INTO fact_po_service_line
+    (import_batch_id, project_key, vendor_key, po_no, po_item, po_line_no, service_code, service_text,
+     unit_price, uom, material_group, material_group_desc, works_type, contract_terms,
+     contract_qty, contract_price, qty_received, qty_accepted, total_cost, source_row_no, line_uid)
+    VALUES (@batch, @project, @vendor, @poNo, @poItem, @poLine, @serviceCode, @serviceText,
+            @unitPrice, @uom, @mg, @mgDesc, @worksType, @terms,
+            @qty, @price, @received, @accepted, @totalCost, @rowNo, @uid)
+    ON CONFLICT(line_uid) DO UPDATE SET
+      import_batch_id = excluded.import_batch_id, project_key = excluded.project_key,
+      vendor_key = excluded.vendor_key, po_no = excluded.po_no, po_item = excluded.po_item,
+      po_line_no = excluded.po_line_no, service_code = excluded.service_code,
+      service_text = excluded.service_text, unit_price = excluded.unit_price, uom = excluded.uom,
+      material_group = excluded.material_group, material_group_desc = excluded.material_group_desc,
+      works_type = excluded.works_type, contract_terms = excluded.contract_terms,
+      contract_qty = excluded.contract_qty, contract_price = excluded.contract_price,
+      qty_received = excluded.qty_received, qty_accepted = excluded.qty_accepted,
+      total_cost = excluded.total_cost, source_row_no = excluded.source_row_no`);
 
   const run = db.transaction(() => {
     for (const s of staged) {
@@ -790,6 +880,27 @@ export function postBatch(batchId: number, options: { allowDuplicate?: boolean }
           qtyCurrent: toNumber(mapped.quantity_current), progress: toNumber(mapped.progress_pct),
           net: toNumber(mapped.amount_net) ?? 0, vat: toNumber(mapped.amount_vat),
           gross: toNumber(mapped.amount_gross), rowNo: s.row_no, uid,
+          approved: typeof mapped.is_approved === 'number' ? mapped.is_approved : null,
+          opening: typeof mapped.is_opening === 'number' ? mapped.is_opening : null,
+          taxCode: toText(mapped.tax_code), profitCenter: toText(mapped.profit_center),
+          packageNo: toText(mapped.package_no),
+          splitCount: toNumber(mapped.__split_count) ?? 1,
+        });
+        posted++;
+      } else if (batch.module === 'PO_SERVICE') {
+        const uid = useLineKeys ? (toText(mapped.__line_uid) ?? null) : null;
+        if (uid && existsPoService.get(uid)) replaced++;
+        upsertPoService.run({
+          batch: batchId, project: projectKey,
+          vendor: dims.vendorKey(toText(mapped.vendor_code), toText(mapped.vendor_name)),
+          poNo: toText(mapped.po_no), poItem: toText(mapped.po_item), poLine: toText(mapped.po_line_no),
+          serviceCode: toText(mapped.service_code), serviceText: toText(mapped.service_text),
+          unitPrice: toNumber(mapped.unit_price), uom: toText(mapped.uom),
+          mg: toText(mapped.material_group), mgDesc: toText(mapped.material_group_desc),
+          worksType: toText(mapped.works_type), terms: toText(mapped.contract_terms),
+          qty: toNumber(mapped.contract_qty), price: toNumber(mapped.contract_price),
+          received: toNumber(mapped.qty_received), accepted: toNumber(mapped.qty_accepted),
+          totalCost: toNumber(mapped.total_cost), rowNo: s.row_no, uid,
         });
         posted++;
       } else if (batch.module === 'MASTER') {
@@ -840,6 +951,19 @@ export function postBatch(batchId: number, options: { allowDuplicate?: boolean }
     // merge on their own key, replacing whole batches would throw away the months
     // an overlapping extract did not cover.
     if (!useLineKeys) supersedePrevious(batchId, batch);
+
+    // What this certificate upload contained, as posted — the history the
+    // "changes since last load" comparison reads. The fact table itself keeps
+    // only each line's latest version.
+    if (batch.module === 'SERVICE') {
+      db.prepare(`INSERT INTO service_line_snapshot
+          (import_batch_id, project_key, line_uid, po_no, vendor_name, service_code, service_text,
+           amount_net, is_approved, is_opening, split_count)
+        SELECT f.import_batch_id, f.project_key, f.line_uid, f.po_no, v.vendor_name, f.service_code,
+               f.service_text, f.amount_net, f.is_approved, f.is_opening, f.split_count
+        FROM fact_service_line f LEFT JOIN dim_vendor v ON v.vendor_key = f.vendor_key
+        WHERE f.import_batch_id = ?`).run(batchId);
+    }
 
     db.prepare(`UPDATE import_batch
                 SET status = 'POSTED', posted_at = datetime('now'), row_count_posted = ?
@@ -946,6 +1070,7 @@ export const FACT_TABLE: Record<string, string | null> = {
   SERVICE: 'fact_service_line',
   ORDER: 'fact_order_line',
   ACCRUAL: 'fact_accrual',
+  PO_SERVICE: 'fact_po_service_line',
   MASTER: null, // writes dimensions, not facts
 };
 
@@ -1036,6 +1161,8 @@ export function deleteBatch(batchId: number): void {
     db.prepare('DELETE FROM fact_budget WHERE import_batch_id = ?').run(batchId);
     db.prepare('DELETE FROM fact_forecast WHERE import_batch_id = ?').run(batchId);
     db.prepare('DELETE FROM fact_service_line WHERE import_batch_id = ?').run(batchId);
+    db.prepare('DELETE FROM service_line_snapshot WHERE import_batch_id = ?').run(batchId);
+    db.prepare('DELETE FROM fact_po_service_line WHERE import_batch_id = ?').run(batchId);
     db.prepare('DELETE FROM stg_row WHERE import_batch_id = ?').run(batchId);
     db.prepare(`UPDATE import_batch SET status = 'POSTED', superseded_by = NULL
                 WHERE superseded_by = ? AND status = 'SUPERSEDED'`).run(batchId);

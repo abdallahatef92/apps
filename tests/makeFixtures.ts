@@ -188,3 +188,82 @@ export async function makeWbsTreeFile(path: string): Promise<void> {
   rows.forEach((r) => ws.addRow(r));
   await wb.xlsx.writeFile(path);
 }
+
+/**
+ * A ZSCPROG01 certificate export shaped like the real one, carrying every case
+ * the monthly service report has to get right:
+ *  - a certificate line SAP repeats on two WBS elements (a split, counted once)
+ *  - an opening-balance line (Flag X) and a not-yet-approved line (no Character 1)
+ *  - an adjustment (amount, no qty) and a qty-only line (qty, no amount)
+ *  - an A2 contract, whose gross price includes 14% VAT (tax code P3)
+ *  - a line whose amount is not qty × rate, reported at its equivalent qty
+ *  - a line on another profit centre than the project's usual one
+ * and SAP's own grand-total footer row, which includes the split repeat.
+ *
+ * `month2` is the next month's re-export of the same report: one line's amount
+ * changes, the pending line gets approved, the other-profit-centre line is
+ * gone, and a new certificate line appears.
+ */
+export async function makeCertificateFile(path: string, month2 = false): Promise<void> {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Data');
+  ws.addRow(['Plnt', 'Profit Ctr', 'Invoice Serial (new)', 'Date', 'Pur. Doc.',
+    'Account Number of Supplier', 'Supplier', 'Character 1', 'Flag', 'DocumentNo', 'Item', 'Number',
+    'Line', 'Gross Price', 'Service', 'Short Text 1', 'Tx', 'نوع العقد', 'Total Quantity',
+    'Previous Quantity', 'Current Quantity', 'Progress %', 'VAT Current', 'SC Work Current Cost',
+    'Entry Sh.', 'G/L Acct', 'WBS Element', 'Description']);
+
+  // Profit Ctr … SC Work Current Cost (23 columns), then the WBS element.
+  type L = (string | number)[];
+  const line = (l: L) => ['P200', ...l.slice(0, 23), '', '30501100', l[23], 'DIV - TEST'];
+  const rows: L[] = [
+    ['PC1', 'C1', '2026-01-20', '4600001', 'Nile Builders', 'V010', 'X', '', '7000001', '10', '1', '1', 1000, 'S0302', 'Concrete C30', 'P3', 'A1', 100, 0, 100, 20, 14000, 100000, 'P-200.A'],
+    ['PC1', 'C1', '2026-01-20', '4600001', 'Nile Builders', 'V010', 'X', '', '7000001', '10', '1', '1', 1000, 'S0302', 'Concrete C30', 'P3', 'A1', 100, 0, 100, 20, 14000, 100000, 'P-200.B'],
+    ['PC1', 'C0', '2025-12-31', '4600001', 'Nile Builders', 'V010', 'X', 'X', '7000000', '20', '1', '1', 200, 'S0401', 'Blockwork 20cm', 'P3', 'A1', 50, 0, 50, 10, 1400, 10000, 'P-200.A'],
+    ['PC1', 'C2', '2026-02-15', '4600001', 'Nile Builders', 'V010', month2 ? 'X' : '', '', '7000002', '10', '1', '1', 1000, 'S0302', 'Concrete C30', 'P3', 'A1', 130, 100, 30, 26, 4200, 30000, 'P-200.A'],
+    ['PC1', 'C2', '2026-02-15', '4600001', 'Nile Builders', 'V010', 'X', '', '7000002', '10', '1', '2', 1000, 'S0302', 'Concrete C30', 'P3', 'A1', 0, 0, 0, 0, -280, -2000, 'P-200.A'],
+    ['PC1', 'C1', '2026-02-10', '4600002', 'Delta Finishes', 'V011', 'X', '', '7000003', '30', '1', '1', 114, 'S0901', 'Plaster', 'P3', 'A2', 20, 0, 20, 5, 0, 0, 'P-200.B'],
+    ['PC1', 'C1', '2026-02-10', '4600002', 'Delta Finishes', 'V011', 'X', '', '7000003', '30', '1', '2', 114, 'S0901', 'Plaster', 'P3', 'A2', 100, 0, 100, 25, 1400, month2 ? 11000 : 10000, 'P-200.B'],
+    ['PC1', 'C2', '2026-02-15', '4600001', 'Nile Builders', 'V010', 'X', '', '7000002', '10', '1', '3', 1000, 'S0302', 'Concrete C30', 'P3', 'A1', 140, 130, 10, 28, 1680, 12000, 'P-200.A'],
+  ];
+  if (!month2) {
+    rows.push(['PC2', 'C1', '2026-02-20', '4600003', 'Delta Finishes', 'V011', 'X', '', '7000004', '40', '1', '1', 1000, 'L01', 'Labour gang', 'P0', 'A1', 5, 0, 5, 50, 0, 5000, 'P-200.B']);
+  } else {
+    rows.push(['PC1', 'C3', '2026-03-12', '4600001', 'Nile Builders', 'V010', 'X', '', '7000005', '10', '1', '4', 1000, 'S0302', 'Concrete C30', 'P3', 'A1', 160, 140, 20, 32, 2800, 20000, 'P-200.A']);
+  }
+  rows.forEach((r) => ws.addRow(line(r)));
+
+  // SAP's grand-total footer: blank PO, the plant and "(n)" in the first
+  // column, and the sum of every printed row — the WBS split repeat included.
+  const printed = rows.reduce((s, r) => s + Number(r[22]), 0);
+  const footer: (string | number)[] = ['P200 (1)', ...Array(22).fill(''), printed];
+  ws.addRow(footer);
+  await wb.xlsx.writeFile(path);
+}
+
+/** The ZSCPROG01 certificate lines above, amounts summed once (split not repeated). */
+export const CERT_TOTALS = {
+  month1: { total: 165_000, approved: 125_000, opening: 10_000, pending: 30_000, adjustments: -2_000, footer: 265_000 },
+};
+
+/**
+ * ZSCSRV1 — the PO service-line register for the same POs. It gives the
+ * certificate lines their tiered matches: item 10 line 1 matches exactly, item
+ * 20's price differs (250 on the PO, 200 on the certificate), the A2 plaster
+ * line matches exactly, and the labour line on PO 4600003 has no PO line.
+ */
+export async function makePoServiceFile(path: string): Promise<void> {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Data');
+  ws.addRow(['Purchase Order', 'PO item', 'PO Service Line no.', 'PO Service Code', 'Service Short Text',
+    'Service Unit Price', 'PO Service UOM', 'PO Service Material Group', 'PO Service Material Group Description',
+    'Subcontractor', 'Subcontractor Name', 'Type of Works for PO', 'Type of Contract (Include/Exclude VAT)',
+    'PO Service Qty', 'PO Service Price', 'Total Qty Received', 'Total Qty Accepted', 'Total Cost']);
+  ws.addRow(['4600001', '00010', '1', 'S0302', 'Concrete C30', 1000, 'M3', 'SC03', 'Concrete works',
+    'V010', 'Nile Builders', 'Civil', 'Exclude VAT', 500, 500000, 140, 130, 140000]);
+  ws.addRow(['4600001', '00020', '1', 'S0401', 'Blockwork 20cm', 250, 'M2', 'SC04', 'Masonry',
+    'V010', 'Nile Builders', 'Civil', 'Exclude VAT', 200, 50000, 50, 50, 10000]);
+  ws.addRow(['4600002', '00030', '1', 'S0901', 'Plaster', 114, 'M2', 'SC09', 'Finishes',
+    'V011', 'Delta Finishes', 'Finishes', 'Include VAT', 1000, 114000, 120, 120, 10000]);
+  await wb.xlsx.writeFile(path);
+}

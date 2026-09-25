@@ -21,6 +21,7 @@ const MODULES: { code: Module; label: string; hint: string }[] = [
   { code: 'BUDGET', label: 'Budget', hint: 'Approved budget by WBS' },
   { code: 'FORECAST', label: 'Forecast', hint: 'ETC / EAC by period' },
   { code: 'SERVICE', label: 'Service lines', hint: 'Subcontractor detail behind a PO — reconciled against actuals, never added to them' },
+  { code: 'PO_SERVICE', label: 'PO service lines (ZSCSRV1)', hint: 'The subcontract PO register: contract qty, price, unit and material group per service line' },
   { code: 'ORDER', label: 'Order settlement detail', hint: 'Internal-order cost line items — reconciled against a CJI3 settlement posting, never added to them' },
   { code: 'MASTER', label: 'WBS structure', hint: 'Project breakdown structure' },
   { code: 'ACCRUAL', label: 'Accrual', hint: 'Cost incurred but not yet posted in SAP — a manual estimate, not a SAP extract' },

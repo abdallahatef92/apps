@@ -20,6 +20,7 @@ import workPackageReworkSql from './migrations/013_work_package_rework.sql?raw';
 import materialSql from './migrations/014_material.sql?raw';
 import csiPackagesSql from './migrations/015_csi_packages.sql?raw';
 import projectScopedMappingSql from './migrations/016_project_scoped_mapping.sql?raw';
+import subcontractReportSql from './migrations/017_subcontract_report.sql?raw';
 import { SYSTEM_QUERIES } from './systemQueries';
 
 interface Migration {
@@ -50,6 +51,7 @@ const MIGRATIONS: Migration[] = [
   { version: 14, name: '014_material', sql: materialSql },
   { version: 15, name: '015_csi_packages', sql: csiPackagesSql },
   { version: 16, name: '016_project_scoped_mapping', sql: projectScopedMappingSql, selfTransacting: true },
+  { version: 17, name: '017_subcontract_report', sql: subcontractReportSql, selfTransacting: true },
 ];
 
 let db: DB | null = null;

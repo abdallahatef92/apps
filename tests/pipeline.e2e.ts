@@ -15,7 +15,8 @@ import { postBatch, stageFile } from '../src/main/ingest/importer';
 import { runStoredQuery } from '../src/main/services/queryRunner';
 import { exportResult } from '../src/main/services/exportExcel';
 import {
-  makeActualsFile, makeBudgetFile, makeCji3File, makeSubcontractorFile, makeWbsTreeFile,
+  CERT_TOTALS, makeActualsFile, makeBudgetFile, makeCertificateFile, makeCji3File, makePoServiceFile,
+  makeSubcontractorFile, makeWbsTreeFile,
 } from './makeFixtures';
 import type { ColumnMappingEntry, Module } from '../src/shared/types';
 
@@ -356,6 +357,76 @@ async function costTypeRules(dir: string): Promise<void> {
   near('clearing an allocation returns the pair to the patterns', byType().SUBCONTRACT ?? 0, 1_500_000);
 }
 
+/**
+ * The monthly subcontract cost report: ZSCPROG01 certificates with their SAP
+ * traps (WBS splits, opening and pending lines, adjustments, qty-only lines,
+ * VAT-inclusive A2 prices) plus the ZSCSRV1 PO service-line register.
+ */
+async function subcontractReport(dir: string): Promise<void> {
+  console.log('\n--- subcontract cost report ---');
+  openDatabase(join(dir, 'screport.db'));
+  const db = getDb();
+  const projectKey = Number(db.prepare('INSERT INTO dim_project (project_code, project_name) VALUES (?,?)')
+    .run('P-200', 'Report Plant').lastInsertRowid);
+
+  const certPath = join(dir, 'zscprog01.xlsx');
+  await makeCertificateFile(certPath);
+  const cert = await load(certPath, 'SERVICE', 7, '2026-02-28', null, projectKey);
+  check('approval flag read from "Character 1"', cert.suggested.is_approved === 'Character 1', String(cert.suggested.is_approved));
+  check('opening flag read from "Flag"', cert.suggested.is_opening === 'Flag', String(cert.suggested.is_opening));
+  check('tax code read from "Tx", not taken for the contract type', cert.suggested.tax_code === 'Tx', String(cert.suggested.tax_code));
+  check('contract type read from its Arabic caption', cert.suggested.contract_type === 'نوع العقد', String(cert.suggested.contract_type));
+  check('profit centre read as a profit centre, not as the project',
+    cert.suggested.profit_center === 'Profit Ctr' && cert.suggested.project_code === undefined,
+    `${cert.suggested.profit_center} / ${cert.suggested.project_code}`);
+  check('WBS split repeat and footer skipped', cert.staged.skippedCount === 2, String(cert.staged.skippedCount));
+  check('8 certificate lines posted', cert.posted.posted === 8, String(cert.posted.posted));
+  check('line identity kept despite the split', cert.posted.byLineKey === true);
+  near('staged total counts the split line once', cert.staged.amountTotal, CERT_TOTALS.month1.total);
+
+  const batch = db.prepare('SELECT control_total FROM import_batch WHERE import_batch_id = ?')
+    .get(cert.staged.importBatchId) as any;
+  near('SAP grand-total footer captured', Number(batch.control_total), CERT_TOTALS.month1.footer);
+
+  const sum = (where: string) => Number((db.prepare(
+    `SELECT COALESCE(SUM(amount_net),0) a FROM v_service_line WHERE project_key = ? AND ${where}`)
+    .get(projectKey) as any).a);
+  near('report total', sum('1=1'), CERT_TOTALS.month1.total);
+  near('approved since go-live', sum("bucket NOT IN ('OPENING','PENDING')"), CERT_TOTALS.month1.approved);
+  near('opening balance', sum("bucket = 'OPENING'"), CERT_TOTALS.month1.opening);
+  near('pending (not approved)', sum("bucket = 'PENDING'"), CERT_TOTALS.month1.pending);
+  near('adjustments', sum("line_class = 'Adjustment'"), CERT_TOTALS.month1.adjustments);
+
+  const one = (where: string) => db.prepare(`SELECT * FROM v_service_line WHERE project_key = ? AND ${where}`)
+    .get(projectKey) as any;
+  check('split line records its two WBS rows', one("amount_net = 100000").split_count === 2);
+  near('A2 price carries its 14% VAT back out', Number(one("service_code = 'S0901' AND amount_net <> 0").net_rate), 100);
+  check('qty-only line classed as such', one("service_code = 'S0901' AND amount_net = 0").line_class === 'Qty only');
+  near('amount off qty × rate is reported at its equivalent qty', Number(one('amount_net = 12000').report_qty), 12);
+  check('other profit centre flagged', one("service_code = 'L01'").is_other_pc === 1);
+  const concrete = one("amount_net = 100000");
+  check('trade from the service code', concrete.trade === '03' && concrete.trade_label === '03 Concrete',
+    `${concrete.trade} ${concrete.trade_label}`);
+
+  const snap = db.prepare('SELECT COUNT(*) n FROM service_line_snapshot WHERE import_batch_id = ?')
+    .get(cert.staged.importBatchId) as any;
+  check('the upload is kept as a snapshot', snap.n === 8, String(snap.n));
+
+  const poPath = join(dir, 'zscsrv1.xlsx');
+  await makePoServiceFile(poPath);
+  const po = await load(poPath, 'PO_SERVICE', 11, '2026-02-28', null, projectKey);
+  check('3 PO service lines posted', po.posted.posted === 3, String(po.posted.posted));
+  check('PO service lines keyed on PO + item + line', po.posted.byLineKey === true);
+
+  const level = (where: string) => (db.prepare(`SELECT m.match_level FROM v_service_line_po_match m
+      JOIN v_service_line s ON s.service_line_id = m.service_line_id
+      WHERE s.project_key = ? AND ${where}`).get(projectKey) as any)?.match_level;
+  check('certificate line matched exactly', level('s.amount_net = 100000') === 'Exact', level('s.amount_net = 100000'));
+  check('price difference recognised', level("s.service_code = 'S0401'") === 'Text (price differs)', level("s.service_code = 'S0401'"));
+  check('A2 line matched on its gross price', level("s.service_code = 'S0901' AND s.amount_net <> 0") === 'Exact');
+  check('line with no PO service line reported', level("s.service_code = 'L01'") === 'Not found');
+}
+
 async function main(): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), 'ci-e2e-'));
   openDatabase(join(dir, 'e2e.db'));
@@ -465,6 +536,7 @@ async function main(): Promise<void> {
   await sapScenario(dir);
   await costTypeRules(dir);
   await lineIdentity(dir);
+  await subcontractReport(dir);
 
   rmSync(dir, { recursive: true, force: true });
   console.log(failures === 0 ? '\nAll pipeline checks passed.' : `\n${failures} check(s) failed.`);

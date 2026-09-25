@@ -193,8 +193,8 @@ const FORECAST_FIELDS: FieldDef[] = [
  */
 const SERVICE_FIELDS: FieldDef[] = [
   { field: 'project_code', label: 'Project code', type: 'text', required: false,
-    description: 'Project. Often the profit centre on a subcontract report.',
-    synonyms: ['project', 'project code', 'project definition', 'profit ctr', 'profit center'] },
+    description: 'Project. Usually chosen for the whole file in the wizard.',
+    synonyms: ['project', 'project code', 'project definition'] },
   { field: 'wbs_code', label: 'WBS code', type: 'text', required: true,
     description: 'WBS the service line is charged to.',
     synonyms: ['wbs', 'wbs element', 'wbs code'] },
@@ -239,8 +239,23 @@ const SERVICE_FIELDS: FieldDef[] = [
     description: 'Work category, e.g. "DIV03 - CONCRETE" or "Equipment Rent".',
     synonyms: ['description', 'category', 'div', 'trade'] },
   { field: 'contract_type', label: 'Contract type', type: 'text', required: false,
-    description: 'Contract type code carried on the certificate.',
-    synonyms: ['contract type', 'tx', 'type of contract'] },
+    description: 'Contract type code (A1 = price excludes VAT, A2 = price includes VAT).',
+    synonyms: ['نوع العقد', 'contract type', 'type of contract'] },
+  { field: 'tax_code', label: 'Tax code', type: 'text', required: false,
+    description: 'VAT code (P0 / P2 / P3). Sets the VAT an A2 contract\'s price includes.',
+    synonyms: ['tx', 'tax code', 'vat code'] },
+  { field: 'is_approved', label: 'Approved (X)', type: 'text', required: false,
+    description: 'X when the certificate line is approved. Blank = pending.',
+    synonyms: ['character 1', 'approved', 'approval'] },
+  { field: 'is_opening', label: 'Opening balance (X)', type: 'text', required: false,
+    description: 'X on an initial / opening balance line (before go-live).',
+    synonyms: ['flag', 'initial', 'opening'] },
+  { field: 'profit_center', label: 'Profit centre', type: 'text', required: false,
+    description: 'Profit centre. A line on another profit centre than the project\'s usual one is flagged.',
+    synonyms: ['profit ctr', 'profit center', 'profit centre'] },
+  { field: 'package_no', label: 'Package number', type: 'text', required: false,
+    description: 'Service package number on the PO item.',
+    synonyms: ['number', 'package no', 'package number'] },
   { field: 'unit_rate', label: 'Unit rate', type: 'number', required: false,
     description: 'Agreed rate per unit.', synonyms: ['gross price', 'unit rate', 'rate', 'price'] },
   { field: 'uom', label: 'Unit', type: 'text', required: false,
@@ -373,6 +388,54 @@ const ACCRUAL_FIELDS: FieldDef[] = [
     synonyms: ['currency', 'curr', 'crcy'] },
 ];
 
+/**
+ * ZSCSRV1 — the subcontract PO service-line register. One row per service line
+ * on a PO: what was contracted (qty, price, unit) and what has been received
+ * and accepted against it. The certificate lines (SERVICE) are matched to it on
+ * PO + item + service code. Each field's first synonym is SAP's own caption.
+ */
+const PO_SERVICE_FIELDS: FieldDef[] = [
+  { field: 'po_no', label: 'Purchase order', type: 'text', required: true,
+    description: 'Purchasing document.', synonyms: ['purchase order', 'purchasing document', 'pur. doc.', 'po'] },
+  { field: 'po_item', label: 'PO item', type: 'text', required: true,
+    description: 'Item on the PO.', synonyms: ['po item', 'item'] },
+  { field: 'po_line_no', label: 'PO service line', type: 'text', required: true,
+    description: 'Service line number within the item.', synonyms: ['po service line no.', 'service line no', 'line'] },
+  { field: 'service_code', label: 'Service code', type: 'text', required: false,
+    description: 'Service master number, e.g. S0302.', synonyms: ['po service code', 'service code', 'service'] },
+  { field: 'service_text', label: 'Service text', type: 'text', required: false,
+    description: 'Short text of the service line.', synonyms: ['service short text', 'short text', 'service text'] },
+  { field: 'unit_price', label: 'Unit price', type: 'number', required: false,
+    description: 'Contract rate per unit.', synonyms: ['service unit price', 'unit price'] },
+  { field: 'uom', label: 'Unit', type: 'text', required: false,
+    description: 'Unit of measure.', synonyms: ['po service uom', 'uom', 'unit'] },
+  { field: 'material_group', label: 'Material group', type: 'text', required: false,
+    description: 'Material group code.', synonyms: ['po service material group', 'material group'] },
+  { field: 'material_group_desc', label: 'Material group description', type: 'text', required: false,
+    description: 'Material group text.', synonyms: ['po service material group description', 'material group description'] },
+  { field: 'vendor_code', label: 'Supplier code', type: 'text', required: false,
+    description: 'Supplier number.', synonyms: ['subcontractor', 'supplier', 'vendor'] },
+  { field: 'vendor_name', label: 'Supplier name', type: 'text', required: false,
+    description: 'Supplier name.', synonyms: ['subcontractor name', 'supplier name', 'vendor name'] },
+  { field: 'works_type', label: 'Type of works', type: 'text', required: false,
+    description: 'Type of works for the PO.', synonyms: ['type of works for po', 'type of works'] },
+  { field: 'contract_terms', label: 'Contract terms', type: 'text', required: false,
+    description: 'Whether the contract includes or excludes VAT.',
+    synonyms: ['type of contract (include/exclude vat)', 'type of contract'] },
+  { field: 'contract_qty', label: 'Contract qty', type: 'number', required: false,
+    description: 'Quantity on the PO service line.', synonyms: ['po service qty', 'contract qty', 'quantity'] },
+  { field: 'contract_price', label: 'Contract value', type: 'number', required: false,
+    description: 'Value of the PO service line.', synonyms: ['po service price', 'contract value'] },
+  { field: 'qty_received', label: 'Qty received', type: 'number', required: false,
+    description: 'Total quantity received to date.', synonyms: ['total qty received', 'qty received'] },
+  { field: 'qty_accepted', label: 'Qty accepted', type: 'number', required: false,
+    description: 'Total quantity accepted to date.', synonyms: ['total qty accepted', 'qty accepted'] },
+  { field: 'total_cost', label: 'Total cost', type: 'number', required: false,
+    description: 'Total cost booked on the line.', synonyms: ['total cost'] },
+  { field: 'project_code', label: 'Project code', type: 'text', required: false,
+    description: 'Project. Usually chosen for the whole file in the wizard.', synonyms: ['project', 'project code'] },
+];
+
 const BY_MODULE: Record<string, FieldDef[]> = {
   ACTUAL: ACTUAL_FIELDS,
   BUDGET: BUDGET_FIELDS,
@@ -382,13 +445,16 @@ const BY_MODULE: Record<string, FieldDef[]> = {
   MASTER: WBS_MASTER_FIELDS,
   ORDER: ORDER_FIELDS,
   ACCRUAL: ACCRUAL_FIELDS,
+  PO_SERVICE: PO_SERVICE_FIELDS,
 };
 
 export function targetFields(module: Module): TargetField[] {
   return (BY_MODULE[module] ?? []).map(({ synonyms: _s, ...f }) => f);
 }
 
-const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+// Letters and digits in any script: SAP exports carry Arabic captions
+// ("نوع العقد"), which an ASCII-only filter would reduce to nothing.
+const norm = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
 
 /**
  * Suggest a source column for each target field.
