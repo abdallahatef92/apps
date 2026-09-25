@@ -425,6 +425,53 @@ async function subcontractReport(dir: string): Promise<void> {
   check('price difference recognised', level("s.service_code = 'S0401'") === 'Text (price differs)', level("s.service_code = 'S0401'"));
   check('A2 line matched on its gross price', level("s.service_code = 'S0901' AND s.amount_net <> 0") === 'Exact');
   check('line with no PO service line reported', level("s.service_code = 'L01'") === 'Not found');
+
+  // ---- the report's own queries ------------------------------------------
+  const P = { project_key: projectKey };
+  const kpi = runStoredQuery('SC_REPORT_KPI', P).rows[0] as any;
+  near('KPI certified', kpi.certified_amount, CERT_TOTALS.month1.total);
+  near('KPI approved', kpi.approved_amount, CERT_TOTALS.month1.approved);
+  near('KPI opening', kpi.opening_amount, CERT_TOTALS.month1.opening);
+  near('KPI pending', kpi.pending_amount, CERT_TOTALS.month1.pending);
+  near('KPI adjustments', kpi.adjustments_amount, CERT_TOTALS.month1.adjustments);
+  check('KPI subcontractors with a non-zero total', kpi.subcontractors === 2, String(kpi.subcontractors));
+  near('KPI other profit centre', kpi.other_profit_centre_amount, 5_000);
+  near('KPI amount SAP repeated on the split', kpi.repeated_on_wbs_splits_amount, 100_000);
+
+  const months = runStoredQuery('SC_MONTH_BY_TRADE', P).rows as any[];
+  const monthSum = (m: string) => months.filter((r) => r.period_key === m).reduce((a, r) => a + Number(r.amount), 0);
+  near('approved January by trade', monthSum('2026-01'), 100_000);
+  near('approved February by trade', monthSum('2026-02'), 25_000);
+  check('opening and pending kept out of the monthly chart',
+    !months.some((r) => r.period_key === 'OPENING' || r.period_key === 'PENDING'));
+
+  const trades = runStoredQuery('SC_TRADE_SUMMARY', P).rows as any[];
+  const concreteTrade = trades.find((r) => r.trade === '03 Concrete');
+  near('concrete total', Number(concreteTrade?.total_amount), 140_000);
+  near('concrete pending', Number(concreteTrade?.pending_amount), 30_000);
+
+  const active = runStoredQuery('SC_ACTIVE_SUBS_BY_MONTH', P).rows as any[];
+  check('two subcontractors active in February',
+    active.find((r) => r.period_key === '2026-02')?.active_subcontractors === 2);
+
+  const top = runStoredQuery('SC_TOP_SERVICES', P).rows as any[];
+  const conc = top.find((r) => r.service_code === 'S0302');
+  check('top service unit from the PO service UOM', conc?.unit === 'M3', String(conc?.unit));
+  near('top service qty at report qty (normal lines)', Number(conc?.qty), 142);
+  near('top service amount incl. adjustment', Number(conc?.amount), 140_000);
+
+  const qty = runStoredQuery('SC_QTY_RECONCILIATION', P).rows as any[];
+  const concLine = qty.find((r) => r.po_no === '4600001' && Number(r.po_item) === 10);
+  near('certified qty against the concrete PO line', Number(concLine?.certified_qty), 140);
+  near('received − certified', Number(concLine?.difference), 0);
+  const plaster = qty.find((r) => r.po_no === '4600002');
+  check('qty-only line explains the plaster difference', plaster?.explained === 'Excluded lines', String(plaster?.explained));
+
+  const checks = runStoredQuery('SC_CHECKS', P).rows as any[];
+  const diff = checks.find((r) => String(r.check).startsWith('Difference'));
+  check('footer − splits − lines reconciles', diff?.status === 'ok', `${diff?.status} ${diff?.value}`);
+  check('unmatched certificate line flagged',
+    checks.find((r) => String(r.check).startsWith('Certificate lines with no'))?.value === 1);
 }
 
 async function main(): Promise<void> {

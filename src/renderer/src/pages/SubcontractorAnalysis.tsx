@@ -4,17 +4,21 @@ import { api, call } from '../lib/api';
 import { BarChart } from '../charts/BarChart';
 import { Treemap } from '../charts/Treemap';
 import { LineChart } from '../charts/LineChart';
+import { StackedColumnChart } from '../charts/StackedColumnChart';
 import { DataTable } from '../components/DataTable';
 import { KpiStrip } from '../components/KpiStrip';
 import { SheetTabs } from '../components/SheetTabs';
 import type { QueryResult } from '@shared/types';
 
 /**
- * Assembles queries that already existed (KPI_SUBCONTRACT, SC_BY_SUPPLIER,
- * SC_BY_CATEGORY, SC_PO_RECONCILIATION) with three new ones (SC_MONTHLY_TREND,
- * SC_RECONCILIATION_STATUS, SC_INVOICE_RECONCILIATION) into one screen,
- * instead of picking them one at a time in Analysis. Every number is still a
- * stored query's own result set.
+ * The subcontract picture for one project, assembled from stored queries:
+ * the monthly service report's own views (SC_REPORT_KPI, SC_MONTH_BY_TRADE,
+ * SC_TRADE_SUMMARY, SC_ACTIVE_SUBS_BY_MONTH, SC_TOP_SERVICES,
+ * SC_QTY_RECONCILIATION, SC_CHECKS — the standalone ZSCPROG01 + ZSCSRV1
+ * report, brought in) alongside the reconciliation against actual cost
+ * (SC_BY_SUPPLIER, SC_BY_CATEGORY, SC_MONTHLY_TREND, SC_RECONCILIATION_STATUS,
+ * SC_PO_RECONCILIATION, SC_INVOICE_RECONCILIATION). Every number is a stored
+ * query's own result set.
  */
 export function SubcontractorAnalysis() {
   const { projectKey, project, dataVersion } = useApp();
@@ -25,6 +29,12 @@ export function SubcontractorAnalysis() {
   const [status, setStatus] = useState<QueryResult | null>(null);
   const [reconciliation, setReconciliation] = useState<QueryResult | null>(null);
   const [invoices, setInvoices] = useState<QueryResult | null>(null);
+  const [byMonthTrade, setByMonthTrade] = useState<QueryResult | null>(null);
+  const [byTrade, setByTrade] = useState<QueryResult | null>(null);
+  const [activeSubs, setActiveSubs] = useState<QueryResult | null>(null);
+  const [topServices, setTopServices] = useState<QueryResult | null>(null);
+  const [qtyRecon, setQtyRecon] = useState<QueryResult | null>(null);
+  const [checks, setChecks] = useState<QueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [savedTo, setSavedTo] = useState<string | null>(null);
@@ -36,10 +46,18 @@ export function SubcontractorAnalysis() {
         if (!projectKey) {
           setKpi(null); setByVendor(null); setByCategory(null);
           setTrend(null); setStatus(null); setReconciliation(null); setInvoices(null);
+          setByMonthTrade(null); setByTrade(null); setActiveSubs(null); setTopServices(null);
+          setQtyRecon(null); setChecks(null);
           return;
         }
         const p = { project_key: projectKey };
-        setKpi(await call(api.queries.run('KPI_SUBCONTRACT', p)));
+        setKpi(await call(api.queries.run('SC_REPORT_KPI', p)));
+        setByMonthTrade(await call(api.queries.run('SC_MONTH_BY_TRADE', p)));
+        setByTrade(await call(api.queries.run('SC_TRADE_SUMMARY', p)));
+        setActiveSubs(await call(api.queries.run('SC_ACTIVE_SUBS_BY_MONTH', p)));
+        setTopServices(await call(api.queries.run('SC_TOP_SERVICES', p)));
+        setQtyRecon(await call(api.queries.run('SC_QTY_RECONCILIATION', p)));
+        setChecks(await call(api.queries.run('SC_CHECKS', p)));
         setByVendor(await call(api.queries.run('SC_BY_SUPPLIER', p)));
         setByCategory(await call(api.queries.run('SC_BY_CATEGORY', p)));
         setTrend(await call(api.queries.run('SC_MONTHLY_TREND', p)));
@@ -60,6 +78,9 @@ export function SubcontractorAnalysis() {
   // (not_yet_posted), just rolled up here rather than re-queried.
   const lagging = invoices ? invoices.rows.filter((r) => Number(r.not_yet_posted) === 1) : [];
   const laggingValue = lagging.reduce((s, r) => s + Number(r.certified_amount ?? 0), 0);
+
+  // Count of checks needing attention — computed in SQL (needs_attention), only counted here.
+  const failedChecks = checks ? checks.rows.filter((r) => Number(r.needs_attention) === 1).length : 0;
 
   const exportTable = (result: QueryResult | null, title: string, subtitle: string) => async () => {
     if (!result) return;
@@ -102,6 +123,56 @@ export function SubcontractorAnalysis() {
         {
           id: 'overview', label: 'Overview', content: (
             <>
+              {byMonthTrade && byMonthTrade.rows.length > 0 && (
+                <div className="card">
+                  <h3>Approved amount per month by trade</h3>
+                  <p className="hint">
+                    Approved certified value (net of VAT) per certificate month. Opening balances and lines
+                    still pending approval are left out. The seven largest trades have their own colour;
+                    the rest are folded into "Other trades".
+                  </p>
+                  <StackedColumnChart result={byMonthTrade} xColumn="period_key" seriesColumn="trade"
+                    valueColumn="amount" orderColumn="series_order" otherLabel="Other trades" height={300} />
+                </div>
+              )}
+
+              <div className="grid k2">
+                {byTrade && byTrade.rows.length > 0 && (
+                  <div className="card">
+                    <h3>Subcontractors per trade</h3>
+                    <p className="hint">Subcontractors with a non-zero total in each trade. One subcontractor can count in several trades.</p>
+                    <BarChart result={byTrade} labelColumn="trade" valueColumn="subcontractors" />
+                  </div>
+                )}
+                {activeSubs && activeSubs.rows.length > 0 && (
+                  <div className="card">
+                    <h3>Active subcontractors per month</h3>
+                    <p className="hint">Subcontractors with a non-zero approved amount in the month.</p>
+                    <StackedColumnChart result={activeSubs} xColumn="period_key"
+                      valueColumn="active_subcontractors" valueLabel="Active subcontractors" height={240} />
+                  </div>
+                )}
+              </div>
+
+              {byTrade && byTrade.rows.length > 0 && (
+                <div className="card">
+                  <h3>Amount by trade</h3>
+                  <p className="hint">Net of VAT. Trade comes from the service code (S0302 → 03 Concrete; L = labour supply, P = plant).</p>
+                  <DataTable result={byTrade} />
+                </div>
+              )}
+
+              {topServices && topServices.rows.length > 0 && (
+                <div className="card">
+                  <h3>Top 15 services</h3>
+                  <p className="hint">
+                    Qty and average rate come from normal lines only. A line whose amount is not qty × rate
+                    counts at its equivalent qty (amount ÷ net rate). The amount includes adjustments.
+                  </p>
+                  <DataTable result={topServices} />
+                </div>
+              )}
+
               <div className="grid k2">
                 {byVendor && byVendor.rows.length > 0 && (
                   <div className="card">
@@ -143,6 +214,44 @@ export function SubcontractorAnalysis() {
                 </div>
               )}
             </>
+          ),
+        },
+        {
+          id: 'qty', label: 'Qty reconciliation', content: qtyRecon && (
+            <div className="card">
+              <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <h3>Qty reconciliation per PO service line</h3>
+                  <p className="hint">
+                    One row per ZSCSRV1 PO service line. Certified qty is the certificate lines matched to it
+                    (qty-only lines are shown separately). The difference is qty received − qty certified. When
+                    it equals the qty-only lines it is explained by them; otherwise the row is flagged.
+                    {qtyRecon.rowCount === 0 && ' No PO service lines (ZSCSRV1) are loaded for this project yet — upload one under "PO service lines".'}
+                  </p>
+                </div>
+                <button className="btn sm" disabled={busy || !qtyRecon.rowCount}
+                        onClick={exportTable(qtyRecon, 'Qty reconciliation',
+                          'Qty received vs qty certified, per PO service line.')}>
+                  ⤓ Excel
+                </button>
+              </div>
+              <DataTable result={qtyRecon} signColumns={['difference']} flagColumn="unexplained"
+                flagLabel="Received qty differs from certified qty and the qty-only lines do not explain it." />
+            </div>
+          ),
+        },
+        {
+          id: 'checks', label: failedChecks ? `Checks (${failedChecks})` : 'Checks', content: checks && (
+            <div className="card">
+              <h3>Reconciliation and data checks</h3>
+              <p className="hint">
+                The latest certificate upload against SAP's own grand-total row. SAP repeats a certificate line
+                once per WBS element it is charged to; those repeats are counted once and shown here, so
+                footer − repeats − lines should be zero. If the file had no grand-total row the check reads
+                "not checked", never "ok".
+              </p>
+              <DataTable result={checks} flagColumn="needs_attention" flagLabel="Needs attention." />
+            </div>
           ),
         },
         {

@@ -65,6 +65,30 @@ export interface SystemQuery {
 
 const P_PROJECT: QueryParamDef = { name: 'project_key', type: 'project', label: 'Project', required: true };
 
+/**
+ * A service's unit, in the order the standalone subcontract report used: the
+ * ZSCSRV1 PO service UOM for that service code, then a code suffix after "-"
+ * ("S0302-M3"), then a unit named in the Arabic service text.
+ */
+const SC_UNIT_SQL = (code: string, text: string, poUom: string) => `COALESCE(
+    ${poUom},
+    CASE WHEN INSTR(${code}, '-') > 0 THEN SUBSTR(${code}, INSTR(${code}, '-') + 1) END,
+    CASE
+      WHEN ${text} LIKE '%م3%' THEN 'M3'
+      WHEN ${text} LIKE '%م2%' THEN 'M2'
+      WHEN ${text} LIKE '%يومية%' THEN 'DAY'
+      WHEN ${text} LIKE '%ساعة%' OR ${text} LIKE '%ساعه%' THEN 'H'
+      WHEN ${text} LIKE '%شهر%' THEN 'MON'
+      WHEN ${text} LIKE '%بالعدد%' THEN 'EA'
+      WHEN ${text} LIKE '%مقط%' THEN 'LS'
+    END)`;
+
+/** Top 7 trades by total certified value keep their own series; the rest fold into "Other trades". */
+const SC_TRADE_RANK_SQL = `trade_rank AS (
+  SELECT trade, ROW_NUMBER() OVER (ORDER BY SUM(amount_net) DESC, trade) AS rn
+  FROM v_service_line WHERE project_key = :project_key GROUP BY trade
+)`;
+
 export const SYSTEM_QUERIES: SystemQuery[] = [
   {
     code: 'ACT_BY_WBS',
@@ -1811,5 +1835,253 @@ SELECT
 FROM fact_actual f
 JOIN import_batch b ON b.import_batch_id = f.import_batch_id AND b.status = 'POSTED'
 WHERE f.project_key = :project_key`,
+  },
+  // ---------------------------------------------------------------------------
+  // The monthly subcontract cost report (ZSCPROG01 certificates + ZSCSRV1 PO
+  // service lines). Every rule — line class, report qty, trade, bucket — is a
+  // column of v_service_line; these queries only aggregate it.
+  // ---------------------------------------------------------------------------
+  {
+    code: 'SC_REPORT_KPI',
+    name: 'Subcontract report headline',
+    module: 'SERVICE',
+    category: 'Headline',
+    description: 'Certified value split the way the monthly service report splits it: approved since '
+      + 'go-live, opening balance, pending approval, adjustments, VAT — plus subcontractors (with a '
+      + 'non-zero total), POs, lines on another profit centre, and the amount SAP repeated on WBS splits.',
+    params: [P_PROJECT],
+    viz: { kind: 'table' },
+    sql: `
+WITH s AS (SELECT * FROM v_service_line WHERE project_key = :project_key),
+subs AS (SELECT vendor_key FROM s GROUP BY vendor_key HAVING ABS(SUM(amount_net)) > 1e-9)
+SELECT
+  COALESCE(SUM(amount_net), 0)                                                  AS certified_amount,
+  COALESCE(SUM(CASE WHEN bucket NOT IN ('OPENING','PENDING') THEN amount_net END), 0) AS approved_amount,
+  COALESCE(SUM(CASE WHEN bucket = 'OPENING' THEN amount_net END), 0)            AS opening_amount,
+  COALESCE(SUM(CASE WHEN bucket = 'PENDING' THEN amount_net END), 0)            AS pending_amount,
+  COALESCE(SUM(CASE WHEN line_class = 'Adjustment' THEN amount_net END), 0)     AS adjustments_amount,
+  COALESCE(SUM(amount_vat), 0)                                                  AS vat,
+  (SELECT COUNT(*) FROM subs)                                                   AS subcontractors,
+  COUNT(DISTINCT po_no)                                                         AS purchase_orders,
+  COALESCE(SUM(CASE WHEN is_other_pc = 1 THEN amount_net END), 0)               AS other_profit_centre_amount,
+  COALESCE(SUM(amount_net * (split_count - 1)), 0)                              AS repeated_on_wbs_splits_amount
+FROM s`,
+  },
+  {
+    code: 'SC_MONTH_BY_TRADE',
+    name: 'Approved subcontract value per month by trade',
+    module: 'SERVICE',
+    category: 'Trend',
+    description: 'Approved certified value per month, one series per trade — the seven largest trades '
+      + 'by total value, the rest folded into "Other trades". Opening and pending lines are excluded.',
+    params: [P_PROJECT],
+    viz: { kind: 'table' },
+    sql: `
+WITH ${SC_TRADE_RANK_SQL}
+SELECT s.bucket AS period_key,
+       CASE WHEN r.rn <= 7 THEN s.trade_label ELSE 'Other trades' END AS trade,
+       MIN(r.rn, 8) AS series_order,
+       SUM(s.amount_net) AS amount
+FROM v_service_line s JOIN trade_rank r ON r.trade = s.trade
+WHERE s.project_key = :project_key AND s.bucket NOT IN ('OPENING','PENDING')
+GROUP BY s.bucket, 2, 3
+ORDER BY s.bucket, series_order`,
+  },
+  {
+    code: 'SC_TRADE_SUMMARY',
+    name: 'Subcontract value by trade',
+    module: 'SERVICE',
+    category: 'Breakdown',
+    description: 'Per trade: opening balance, approved months, pending approval, total, share, and how '
+      + 'many subcontractors have a non-zero total in it (a subcontractor can work in several trades).',
+    params: [P_PROJECT],
+    viz: { kind: 'bar', label: 'trade', value: 'total_amount' },
+    sql: `
+WITH t AS (
+  SELECT trade, trade_label,
+         COALESCE(SUM(CASE WHEN bucket = 'OPENING' THEN amount_net END), 0) AS opening_amount,
+         COALESCE(SUM(CASE WHEN bucket NOT IN ('OPENING','PENDING') THEN amount_net END), 0) AS approved_amount,
+         COALESCE(SUM(CASE WHEN bucket = 'PENDING' THEN amount_net END), 0) AS pending_amount,
+         SUM(amount_net) AS total_amount
+  FROM v_service_line WHERE project_key = :project_key GROUP BY trade, trade_label
+),
+subs AS (
+  SELECT trade, COUNT(*) AS n FROM (
+    SELECT trade, vendor_key FROM v_service_line WHERE project_key = :project_key
+    GROUP BY trade, vendor_key HAVING ABS(SUM(amount_net)) > 1e-9)
+  GROUP BY trade
+)
+SELECT t.trade_label AS trade, t.opening_amount, t.approved_amount, t.pending_amount, t.total_amount,
+       ROUND(100.0 * t.total_amount / NULLIF(SUM(t.total_amount) OVER (), 0), 1) AS pct_of_total,
+       COALESCE(subs.n, 0) AS subcontractors
+FROM t LEFT JOIN subs ON subs.trade = t.trade
+ORDER BY t.total_amount DESC`,
+  },
+  {
+    code: 'SC_ACTIVE_SUBS_BY_MONTH',
+    name: 'Active subcontractors per month',
+    module: 'SERVICE',
+    category: 'Trend',
+    description: 'How many subcontractors have a non-zero approved amount in each month.',
+    params: [P_PROJECT],
+    viz: { kind: 'table' },
+    sql: `
+SELECT period_key, COUNT(*) AS active_subcontractors FROM (
+  SELECT bucket AS period_key, vendor_key FROM v_service_line
+  WHERE project_key = :project_key AND bucket NOT IN ('OPENING','PENDING')
+  GROUP BY bucket, vendor_key HAVING ABS(SUM(amount_net)) > 1e-9)
+GROUP BY period_key ORDER BY period_key`,
+  },
+  {
+    code: 'SC_TOP_SERVICES',
+    name: 'Top subcontract services',
+    module: 'SERVICE',
+    category: 'Breakdown',
+    description: 'The 15 services (code + text) with the largest certified value. Qty and average rate '
+      + 'come from Normal lines only, at report qty (a line whose amount is not qty × rate counts at '
+      + 'its equivalent qty); the amount includes adjustments.',
+    params: [P_PROJECT],
+    viz: { kind: 'bar', label: 'service_text', value: 'amount' },
+    sql: `
+WITH s AS (
+  SELECT service_code, service_text, trade_label,
+         SUM(amount_net) AS amount,
+         SUM(CASE WHEN line_class = 'Normal' THEN report_qty ELSE 0 END) AS qty,
+         SUM(CASE WHEN line_class = 'Normal' THEN amount_net ELSE 0 END) AS normal_amount
+  FROM v_service_line WHERE project_key = :project_key
+  GROUP BY service_code, service_text, trade_label
+),
+u AS (SELECT service_code, MAX(uom) AS uom FROM v_po_service_line
+      WHERE project_key = :project_key AND uom IS NOT NULL AND uom <> '' GROUP BY service_code)
+SELECT s.service_code, s.service_text,
+       ${SC_UNIT_SQL('s.service_code', 's.service_text', 'u.uom')} AS unit,
+       s.trade_label AS trade, s.qty,
+       CASE WHEN s.qty <> 0 THEN s.normal_amount / s.qty END AS avg_rate,
+       s.amount,
+       ROUND(100.0 * s.amount / NULLIF((SELECT SUM(amount_net) FROM v_service_line
+                                        WHERE project_key = :project_key), 0), 1) AS pct_of_total
+FROM s LEFT JOIN u ON u.service_code = s.service_code
+ORDER BY s.amount DESC
+LIMIT 15`,
+  },
+  {
+    code: 'SC_QTY_RECONCILIATION',
+    name: 'PO service line quantity reconciliation',
+    module: 'SERVICE',
+    category: 'Reconciliation',
+    description: 'Per ZSCSRV1 PO service line: contract qty and value, qty received and accepted, and the '
+      + 'qty certified against it (certificate lines matched to that PO line, qty-only lines shown '
+      + 'separately). The difference is received − certified; when it equals the qty-only lines it is '
+      + 'explained by them.',
+    params: [P_PROJECT],
+    viz: { kind: 'table' },
+    sql: `
+WITH m AS (
+  SELECT m.po_service_line_id,
+         SUM(CASE WHEN s.line_class <> 'Qty only' THEN COALESCE(s.quantity_current, 0) ELSE 0 END) AS certified_qty,
+         SUM(CASE WHEN s.line_class = 'Qty only' THEN COALESCE(s.quantity_current, 0) ELSE 0 END) AS excluded_qty,
+         SUM(s.amount_net) AS certified_amount
+  FROM v_service_line_po_match m
+  JOIN v_service_line s ON s.service_line_id = m.service_line_id
+  WHERE s.project_key = :project_key AND m.po_service_line_id IS NOT NULL
+  GROUP BY m.po_service_line_id
+),
+r AS (
+  SELECT p.po_line_ref, p.po_no, p.po_item, p.po_line_no, p.vendor_name, p.service_code, p.service_text,
+         p.uom, p.contract_qty, p.contract_price AS contract_value, p.qty_received, p.qty_accepted,
+         COALESCE(m.certified_qty, 0) AS certified_qty, COALESCE(m.excluded_qty, 0) AS excluded_qty,
+         ROUND(COALESCE(p.qty_received, 0) - COALESCE(m.certified_qty, 0), 3) AS difference,
+         COALESCE(m.certified_amount, 0) AS certified_amount,
+         CASE WHEN COALESCE(p.contract_qty, 0) <> 0
+              THEN ROUND(100.0 * COALESCE(p.qty_received, 0) / p.contract_qty, 1) END AS pct_received
+  FROM v_po_service_line p LEFT JOIN m ON m.po_service_line_id = p.po_service_line_id
+  WHERE p.project_key = :project_key
+)
+SELECT po_line_ref, po_no, po_item, po_line_no, vendor_name, service_code, service_text, uom,
+       contract_qty, contract_value, qty_received, qty_accepted, certified_qty, excluded_qty, difference,
+       CASE WHEN ABS(difference) < 0.001 THEN ''
+            WHEN ABS(difference - excluded_qty) < 0.001 THEN 'Excluded lines'
+            ELSE 'Not certified' END AS explained,
+       certified_amount, pct_received,
+       CASE WHEN ABS(difference) >= 0.001 AND ABS(difference - excluded_qty) >= 0.001 THEN 1 ELSE 0 END AS unexplained
+FROM r
+ORDER BY po_no, CAST(po_item AS INTEGER), CAST(po_line_no AS INTEGER)`,
+  },
+  {
+    code: 'SC_CHECKS',
+    name: 'Subcontract report checks',
+    module: 'SERVICE',
+    category: 'Reconciliation',
+    description: 'The latest certificate upload against its own SAP grand-total footer (less the amount '
+      + 'SAP repeated on WBS splits), plus counts of the line types the report treats specially and '
+      + 'certificate lines with no matching PO service line. A missing footer reads "not checked", '
+      + 'never as a match.',
+    params: [P_PROJECT],
+    viz: { kind: 'table' },
+    sql: `
+WITH lb AS (
+  SELECT MAX(s.import_batch_id) AS id FROM service_line_snapshot s
+  JOIN import_batch b ON b.import_batch_id = s.import_batch_id AND b.status = 'POSTED'
+  WHERE s.project_key = :project_key
+),
+snap AS (SELECT * FROM service_line_snapshot WHERE project_key = :project_key AND import_batch_id = (SELECT id FROM lb)),
+f AS (SELECT
+  (SELECT control_total FROM import_batch WHERE import_batch_id = (SELECT id FROM lb)) AS footer,
+  (SELECT COALESCE(SUM(amount_net * (split_count - 1)), 0) FROM snap) AS split_amt,
+  (SELECT COALESCE(SUM(split_count - 1), 0) FROM snap) AS split_rows,
+  (SELECT COALESCE(SUM(amount_net), 0) FROM snap) AS file_total,
+  (SELECT COUNT(*) FROM snap) AS file_lines),
+v AS (SELECT COALESCE(SUM(amount_net), 0) AS total, COUNT(*) AS lines,
+             COALESCE(SUM(line_class = 'Adjustment'), 0) AS adj,
+             COALESCE(SUM(line_class = 'Qty only'), 0) AS qo,
+             COALESCE(SUM(is_equiv_qty), 0) AS eq,
+             COALESCE(SUM(is_other_pc), 0) AS other_pc
+      FROM v_service_line WHERE project_key = :project_key),
+mt AS (SELECT COUNT(*) AS unmatched FROM v_service_line_po_match
+       WHERE project_key = :project_key AND match_level = 'Not found'),
+pl AS (SELECT COUNT(*) AS n FROM v_po_service_line WHERE project_key = :project_key),
+nu AS (
+  SELECT COUNT(*) AS n FROM (
+    SELECT s.service_code, s.service_text,
+           ${SC_UNIT_SQL('s.service_code', 's.service_text', 'u.uom')} AS unit
+    FROM (SELECT DISTINCT service_code, service_text FROM v_service_line WHERE project_key = :project_key) s
+    LEFT JOIN (SELECT service_code, MAX(uom) AS uom FROM v_po_service_line
+               WHERE project_key = :project_key AND uom IS NOT NULL AND uom <> '' GROUP BY service_code) u
+      ON u.service_code = s.service_code)
+  WHERE unit IS NULL
+),
+c AS (
+  SELECT 1 AS sort, 'SAP grand total (file footer)' AS check_name, f.footer AS value,
+         CASE WHEN f.footer IS NULL THEN 'The latest upload has no grand-total row to check against' ELSE '' END AS detail,
+         CASE WHEN f.footer IS NULL THEN 'not checked' ELSE 'info' END AS status FROM f
+  UNION ALL SELECT 2, 'Repeated on WBS splits (counted once)', -f.split_amt,
+         f.split_rows || ' repeated row(s) skipped', 'info' FROM f
+  UNION ALL SELECT 3, 'Lines in the latest upload', f.file_total, f.file_lines || ' line(s)', 'info' FROM f
+  UNION ALL SELECT 4, 'Difference: footer − splits − lines',
+         CASE WHEN f.footer IS NOT NULL THEN f.footer - f.split_amt - f.file_total END,
+         CASE WHEN f.footer IS NULL THEN 'No footer in the file'
+              WHEN ABS(f.footer - f.split_amt - f.file_total) < 0.01 THEN 'The loaded lines reproduce SAP''s own total'
+              ELSE 'The loaded lines do not reproduce SAP''s own total' END,
+         CASE WHEN f.footer IS NULL THEN 'not checked'
+              WHEN ABS(f.footer - f.split_amt - f.file_total) < 0.01 THEN 'ok' ELSE 'mismatch' END FROM f
+  UNION ALL SELECT 5, 'Report total (every loaded line)', v.total,
+         CASE WHEN ABS(v.total - f.file_total) > 0.01
+              THEN 'Differs from the latest upload — some lines were only in an earlier upload'
+              ELSE 'Same as the latest upload' END,
+         CASE WHEN ABS(v.total - f.file_total) > 0.01 THEN 'warn' ELSE 'ok' END FROM v, f
+  UNION ALL SELECT 6, 'Adjustment lines (amount, no qty)', v.adj, 'Reported on their own rows, qty 0', 'info' FROM v
+  UNION ALL SELECT 7, 'Qty-only lines (qty, no amount)', v.qo, 'Excluded from report qty', 'info' FROM v
+  UNION ALL SELECT 8, 'Lines at equivalent qty', v.eq, 'Amount is not qty × rate; qty = amount ÷ net rate', 'info' FROM v
+  UNION ALL SELECT 9, 'Lines on another profit centre', v.other_pc, 'Kept in the report, flagged', 'info' FROM v
+  UNION ALL SELECT 10, 'Certificate lines with no PO service line', mt.unmatched,
+         CASE WHEN pl.n = 0 THEN 'No ZSCSRV1 (PO service lines) loaded for this project' ELSE '' END,
+         CASE WHEN pl.n = 0 THEN 'not checked' WHEN mt.unmatched > 0 THEN 'warn' ELSE 'ok' END FROM mt, pl
+  UNION ALL SELECT 11, 'Services with no unit', nu.n,
+         'No PO service UOM, code suffix or unit word in the text',
+         CASE WHEN nu.n > 0 THEN 'warn' ELSE 'ok' END FROM nu
+)
+SELECT check_name AS "check", value, detail, status,
+       CASE WHEN status IN ('mismatch','warn') THEN 1 ELSE 0 END AS needs_attention
+FROM c ORDER BY sort`,
   },
 ];

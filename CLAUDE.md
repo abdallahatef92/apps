@@ -244,6 +244,15 @@ the reconciliation. The files are not in the repo, so this is a manual check.
   "changes since last load" diffs two snapshots. 'Profit Ctr' no longer maps to the
   project on a SERVICE upload (the project comes from the wizard); 'Tx' is the tax code,
   and caption matching keeps non-Latin letters so 'نوع العقد' maps to `contract_type`.
+  Subcontractor Analysis reads it through the `SC_*` stored queries: `SC_REPORT_KPI`
+  (the strip above the tabs), `SC_MONTH_BY_TRADE` (top seven trades plus 'Other trades',
+  `series_order` fixing each trade's colour slot), `SC_TRADE_SUMMARY`,
+  `SC_ACTIVE_SUBS_BY_MONTH`, `SC_TOP_SERVICES`, `SC_QTY_RECONCILIATION` and `SC_CHECKS`.
+  A service's unit is one SQL fragment (`SC_UNIT_SQL`: PO UOM, then the code suffix, then
+  Arabic unit words in the text), shared by the queries that need it. A check with
+  nothing to compare against — no footer in the file — reads 'not checked', never 'ok'.
+  `scripts/dump-queries.mjs` evaluates `systemQueries.ts` through esbuild, so a query
+  assembled from such fragments is checked by `db:check` fully expanded.
 - **Accrual is a manual estimate, but it still goes through staging.** `ACCRUAL` is a
   module like any other — `fact_accrual` / `v_accrual`, staged and posted via the normal
   upload wizard — for cost incurred but not yet posted in SAP (e.g. "ADD/OMM",
@@ -378,7 +387,7 @@ Two established page shapes — reuse one rather than inventing a third:
 columns and a shared filter bar) — copy its patterns only when the data is genuinely
 tree-shaped; a flat KPI+chart+table screen belongs in the assembled-dashboard shape above.
 
-Chart components (`src/renderer/src/charts/`: `BarChart`, `Treemap`, `LineChart`,
+Chart components (`src/renderer/src/charts/`: `BarChart`, `StackedColumnChart`, `Treemap`, `LineChart`,
 `Heatmap`, `Sparkline`) and `<DataTable>` all take a `QueryResult` plus column names, never
 a plain array — this is what keeps "aggregation belongs in SQL" true on the frontend too.
 `DataTable` already has free-text filtering, click-to-sort, a `signColumns` prop (red/green
