@@ -14,7 +14,8 @@ import type { QueryResult } from '@shared/types';
  * The subcontract picture for one project, assembled from stored queries:
  * the monthly service report's own views (SC_REPORT_KPI, SC_MONTH_BY_TRADE,
  * SC_TRADE_SUMMARY, SC_ACTIVE_SUBS_BY_MONTH, SC_TOP_SERVICES,
- * SC_QTY_RECONCILIATION, SC_CHECKS — the standalone ZSCPROG01 + ZSCSRV1
+ * SC_QTY_RECONCILIATION, SC_CHECKS, SC_LOAD_HISTORY, SC_CHANGES_SUMMARY,
+ * SC_CHANGES — the standalone ZSCPROG01 + ZSCSRV1
  * report, brought in) alongside the reconciliation against actual cost
  * (SC_BY_SUPPLIER, SC_BY_CATEGORY, SC_MONTHLY_TREND, SC_RECONCILIATION_STATUS,
  * SC_PO_RECONCILIATION, SC_INVOICE_RECONCILIATION). Every number is a stored
@@ -35,6 +36,9 @@ export function SubcontractorAnalysis() {
   const [topServices, setTopServices] = useState<QueryResult | null>(null);
   const [qtyRecon, setQtyRecon] = useState<QueryResult | null>(null);
   const [checks, setChecks] = useState<QueryResult | null>(null);
+  const [history, setHistory] = useState<QueryResult | null>(null);
+  const [changeSummary, setChangeSummary] = useState<QueryResult | null>(null);
+  const [changes, setChanges] = useState<QueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [savedTo, setSavedTo] = useState<string | null>(null);
@@ -47,7 +51,7 @@ export function SubcontractorAnalysis() {
           setKpi(null); setByVendor(null); setByCategory(null);
           setTrend(null); setStatus(null); setReconciliation(null); setInvoices(null);
           setByMonthTrade(null); setByTrade(null); setActiveSubs(null); setTopServices(null);
-          setQtyRecon(null); setChecks(null);
+          setQtyRecon(null); setChecks(null); setHistory(null); setChangeSummary(null); setChanges(null);
           return;
         }
         const p = { project_key: projectKey };
@@ -58,6 +62,9 @@ export function SubcontractorAnalysis() {
         setTopServices(await call(api.queries.run('SC_TOP_SERVICES', p)));
         setQtyRecon(await call(api.queries.run('SC_QTY_RECONCILIATION', p)));
         setChecks(await call(api.queries.run('SC_CHECKS', p)));
+        setHistory(await call(api.queries.run('SC_LOAD_HISTORY', p)));
+        setChangeSummary(await call(api.queries.run('SC_CHANGES_SUMMARY', p)));
+        setChanges(await call(api.queries.run('SC_CHANGES', p)));
         setByVendor(await call(api.queries.run('SC_BY_SUPPLIER', p)));
         setByCategory(await call(api.queries.run('SC_BY_CATEGORY', p)));
         setTrend(await call(api.queries.run('SC_MONTHLY_TREND', p)));
@@ -81,6 +88,12 @@ export function SubcontractorAnalysis() {
 
   // Count of checks needing attention — computed in SQL (needs_attention), only counted here.
   const failedChecks = checks ? checks.rows.filter((r) => Number(r.needs_attention) === 1).length : 0;
+
+  // How many certificate loads there are to compare — a SQL count, only read here.
+  const loads = Number(changeSummary?.rows[0]?.loads ?? 0);
+  const changeTiles = changeSummary
+    ? { ...changeSummary, columns: changeSummary.columns.filter((c) => c !== 'loads') }
+    : null;
 
   const exportTable = (result: QueryResult | null, title: string, subtitle: string) => async () => {
     if (!result) return;
@@ -211,6 +224,57 @@ export function SubcontractorAnalysis() {
                   <h3>Reconciliation status</h3>
                   <p className="hint">How many purchase orders fall into each status, by count.</p>
                   <BarChart result={status} labelColumn="status" valueColumn="pos" />
+                </div>
+              )}
+            </>
+          ),
+        },
+        {
+          id: 'changes', label: changes && changes.rowCount ? `Changes (${changes.rowCount})` : 'Changes', content: (
+            <>
+              {loads < 2 ? (
+                <div className="banner info">
+                  {loads === 0
+                    ? 'No certificate upload (ZSCPROG01) is loaded for this project yet.'
+                    : 'This is the first certificate upload for this project — the next one will be compared against it.'}
+                </div>
+              ) : (
+                <>
+                  {changeTiles && <KpiStrip headline={changeTiles} currency={project?.currency_code ?? ''} />}
+                  {changes && (
+                    <div className="card">
+                      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                        <div>
+                          <h3>Changes since the previous load</h3>
+                          <p className="hint">
+                            Certificate lines that are new, changed amount, became approved or disappeared between
+                            the two latest uploads. A newly approved line counts at its full amount, the same as
+                            the monthly workbook.
+                          </p>
+                        </div>
+                        <button className="btn sm" disabled={busy || !changes.rowCount}
+                                onClick={exportTable(changes, 'Changes since last load',
+                                  'Certificate lines changed between the two latest uploads.')}>
+                          ⤓ Excel
+                        </button>
+                      </div>
+                      <DataTable result={changes} signColumns={['difference']} />
+                    </div>
+                  )}
+                </>
+              )}
+              {history && history.rowCount > 0 && (
+                <div className="card">
+                  <h3>Load history</h3>
+                  <p className="hint">Each certificate upload for this project, as it was posted.</p>
+                  {history.rowCount > 1 && (
+                    <LineChart result={history} xColumn="data_date" height={220} series={[
+                      { column: 'total_amount', label: 'Total certified' },
+                      { column: 'approved_amount', label: 'Approved' },
+                      { column: 'pending_amount', label: 'Pending' },
+                    ]} />
+                  )}
+                  <DataTable result={history} />
                 </div>
               )}
             </>

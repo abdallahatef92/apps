@@ -472,6 +472,42 @@ async function subcontractReport(dir: string): Promise<void> {
   check('footer − splits − lines reconciles', diff?.status === 'ok', `${diff?.status} ${diff?.value}`);
   check('unmatched certificate line flagged',
     checks.find((r) => String(r.check).startsWith('Certificate lines with no'))?.value === 1);
+
+  // ---- changes since last load -------------------------------------------
+  const first = runStoredQuery('SC_CHANGES_SUMMARY', P).rows[0] as any;
+  check('one load: nothing to compare yet', first.loads === 1 && runStoredQuery('SC_CHANGES', P).rowCount === 0,
+    `${first.loads} loads`);
+
+  const cert2Path = join(dir, 'zscprog01_m2.xlsx');
+  await makeCertificateFile(cert2Path, true);
+  const cert2 = await load(cert2Path, 'SERVICE', 7, '2026-03-31', null, projectKey);
+  check('second month merges on line identity', cert2.posted.byLineKey === true);
+
+  const summary = runStoredQuery('SC_CHANGES_SUMMARY', P).rows[0] as any;
+  check('two loads compared', summary.loads === 2, String(summary.loads));
+  check('one new line', summary.new_lines === 1, String(summary.new_lines));
+  near('new line amount', summary.new_amount, 20_000);
+  check('one changed line', summary.changed_lines === 1, String(summary.changed_lines));
+  near('changed amount is the movement', summary.changed_amount, 1_000);
+  check('one newly approved line', summary.newly_approved_lines === 1, String(summary.newly_approved_lines));
+  near('newly approved counts at its full amount', summary.newly_approved_amount, 30_000);
+  check('one removed line', summary.removed_lines === 1, String(summary.removed_lines));
+  near('removed amount', summary.removed_amount, -5_000);
+
+  const changes = runStoredQuery('SC_CHANGES', P).rows as any[];
+  const changed = changes.find((r) => r.change_type === 'Amount changed');
+  check('changed line carries before and now', changed?.before === 10_000 && changed?.now === 11_000,
+    `${changed?.before} → ${changed?.now}`);
+  check('removed line is the other-profit-centre one',
+    changes.find((r) => r.change_type === 'Removed')?.service_code === 'L01');
+
+  const hist = runStoredQuery('SC_LOAD_HISTORY', P).rows as any[];
+  check('load history has both uploads in order',
+    hist.length === 2 && hist[0].data_date === '2026-02-28' && hist[1].data_date === '2026-03-31',
+    hist.map((h) => h.data_date).join(','));
+  near('first load total', hist[0].total_amount, CERT_TOTALS.month1.total);
+  near('second load total', hist[1].total_amount, 181_000);
+  near('second load pending cleared', hist[1].pending_amount, 0);
 }
 
 async function main(): Promise<void> {

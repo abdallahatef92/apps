@@ -253,6 +253,13 @@ the reconciliation. The files are not in the repo, so this is a manual check.
   nothing to compare against — no footer in the file — reads 'not checked', never 'ok'.
   `scripts/dump-queries.mjs` evaluates `systemQueries.ts` through esbuild, so a query
   assembled from such fragments is checked by `db:check` fully expanded.
+  The Changes tab reads `service_line_snapshot` only (`SC_LOAD_HISTORY`,
+  `SC_CHANGES_SUMMARY`, `SC_CHANGES`, one shared `SC_CHANGES_SQL` fragment): the two
+  newest loads per project by `import_batch_id`, compared on `line_uid` as New / Amount
+  changed / Approved since last load (counted at its full amount, the workbook's rule) /
+  Removed. A line missing from the newer file is reported as Removed but stays in
+  `fact_service_line` — posting merges by line identity and never deletes, so the Checks
+  tab's "report total vs latest upload" row is what shows the gap.
 - **Accrual is a manual estimate, but it still goes through staging.** `ACCRUAL` is a
   module like any other — `fact_accrual` / `v_accrual`, staged and posted via the normal
   upload wizard — for cost incurred but not yet posted in SAP (e.g. "ADD/OMM",

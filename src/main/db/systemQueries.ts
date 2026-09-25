@@ -89,6 +89,47 @@ const SC_TRADE_RANK_SQL = `trade_rank AS (
   FROM v_service_line WHERE project_key = :project_key GROUP BY trade
 )`;
 
+/**
+ * Each certificate upload's lines as posted (service_line_snapshot), numbered
+ * newest first per project, and the latest two compared line by line. A
+ * newly approved line counts at its full amount, not its movement — the same
+ * rule the monthly workbook uses. With only one load there is nothing to
+ * compare, so no rows come out.
+ */
+const SC_CHANGES_SQL = `loads AS (
+  SELECT s.import_batch_id, ROW_NUMBER() OVER (ORDER BY s.import_batch_id DESC) AS rn
+  FROM service_line_snapshot s
+  JOIN import_batch b ON b.import_batch_id = s.import_batch_id AND b.status IN ('POSTED','SUPERSEDED')
+  WHERE s.project_key = :project_key
+  GROUP BY s.import_batch_id
+),
+cur AS (SELECT s.* FROM service_line_snapshot s JOIN loads l ON l.import_batch_id = s.import_batch_id
+        WHERE l.rn = 1 AND s.project_key = :project_key),
+prev AS (SELECT s.* FROM service_line_snapshot s JOIN loads l ON l.import_batch_id = s.import_batch_id
+         WHERE l.rn = 2 AND s.project_key = :project_key),
+changes AS (
+  SELECT * FROM (
+    SELECT CASE
+             WHEN p.line_uid IS NULL THEN 'New'
+             WHEN COALESCE(p.is_approved, 1) = 0 AND COALESCE(c.is_approved, 1) = 1 THEN 'Approved since last load'
+             WHEN ABS(c.amount_net - p.amount_net) > 0.005 THEN 'Amount changed'
+           END AS change_type,
+           c.po_no, c.vendor_name, c.service_code, c.service_text,
+           p.amount_net AS before, c.amount_net AS now,
+           CASE
+             WHEN p.line_uid IS NULL THEN c.amount_net
+             WHEN COALESCE(p.is_approved, 1) = 0 AND COALESCE(c.is_approved, 1) = 1 THEN c.amount_net
+             ELSE c.amount_net - p.amount_net
+           END AS difference
+    FROM cur c LEFT JOIN prev p ON p.line_uid = c.line_uid
+    WHERE EXISTS (SELECT 1 FROM prev)
+    UNION ALL
+    SELECT 'Removed', p.po_no, p.vendor_name, p.service_code, p.service_text,
+           p.amount_net, NULL, -p.amount_net
+    FROM prev p WHERE NOT EXISTS (SELECT 1 FROM cur c WHERE c.line_uid = p.line_uid)
+  ) WHERE change_type IS NOT NULL
+)`;
+
 export const SYSTEM_QUERIES: SystemQuery[] = [
   {
     code: 'ACT_BY_WBS',
@@ -2083,5 +2124,76 @@ c AS (
 SELECT check_name AS "check", value, detail, status,
        CASE WHEN status IN ('mismatch','warn') THEN 1 ELSE 0 END AS needs_attention
 FROM c ORDER BY sort`,
+  },
+{
+    code: 'SC_LOAD_HISTORY',
+    name: 'Subcontract certificate load history',
+    module: 'SERVICE',
+    category: 'Trend',
+    description: 'One row per certificate upload for the project, as it was posted: lines, total, and '
+      + 'the approved / opening / pending split, subcontractors and POs.',
+    params: [P_PROJECT],
+    viz: { kind: 'table' },
+    sql: `
+WITH per_vendor AS (
+  SELECT s.import_batch_id, s.vendor_name, SUM(s.amount_net) AS amount
+  FROM service_line_snapshot s WHERE s.project_key = :project_key
+  GROUP BY s.import_batch_id, s.vendor_name
+)
+SELECT b.data_date, b.file_name,
+       COUNT(*)                                                                    AS lines,
+       SUM(s.amount_net)                                                           AS total_amount,
+       SUM(CASE WHEN COALESCE(s.is_approved, 1) = 1 AND COALESCE(s.is_opening, 0) = 0
+                THEN s.amount_net ELSE 0 END)                                      AS approved_amount,
+       SUM(CASE WHEN COALESCE(s.is_approved, 1) = 1 AND s.is_opening = 1
+                THEN s.amount_net ELSE 0 END)                                      AS opening_amount,
+       SUM(CASE WHEN s.is_approved = 0 THEN s.amount_net ELSE 0 END)               AS pending_amount,
+       (SELECT COUNT(*) FROM per_vendor v
+         WHERE v.import_batch_id = s.import_batch_id AND ABS(v.amount) > 1e-9)     AS subcontractors,
+       COUNT(DISTINCT s.po_no)                                                     AS purchase_orders
+FROM service_line_snapshot s
+JOIN import_batch b ON b.import_batch_id = s.import_batch_id AND b.status IN ('POSTED','SUPERSEDED')
+WHERE s.project_key = :project_key
+GROUP BY s.import_batch_id
+ORDER BY s.import_batch_id`,
+  },
+  {
+    code: 'SC_CHANGES_SUMMARY',
+    name: 'Subcontract changes since last load (headline)',
+    module: 'SERVICE',
+    category: 'Headline',
+    description: 'Count and amount of each kind of change between the two latest certificate uploads.',
+    params: [P_PROJECT],
+    viz: { kind: 'table' },
+    sql: `
+WITH ${SC_CHANGES_SQL}
+SELECT
+  (SELECT COUNT(*) FROM loads)                                                      AS loads,
+  COALESCE(SUM(change_type = 'New'), 0)                                             AS new_lines,
+  COALESCE(SUM(CASE WHEN change_type = 'New' THEN difference END), 0)               AS new_amount,
+  COALESCE(SUM(change_type = 'Amount changed'), 0)                                  AS changed_lines,
+  COALESCE(SUM(CASE WHEN change_type = 'Amount changed' THEN difference END), 0)    AS changed_amount,
+  COALESCE(SUM(change_type = 'Approved since last load'), 0)                        AS newly_approved_lines,
+  COALESCE(SUM(CASE WHEN change_type = 'Approved since last load' THEN difference END), 0) AS newly_approved_amount,
+  COALESCE(SUM(change_type = 'Removed'), 0)                                         AS removed_lines,
+  COALESCE(SUM(CASE WHEN change_type = 'Removed' THEN difference END), 0)           AS removed_amount
+FROM changes`,
+  },
+  {
+    code: 'SC_CHANGES',
+    name: 'Subcontract changes since last load',
+    module: 'SERVICE',
+    category: 'Reconciliation',
+    description: 'Certificate lines that are new, changed amount, became approved or disappeared between '
+      + 'the two latest uploads. A newly approved line counts at its full amount.',
+    params: [P_PROJECT],
+    viz: { kind: 'table' },
+    sql: `
+WITH ${SC_CHANGES_SQL}
+SELECT change_type, po_no, vendor_name, service_code, service_text, before, now, difference
+FROM changes
+ORDER BY CASE change_type WHEN 'New' THEN 1 WHEN 'Approved since last load' THEN 2
+                          WHEN 'Amount changed' THEN 3 ELSE 4 END,
+         ABS(difference) DESC`,
   },
 ];
