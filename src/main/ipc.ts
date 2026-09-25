@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { closeDatabase, currentDbPath, defaultDbPath, getDb, openDatabase } from './db';
 import { runSelect, runStoredQuery } from './services/queryRunner';
 import { exportCostTypeMapping, exportResult } from './services/exportExcel';
+import { buildSubcontractReport } from './services/subcontractReport';
 import { buildPivotSql, pivotMeta, type PivotRequest } from './services/pivot';
 import { buildLineage } from './services/lineage';
 import { readWorkbook } from './ingest/workbook';
@@ -681,6 +682,19 @@ export function registerIpc(): void {
     });
     if (res.canceled || !res.filePath) return null;
     await exportResult(res.filePath, result, meta);
+    return res.filePath;
+  });
+
+  /** The monthly Subcontract Cost Report workbook (formulas + charts) for one project. */
+  handle('sc:exportReport', async (projectKey: number): Promise<string | null> => {
+    const report = await buildSubcontractReport(projectKey);
+    const res = await dialog.showSaveDialog({
+      title: 'Export subcontract cost report',
+      defaultPath: join(app.getPath('documents'), report.fileName),
+      filters: [{ name: 'Excel workbook', extensions: ['xlsx'] }],
+    });
+    if (res.canceled || !res.filePath) return null;
+    writeFileSync(res.filePath, report.buffer);
     return res.filePath;
   });
 

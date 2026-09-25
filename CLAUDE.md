@@ -260,6 +260,20 @@ the reconciliation. The files are not in the repo, so this is a manual check.
   Removed. A line missing from the newer file is reported as Removed but stays in
   `fact_service_line` — posting merges by line identity and never deletes, so the Checks
   tab's "report total vs latest upload" row is what shows the gap.
+  **⤓ Excel report** (`sc:exportReport` → `src/main/services/subcontractReport.ts`) writes
+  the standalone tool's monthly workbook: Dashboard, Service Monthly, Service Coding,
+  Changes, Detail, PO Register, By Supplier, Subcontractor x Trade, Subcontractors over
+  time, Qty Reconciliation, Coding and Notes, with live formulas and native charts.
+  `subcontractWorkbook.ts` is that tool's `buildWorkbook`/`injectCharts` ported nearly
+  verbatim (`// @ts-nocheck` on purpose — keep it a port, don't rewrite its formulas);
+  `subcontractReport.ts` is the typed adapter that feeds it rows from `v_service_line`,
+  `v_service_line_po_match`, `v_po_service_line`, `SC_LOAD_HISTORY` and `SC_CHANGES`, so
+  the workbook and the page read the same rules. The Service Coding sheet's CSI column is
+  the app's work package (`service_work_package`); MNL and Cost Element Code are left blank
+  for the user to fill, since the app does not keep them. The tool's hidden `_History` /
+  `_Lines` sheets are dropped because the database holds the history. The Notes
+  reconciliation block stays on row 32 because the Dashboard's FINAL CONTROL cell points
+  at it. Charts are injected into the ExcelJS output with `jszip`, a direct dependency.
 - **Accrual is a manual estimate, but it still goes through staging.** `ACCRUAL` is a
   module like any other — `fact_accrual` / `v_accrual`, staged and posted via the normal
   upload wizard — for cost incurred but not yet posted in SAP (e.g. "ADD/OMM",

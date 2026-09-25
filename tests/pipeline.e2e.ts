@@ -14,6 +14,10 @@ import { suggestMapping } from '../src/main/ingest/targetFields';
 import { postBatch, stageFile } from '../src/main/ingest/importer';
 import { runStoredQuery } from '../src/main/services/queryRunner';
 import { exportResult } from '../src/main/services/exportExcel';
+import { buildSubcontractReport } from '../src/main/services/subcontractReport';
+import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
+import { writeFileSync } from 'node:fs';
 import {
   CERT_TOTALS, makeActualsFile, makeBudgetFile, makeCertificateFile, makeCji3File, makePoServiceFile,
   makeSubcontractorFile, makeWbsTreeFile,
@@ -508,6 +512,35 @@ async function subcontractReport(dir: string): Promise<void> {
   near('first load total', hist[0].total_amount, CERT_TOTALS.month1.total);
   near('second load total', hist[1].total_amount, 181_000);
   near('second load pending cleared', hist[1].pending_amount, 0);
+
+  // ---- the monthly workbook ---------------------------------------------
+  const report = await buildSubcontractReport(projectKey);
+  check('workbook named after project and data date', report.fileName === 'P-200_service_report_2026-03-31.xlsx', report.fileName);
+  const wbPath = join(dir, report.fileName);
+  writeFileSync(wbPath, report.buffer);
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.readFile(wbPath);
+  const names = wb.worksheets.map((w) => w.name).join(',');
+  check('workbook sheets in the report order', names === 'Dashboard,Service Monthly,Service Coding,Changes,Detail,PO Register,'
+    + 'By Supplier,Subcontractor x Trade,Subcontractors over time,Qty Reconciliation,Coding,Notes', names);
+  const detail = wb.getWorksheet('Detail')!;
+  const certLines = Number((db.prepare('SELECT COUNT(*) n FROM v_service_line WHERE project_key = ?').get(projectKey) as any).n);
+  check('Detail has one row per certificate line', detail.actualRowCount - 1 === certLines, `${detail.actualRowCount - 1} vs ${certLines}`);
+  const notes = wb.getWorksheet('Notes')!;
+  near('Notes carries the SAP footer (month 2 file)', Number(notes.getCell('B32').value), 281_000);
+  near('Notes removes the split repeat', Number(notes.getCell('B33').value), -100_000);
+  check('Dashboard final control reads the Notes difference',
+    wb.getWorksheet('Dashboard')!.getSheetValues().some((r: any) => Array.isArray(r) && r.some((c: any) =>
+      c && typeof c === 'object' && String(c.formula ?? '').includes('Notes!B38'))));
+  const csi = wb.getWorksheet('Service Coding')!.getRow(1).values as unknown[];
+  check('Service Coding keeps the CSI column', csi.includes('CSI'));
+  const zip = await JSZip.loadAsync(report.buffer);
+  const charts = Object.keys(zip.files).filter((f) => /^xl\/charts\/chart\d+\.xml$/.test(f)).length;
+  check('native charts injected', charts >= 5, String(charts));
+  const changesSheet = wb.getWorksheet('Changes')!;
+  check('Changes sheet lists the changed lines',
+    changesSheet.getSheetValues().filter((r: any) => Array.isArray(r) && ['New', 'Amount changed', 'Approved since last load', 'Removed']
+      .includes(r[2])).length === 8);
 }
 
 async function main(): Promise<void> {

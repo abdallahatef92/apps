@@ -69,6 +69,9 @@ type Bridge = {
   exportDiagram(req: ExportDiagramRequest): Promise<IpcResult<string | null>>;
   exportResult(result: unknown, meta: unknown): Promise<IpcResult<string | null>>;
   showItem(p: string): Promise<IpcResult<void>>;
+  sc: {
+    exportReport(projectKey: number): Promise<IpcResult<string | null>>;
+  };
 };
 
 declare global {

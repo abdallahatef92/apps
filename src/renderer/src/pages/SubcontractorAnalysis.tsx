@@ -95,6 +95,13 @@ export function SubcontractorAnalysis() {
     ? { ...changeSummary, columns: changeSummary.columns.filter((c) => c !== 'loads') }
     : null;
 
+  const exportReport = async () => {
+    if (!projectKey) return;
+    setBusy(true); setError(null); setSavedTo(null);
+    try { setSavedTo(await call(api.sc.exportReport(projectKey))); }
+    catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
+
   const exportTable = (result: QueryResult | null, title: string, subtitle: string) => async () => {
     if (!result) return;
     setBusy(true); setError(null); setSavedTo(null);
@@ -115,6 +122,14 @@ export function SubcontractorAnalysis() {
         </div>
       )}
 
+      {kpi && (
+        <div className="row" style={{ justifyContent: 'flex-end', marginBottom: 8 }}>
+          <button className="btn sm" disabled={busy || !Number(kpi.rows[0]?.purchase_orders ?? 0)} onClick={exportReport}
+                  title="The monthly Subcontract Cost Report workbook: live formulas and charts, one sheet per view.">
+            ⤓ Excel report
+          </button>
+        </div>
+      )}
       {kpi && <KpiStrip headline={kpi} currency={project?.currency_code ?? ''} />}
 
       {top3Share !== null && (

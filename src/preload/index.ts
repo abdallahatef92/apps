@@ -96,6 +96,9 @@ const api = {
   exportDiagram: (req: ExportDiagramRequest) => invoke<string | null>('export:diagram', req),
   exportResult: (result: unknown, meta: unknown) => invoke<string | null>('export:result', result, meta),
   showItem: (filePath: string) => invoke<void>('shell:showItem', filePath),
+  sc: {
+    exportReport: (projectKey: number) => invoke<string | null>('sc:exportReport', projectKey),
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);

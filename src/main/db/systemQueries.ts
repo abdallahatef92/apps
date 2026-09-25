@@ -70,7 +70,7 @@ const P_PROJECT: QueryParamDef = { name: 'project_key', type: 'project', label: 
  * ZSCSRV1 PO service UOM for that service code, then a code suffix after "-"
  * ("S0302-M3"), then a unit named in the Arabic service text.
  */
-const SC_UNIT_SQL = (code: string, text: string, poUom: string) => `COALESCE(
+export const SC_UNIT_SQL = (code: string, text: string, poUom: string) => `COALESCE(
     ${poUom},
     CASE WHEN INSTR(${code}, '-') > 0 THEN SUBSTR(${code}, INSTR(${code}, '-') + 1) END,
     CASE
@@ -2140,7 +2140,7 @@ WITH per_vendor AS (
   FROM service_line_snapshot s WHERE s.project_key = :project_key
   GROUP BY s.import_batch_id, s.vendor_name
 )
-SELECT b.data_date, b.file_name,
+SELECT b.data_date, b.file_name, b.posted_at,
        COUNT(*)                                                                    AS lines,
        SUM(s.amount_net)                                                           AS total_amount,
        SUM(CASE WHEN COALESCE(s.is_approved, 1) = 1 AND COALESCE(s.is_opening, 0) = 0
