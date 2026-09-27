@@ -148,6 +148,9 @@
     return MVT[m.mvt] || 'OTHER';
   }
   const COST_CLASS = { ISS_P: 'Project consumption', ISS_S: 'Issued to subcontractors (recoverable)', SCRAP: 'Scrap / damages' };
+  // Material Monthly line type: what the issue was for (Service Monthly splits Normal / Adjustment the same way)
+  const LINE_TYPE = { ISS_P: 'Project', ISS_S: 'To subcontractors', SCRAP: 'Scrap' };
+  const LINE_ORDER = { Project: 0, 'To subcontractors': 1, Scrap: 2 };
   const costClassOf = (cls) => COST_CLASS[cls] || (cls ? 'Other movement (' + cls + ')' : 'No MB51 movement');
 
   // -------------------------------------------------------- coding catalogue
@@ -331,6 +334,24 @@
       if (!r.unit) r.unit = r.poUnit;
     }
     const list = [...mats.values()].sort((a, b) => b.cost - a.cost || cmp(a.material, b.material));
+    const loadNo = ((opts.prev && opts.prev.loads && opts.prev.loads.length) ? Math.max(...opts.prev.loads.map((l) => l.no || 0)) : 0) + 1;
+
+    // ---- Material Monthly rows: one per material × line type, like Service Monthly's service × PO line.
+    // Each row keeps a permanent Row ID from load to load (hidden _Rows sheet); new rows take the next free number.
+    const prevRows = (opts.prev && opts.prev.rows) || new Map();
+    const mm = new Map();
+    for (const l of cost) {
+      l.lineType = LINE_TYPE[l.cls] || (l.cls ? 'Other (' + l.cls + ')' : 'No MB51 movement');
+      const key = l.material + '|' + l.lineType, q = l.mov ? l.mqty : l.qty; l.rowKey = key;
+      let o = mm.get(key);
+      if (!o) { o = { key, material: l.material, lineType: l.lineType, amt: 0, qty: 0, byMonth: {}, qtyByMonth: {} }; mm.set(key, o); }
+      o.amt += l.amt; o.qty += q; add(o.byMonth, l.month, l.amt); add(o.qtyByMonth, l.month, q);
+    }
+    let nextId = Math.max(0, ...[...prevRows.values()].map((x) => x.id || 0));
+    const rowIds = new Map(prevRows);                 // rows that went away keep their number, so an ID is never reused
+    for (const key of [...mm.keys()].filter((k) => !prevRows.has(k)).sort()) rowIds.set(key, { id: ++nextId, first: loadNo });
+    for (const o of mm.values()) { const x = rowIds.get(o.key); o.id = x.id; o.first = x.first; o.isNew = !!opts.prev && x.first === loadNo; }
+    const monthlyRows = [...mm.values()];
 
     // ---- totals
     const T = sum(cost, (l) => l.amt);
@@ -371,11 +392,10 @@
       o.n++; o.qty += m.qty; o.amt += m.amt; if (m.costLine) { o.cost += m.costLine.amt; o.costN++; } mvtSum.set(kk, o); }
     const mvtTypes = [...mvtSum.values()].sort((a, b) => cmp(a.mvt, b.mvt) || cmp(a.text, b.text));
 
-    const A = { PLANT, PROJECT, dataDate, months, curMonth, files: opts.files || {}, me: ME, mb: MB, cji: CJ, cost, nonWA, mats, list, k,
+    const A = { PLANT, PROJECT, dataDate, months, curMonth, files: opts.files || {}, me: ME, mb: MB, cji: CJ, cost, nonWA, mats, list, k, monthlyRows, rowIds, loadNo,
       byGroup, byPackage, byClassMonth, mvtTypes, warnings, packages, mnls, prev: opts.prev || null };
     A.checks = runChecks(A);
     A.changes = diffPrevious(A);
-    A.loadNo = ((A.prev && A.prev.loads && A.prev.loads.length) ? Math.max(...A.prev.loads.map((l) => l.no || 0)) : 0) + 1;
     return A;
   }
 
@@ -482,7 +502,7 @@
   // ================================================================== READ PREVIOUS REPORT
   // aoaBySheet: {sheetName: aoa} from the previous workbook (values only)
   function readPrevious(aoaBySheet) {
-    const P = { coding: new Map(), loads: [], snap: new Map(), poKeys: new Set(), meta: {} };
+    const P = { coding: new Map(), loads: [], snap: new Map(), poKeys: new Set(), rows: new Map(), meta: {} };
     const idx = (aoa, hr) => { const h = (aoa[hr] || []).map(str); return (n) => h.indexOf(n); };
     const meta = aoaBySheet['_Meta'];
     if (meta) for (const r of meta) if (str(r[0])) P.meta[str(r[0])] = r[1];
@@ -503,6 +523,8 @@
         P.snap.set(m, { desc: str(r[i('Description')]), group: str(r[i('Group')]), unit: str(r[i('Unit')]), cost: num(r[i('Cost')]), cons: num(r[i('Consumed')]), bal: num(r[i('Balance')]), open: num(r[i('Open PO')]) }); } }
     const pk = aoaBySheet['_POs'];
     if (pk) for (const r of pk.slice(1)) if (str(r[0])) P.poKeys.add(str(r[0]));
+    const rw = aoaBySheet['_Rows'];
+    if (rw) for (const r of rw.slice(1)) if (str(r[0]) && num(r[1])) P.rows.set(str(r[0]), { id: num(r[1]), first: num(r[2]) || 1 });
     P.meta.dataDate = toDate(P.meta.dataDate);
     P.project = str(P.meta.plant);
     return P;
@@ -554,6 +576,7 @@
     const months = A.months;
     // ---------------- sheet order: reports first, then files, then the hidden machinery
     const wsDash = wb.addWorksheet('Dashboard', { properties: { tabColor: { argb: 'FF1F4E9A' } } });
+    const wsMM = wb.addWorksheet('Material Monthly', { properties: { tabColor: { argb: 'FF1F4E9A' } } });
     const wsMat = wb.addWorksheet('Materials', { properties: { tabColor: { argb: 'FF1F4E9A' } } });
     const wsPrice = wb.addWorksheet('Price', { properties: { tabColor: { argb: 'FF1F4E9A' } } });
     const wsCode = wb.addWorksheet('Material Coding', { properties: { tabColor: { argb: 'FFEDA100' } } });
@@ -585,27 +608,29 @@
     }
     const lk = (col, cell, dflt) => `IFERROR(IF(INDEX('Material Coding'!$${col}$${CT + 1}:$${col}$${cEnd},MATCH(${cell},'Material Coding'!$A$${CT + 1}:$A$${cEnd},0))="",${dflt},INDEX('Material Coding'!$${col}$${CT + 1}:$${col}$${cEnd},MATCH(${cell},'Material Coding'!$A$${CT + 1}:$A$${cEnd},0))),${dflt})`;
     // ---------------- Lists
-    table(wsLists, 1, [{ h: 'Package', w: 11 }, { h: 'Label', w: 32 }, { h: 'Group', w: 10 }, { h: 'MNL', w: 8 }, { h: 'Label', w: 20 }],
+    table(wsLists, 1, [{ h: 'Package', w: 11 }, { h: 'Label', w: 32 }, { h: 'Group', w: 10 }, { h: 'MNL', w: 8 }, { h: 'Label', w: 20 }, { h: 'Order key', w: 11 }],
       Array.from({ length: Math.max(A.packages.length, A.mnls.length) }, (_, i) => [A.packages[i] ? A.packages[i].code : null, A.packages[i] ? A.packages[i].label : null,
-        A.packages[i] ? A.packages[i].group : null, A.mnls[i] ? A.mnls[i].code : null, A.mnls[i] ? A.mnls[i].label : null]), { filter: false });
+        A.packages[i] ? A.packages[i].group : null, A.mnls[i] ? A.mnls[i].code : null, A.mnls[i] ? A.mnls[i].label : null, A.packages[i] ? A.packages[i].code.replace(/\s/g, '').toUpperCase() : null]), { filter: false });
 
     // ---------------- Cost Detail (CJI3 WA, one row per CO line; package / MNL looked up live from the coding)
     const costCols = [{ h: 'Posting date', w: 11, nf: NF.date }, { h: 'Month', w: 9, text: true }, { h: 'Material', w: 11, text: true }, { h: 'Description', w: 36 },
       { h: 'Group', w: 10, text: true }, { h: 'Package', w: 11 }, { h: 'MNL', w: 7 }, { h: 'Cost class', w: 26 }, { h: 'WBS', w: 24 }, { h: 'WBS name', w: 22 },
       { h: 'Cost element', w: 11, text: true }, { h: 'Cost element name', w: 20 }, { h: 'Qty', w: 11, nf: NF.qty }, { h: 'Unit', w: 6 }, { h: 'Amount', w: 14, nf: NF.amt2 },
-      { h: 'Movement', w: 8 }, { h: 'Material doc', w: 12, text: true }, { h: 'Item', w: 5 }, { h: 'CO document', w: 12, text: true }, { h: 'Row', w: 5 }, { h: 'Fiscal year', w: 7 }];
+      { h: 'Movement', w: 8 }, { h: 'Material doc', w: 12, text: true }, { h: 'Item', w: 5 }, { h: 'CO document', w: 12, text: true }, { h: 'Row', w: 5 }, { h: 'Fiscal year', w: 7 }, { h: 'Row ID', w: 7 }];
     const costSorted = A.cost.slice().sort((a, b) => cmp(a.date ? a.date.getTime() : 0, b.date ? b.date.getTime() : 0) || cmp(a.key, b.key));
     const CD = 4;
     titleBand(wsCost, A, 'Cost detail – CJI3 goods issues (WA)', 'One row per CO line item. Package and MNL are looked up from Material Coding, so a code changed there moves the cost here and on the Dashboard.');
     table(wsCost, CD, costCols, costSorted.map((l, i) => { const r = A.mats.get(l.material), n = CD + 1 + i;
       return [l.date ? ymdDate(l.date) : null, mtext(l.month), l.material, l.matDesc || r.desc, r.group || '(no group)',
         { formula: lk('E', `C${n}`, '"UNALLOCATED"'), result: r.package || 'UNALLOCATED' }, { formula: lk('F', `C${n}`, '""'), result: r.mnl || '' },
-        l.costClass, l.wbs, l.coName, l.ce, l.ceName, l.mov ? l.mqty : (l.qty || null), l.uom || r.unit, l.amt, l.mov ? l.mov.mvt : '', l.refDoc, l.refItem, l.docNo, l.postRow, l.fy]; }), { xSplit: 3 });
+        l.costClass, l.wbs, l.coName, l.ce, l.ceName, l.mov ? l.mqty : (l.qty || null), l.uom || r.unit, l.amt, l.mov ? l.mov.mvt : '', l.refDoc, l.refItem, l.docNo, l.postRow, l.fy, A.rowIds.get(l.rowKey).id]; }), { xSplit: 3 });
     const cdEnd = CD + Math.max(1, nC);
     const CDR = (col) => `'Cost Detail'!$${col}$${CD + 1}:$${col}$${cdEnd}`;
     const cdTot = CD + nC + 1;
     wsCost.getCell(cdTot, 1).value = 'Total'; wsCost.getCell(cdTot, 15).value = { formula: `SUBTOTAL(9,O${CD + 1}:O${cdEnd})`, result: A.k.cost };
     for (const j of [1, 15]) { wsCost.getCell(cdTot, j).font = st.FB; wsCost.getCell(cdTot, j).fill = FILL.TOT; } wsCost.getCell(cdTot, 15).numFmt = NF.amt2;
+
+    const MM_TOTAL = materialMonthly(wsMM, A, CDR, lk);
 
     // ---------------- Movements (MB51 with its class)
     titleBand(wsMov, A, 'Movements – MB51', 'Every movement with the class the rules gave it (see Movement Rules). Cost line = the CJI3 amount tied to this movement.');
@@ -670,6 +695,7 @@
       ['  Issued to subcontractors (recoverable)', { formula: `SUMIFS(${CDR('O')},${CDR('H')},"${COST_CLASS.ISS_S}")`, result: A.k.subcon }],
       ['  Scrap / damages', { formula: `SUMIFS(${CDR('O')},${CDR('H')},"${COST_CLASS.SCRAP}")`, result: A.k.scrap }],
       ['  With no MB51 movement', A.k.unmatched],
+      ['Material Monthly total (must equal the cost)', { formula: MM_TOTAL, result: A.k.cost }],
       [`Cost in ${mlabel(A.curMonth)}`, { formula: `SUMIFS(${CDR('O')},${CDR('B')},"${mtext(A.curMonth)}")`, result: A.k.thisMonth }],
       ['Received from vendors (MB51 value)', A.k.receivedVendor], ['Owner supplied (MB51 value)', A.k.ownerSupplied],
       ['Issued to orders – outside project cost', A.k.toOrders], ['Ordered value (purchase POs)', A.k.orderedVal], ['Still to be delivered (value)', A.k.openPO],
@@ -752,8 +778,133 @@
     wsSnap.addRow(['Material', 'Description', 'Group', 'Unit', 'Cost', 'Consumed', 'Balance', 'Open PO']);
     for (const r of A.list) wsSnap.addRow([r.material, r.desc, r.group, r.unit, round2(r.cost), r.consQty, r.balance, r.openQty]);
     wsPOs.addRow(['PO/item']); for (const l of A.me.lines) wsPOs.addRow([l.key]);
+    const wsRows = wb.addWorksheet('_Rows', { state: 'hidden' });
+    wsRows.addRow(['Row key', 'Row ID', 'First seen (load)']);
+    for (const [k, v] of [...A.rowIds].sort((a, b) => a[1].id - b[1].id)) wsRows.addRow([k, v.id, v.first]);
+    wsRows.getColumn(1).numFmt = '@';
     for (const ws of [wsSnap, wsPOs]) ws.getColumn(1).numFmt = '@';
     return wb.xlsx.writeBuffer();
+  }
+  // ================================================================== MATERIAL MONTHLY
+  // The material counterpart of Service Monthly: rows under a header per work package (catalogue order, UNALLOCATED last),
+  // identity columns frozen, a Total block, then Qty / Rate / Amount per month – all SUMIFS on Cost Detail by Row ID, so the
+  // sheet always agrees with the detail. Package / MNL / Cost element are live from Material Coding.
+  function materialMonthly(ws, A, CDR, lk) {
+    const months = A.months, BLK = 100000;
+    const cat = A.packages, NB = cat.length + 1;
+    const blocks = cat.map((p) => ({ code: p.code, label: p.label, color: p.color || GROUP_COLOR[p.group] || '6B7280' }))
+      .concat([{ code: '', label: 'UNALLOCATED · no work package yet', color: 'B4413C' }]);
+    const pkgOf = (o) => { const c = A.mats.get(o.material).package; return cat.some((p) => p.code === c) ? c : ''; };
+    const inBlock = (a, b) => { const ra = A.mats.get(a.material), rb = A.mats.get(b.material);
+      return cmp(ra.group || '~', rb.group || '~') || cmp(a.material, b.material) || (LINE_ORDER[a.lineType] ?? 9) - (LINE_ORDER[b.lineType] ?? 9) || cmp(a.lineType, b.lineType); };
+    for (const b of blocks) b.rows = A.monthlyRows.filter((o) => pkgOf(o) === b.code).sort(inBlock);
+    const layout = blocks.flatMap((b, k) => [{ pkg: b, k: k + 1 }, ...b.rows.map((o) => ({ o })), { blank: true, k: k + 1 }]);
+    const ID = ['Order', 'Package', 'MNL', 'Cost element', 'Material', 'Description', 'Group', 'Line type', 'Unit'];
+    const TOTH = ['PO price', 'Qty', 'Avg rate', 'Amount'];
+    const REF = ['Row ID', 'First seen (load)', 'Last PO price', 'Issue vs PO', 'Stock balance', 'Open on PO', 'Row type', 'Block', 'Re-coded'];
+    const nI = ID.length, T0 = nI + 1, M0 = T0 + TOTH.length, RF = M0 + 3 * months.length, LASTC = RF + REF.length - 1;
+    const rc = (n) => RF + REF.indexOf(n);
+    const L = colL, R1 = 4, RN = R1 + layout.length - 1;
+    const AMTF = '#,##0;[Red]-#,##0;;@', QTYF = '#,##0.00;[Red]-#,##0.00;;@', PRF = '#,##0.00;[Red]-#,##0.00;;@';
+    const H = { ...st.H, size: 9.5 };
+    const hd = (r, c, v, f) => { const x = ws.getCell(r, c); x.value = v; x.font = H; x.fill = solid('FF' + f); x.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }; };
+    ID.forEach((h, j) => { hd(2, 1 + j, h, '0F2A52'); hd(3, 1 + j, null, '0F2A52'); ws.mergeCells(2, 1 + j, 3, 1 + j); });
+    hd(2, T0, 'Total', '7A5C1E'); for (let j = 1; j < TOTH.length; j++) hd(2, T0 + j, null, '7A5C1E'); ws.mergeCells(2, T0, 2, T0 + TOTH.length - 1);
+    TOTH.forEach((h, j) => hd(3, T0 + j, h, '7A5C1E'));
+    months.forEach((m, i) => { const c = M0 + 3 * i, f = i % 2 ? '1F3E6B' : '0F2A52'; hd(2, c, mlabel(m), f); hd(2, c + 1, null, f); hd(2, c + 2, null, f); ws.mergeCells(2, c, 2, c + 2);
+      ['Qty', 'Rate', 'Amount'].forEach((t, o) => hd(3, c + o, t, f)); });
+    REF.forEach((h, j) => { hd(2, RF + j, h, '6B7280'); hd(3, RF + j, null, '6B7280'); ws.mergeCells(2, RF + j, 3, RF + j); });
+    ws.getCell(2, 1).note = 'Order = block of the row\'s current package (live from Material Coding) + its place in the block. Rows are regrouped under their package on every build.';
+    ws.getCell(3, T0).note = 'Weighted PO price: purchase lines of this material in ME2N (net price ÷ price unit, weighted by order qty, deleted items left out).';
+    ws.getCell(2, rc('Row ID')).note = 'Permanent: a row keeps its Row ID in every later report. Cost Detail → Row ID carries the same number.';
+    const PL = `Lists!$F$2:$F$${cat.length + 1}`, ORDc = `$A$${R1}:$A$${RN}`;
+    const DF = solid('FFF3F6FB'), WF = solid('FFFFFFFF'), NEWF = solid('FFE2EFDA'), SUBF = solid('FFFDF3E1'), SCRF = solid('FFFDE8E6');
+    const tint = (hex, t) => { const n = parseInt(hex, 16), ch = (s) => Math.round(((n >> s) & 255) * (1 - t) + 255 * t); return 'FF' + [16, 8, 0].map((s) => ch(s).toString(16).padStart(2, '0')).join('').toUpperCase(); };
+    const pkgRows = []; let seq = 0, band = 0, prevGroup = null;
+    layout.forEach((item, n) => {
+      const i = R1 + n, row = ws.getRow(i); row.height = 17;
+      if (item.blank) { row.getCell(1).value = item.k * BLK + BLK - 1; row.getCell(rc('Row type')).value = 'BLANK'; row.getCell(rc('Block')).value = { formula: `${L(rc('Block'))}${i - 1}` }; return; }
+      if (item.pkg) {                                   // header: name and a live row count only, so SUMIFS and totals are unaffected
+        const b = item.pkg, lo = item.k * BLK; pkgRows.push([i, b.color]); band = 0; prevGroup = null;
+        const cnt = `COUNTIFS(${ORDc},">"&${lo},${ORDc},"<"&${lo + BLK - 1})`;
+        const name = (b.code ? b.code + ' · ' + b.label : b.label).replace(/"/g, '""');
+        row.getCell(1).value = lo; row.getCell(rc('Row type')).value = 'HEADER'; row.getCell(rc('Block')).value = item.k;
+        row.getCell(6).value = { formula: `"${name}   ("&IF(${cnt}=0,"no materials coded yet",${cnt}&IF(${cnt}=1," row"," rows"))&")"`, result: `${name.replace(/""/g, '"')}   (${b.rows.length ? b.rows.length + (b.rows.length === 1 ? ' row' : ' rows') : 'no materials coded yet'})` };
+        const tf = solid(tint(b.color, 0.84)); for (let c = 1; c <= LASTC; c++) row.getCell(c).fill = tf;
+        return; }
+      const o = item.o, r = A.mats.get(o.material); seq++;
+      if (r.group !== prevGroup) { band ^= 1; prevGroup = r.group; }
+      const IDc = `$${L(rc('Row ID'))}${i}`, pk = r.package && cat.some((p) => p.code === r.package) ? r.package : '';
+      const v = [];
+      v[0] = { formula: `IFERROR(MATCH(SUBSTITUTE(UPPER(B${i})," ",""),${PL},0),${NB})*${BLK}+${seq}`, result: (pk ? cat.findIndex((p) => p.code === pk) + 1 : NB) * BLK + seq };
+      v[1] = { formula: lk('E', `$E${i}`, '"UNALLOCATED"'), result: pk || 'UNALLOCATED' };
+      v[2] = { formula: lk('F', `$E${i}`, '""'), result: r.mnl || '' };
+      v[3] = { formula: lk('G', `$E${i}`, '""'), result: r.cec || '' };
+      v[4] = o.material; v[5] = r.desc; v[6] = r.group || '(no group)'; v[7] = o.lineType; v[8] = r.unit;
+      v[T0 - 1] = r.price ? round2(r.price.wavg) : null;
+      months.forEach((m, mi) => { const c = M0 + 3 * mi, q = o.qtyByMonth[m] || 0, a = o.byMonth[m] || 0;
+        v[c - 1] = { formula: `SUMIFS(${CDR('M')},${CDR('V')},${IDc},${CDR('B')},"${mtext(m)}")`, result: q };
+        v[c] = { formula: `IF(${L(c)}${i}=0,"",${L(c + 2)}${i}/${L(c)}${i})`, result: q ? a / q : '' };
+        v[c + 1] = { formula: `SUMIFS(${CDR('O')},${CDR('V')},${IDc},${CDR('B')},"${mtext(m)}")`, result: a }; });
+      v[T0] = { formula: months.length ? months.map((_, mi) => L(M0 + 3 * mi) + i).join('+') : '0', result: o.qty };
+      v[T0 + 2] = { formula: months.length ? months.map((_, mi) => L(M0 + 3 * mi + 2) + i).join('+') : '0', result: o.amt };
+      v[T0 + 1] = { formula: `IF(${L(T0 + 1)}${i}=0,"",${L(T0 + 3)}${i}/${L(T0 + 1)}${i})`, result: o.qty ? o.amt / o.qty : '' };
+      const ref = { 'Row ID': o.id, 'First seen (load)': o.first, 'Last PO price': r.price ? round2(r.price.last.unitPrice) : null,
+        'Issue vs PO': { formula: `IF(OR(${L(T0)}${i}="",${L(T0 + 2)}${i}=""),"",${L(T0 + 2)}${i}/${L(T0)}${i}-1)`, result: r.price && o.qty ? (o.amt / o.qty) / r.price.wavg - 1 : '' },
+        'Stock balance': r.balance, 'Open on PO': r.openQty, 'Row type': 'DATA', Block: { formula: `${L(rc('Block'))}${i - 1}`, result: blocks.findIndex((b) => b.code === pk) + 1 },
+        'Re-coded': { formula: `IF(INT($A${i}/${BLK})<>$${L(rc('Block'))}${i},1,0)`, result: 0 } };
+      REF.forEach((h, j) => { v[RF - 1 + j] = ref[h]; });
+      row.values = v;
+      const base = o.lineType === 'To subcontractors' ? SUBF : o.lineType === 'Project' ? (band ? DF : WF) : SCRF;
+      for (let c = 1; c <= LASTC; c++) row.getCell(c).fill = base;
+      if (o.isNew) for (const c of [5, 6, 7, 8, rc('First seen (load)')]) row.getCell(c).fill = NEWF;
+    });
+    // formats and widths
+    [8, 12, 7, 12, 11, 40, 10, 16, 6].forEach((w, j) => { ws.getColumn(1 + j).width = w; });
+    [11, 11, 11, 14].forEach((w, j) => { ws.getColumn(T0 + j).width = w; });
+    for (let c = 1; c <= LASTC; c++) ws.getColumn(c).font = { ...st.F, size: 9.5 };
+    ws.getColumn(5).font = { ...st.F, name: 'Consolas', size: 9.5 }; ws.getColumn(5).numFmt = '@';
+    ws.getColumn(6).alignment = { horizontal: 'right', readingOrder: 'rtl', indent: 1 };
+    ws.getColumn(T0).numFmt = PRF; ws.getColumn(T0 + 1).numFmt = QTYF; ws.getColumn(T0 + 2).numFmt = PRF; ws.getColumn(T0 + 3).numFmt = AMTF;
+    ws.getColumn(T0 + 3).font = { ...st.FB, size: 9.5 };
+    months.forEach((_, mi) => { const c = M0 + 3 * mi; ws.getColumn(c).width = 9; ws.getColumn(c + 1).width = 10; ws.getColumn(c + 2).width = 12;
+      ws.getColumn(c).numFmt = QTYF; ws.getColumn(c + 1).numFmt = PRF; ws.getColumn(c + 2).numFmt = AMTF;
+      ws.getColumn(c).outlineLevel = 1; ws.getColumn(c + 1).outlineLevel = 1; });
+    for (let j = 0; j < 3; j++) ws.getColumn(T0 + j).outlineLevel = 1;           // PO price, Qty, Avg rate fold like a month
+    REF.forEach((h, j) => { const col = ws.getColumn(RF + j); col.width = [8, 9, 11, 9, 11, 11, 9, 7, 8][j]; col.outlineLevel = 1; col.hidden = true; });
+    ws.getColumn(rc('Last PO price')).numFmt = PRF; ws.getColumn(rc('Issue vs PO')).numFmt = NF.pct;
+    ws.getColumn(rc('Stock balance')).numFmt = QTYF; ws.getColumn(rc('Open on PO')).numFmt = QTYF;
+    for (let i = 2; i <= RN; i++) { const g = ws.getCell(i, T0); g.border = { left: { style: 'medium', color: { argb: 'FFC8A45C' } } };
+      months.forEach((_, mi) => { ws.getCell(i, M0 + 3 * mi).border = { left: { style: 'thin', color: { argb: 'FF8EA9DB' } } }; }); }
+    // TOTAL row on top – SUBTOTAL follows the filter and the filter never hides it
+    for (let c = 1; c <= LASTC; c++) { const x = ws.getCell(1, c); x.fill = solid('FFFBF4E3'); x.numFmt = 'General';
+      x.border = { top: { style: 'medium', color: { argb: 'FFC8A45C' } }, bottom: { style: 'medium', color: { argb: 'FFC8A45C' } } }; x.font = { ...st.FB, size: 9.5 }; }
+    ws.getCell(1, 6).value = `TOTAL · ${A.monthlyRows.length} rows under ${blocks.length} work packages · follows the filter`; ws.getCell(1, 6).alignment = { horizontal: 'right' };
+    for (const c of [T0 + 3, ...months.map((_, mi) => M0 + 3 * mi + 2)]) {
+      const mi = (c - M0 - 2) / 3, res = c === T0 + 3 ? A.k.cost : sum(A.monthlyRows, (o) => o.byMonth[months[mi]] || 0);
+      const x = ws.getCell(1, c); x.value = { formula: `SUBTOTAL(9,${L(c)}${R1}:${L(c)}${RN})`, result: res }; x.numFmt = AMTF; }
+    // re-coded rows: their live Order points at another package than the block they sit in → yellow until the next build regroups them
+    const moved = `SUM(${L(rc('Re-coded'))}${R1}:${L(rc('Re-coded'))}${RN})`;          // a helper column per row, not array arithmetic
+    ws.getCell(1, 2).value = { formula: `IF(${moved}=0,"✔ grouped by package",${moved}&" re-coded – regrouped on the next build")`, result: '✔ grouped by package' };
+    ws.getCell(1, 2).font = { ...st.FB, size: 9.5, color: { argb: 'FFB0561F' } };
+    ws.addConditionalFormatting({ ref: `A${R1}:${L(LASTC)}${RN}`, rules: [{ type: 'expression', priority: 1,
+      formulae: [`$${L(rc('Re-coded'))}${R1}=1`],
+      style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: 'FFFFE699' }, fgColor: { argb: 'FFFFE699' } } } }] });
+    for (const [i, color] of pkgRows) for (let c = 1; c <= LASTC; c++) { const x = ws.getCell(i, c);
+      x.font = c === 6 ? { name: 'Arial', size: 10.5, bold: true, color: { argb: 'FF' + color } } : { ...st.F, size: 9.5 };
+      x.alignment = c === 6 ? { horizontal: 'right', vertical: 'middle' } : { horizontal: 'left', vertical: 'middle' }; }
+    for (const rr of [2, 3]) for (let c = 1; c <= LASTC; c++) { const x = ws.getCell(rr, c); x.font = H; x.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }; x.numFmt = 'General'; }
+    ws.getRow(2).height = 18; ws.getRow(3).height = 16;
+    const nt = ws.getCell(RN + 2, 6);
+    nt.value = 'Qty is not totalled across rows – units differ. Rate = Amount ÷ Qty. Line type: Project = issued to the WBS (221/222); To subcontractors = Z21/Z22, recoverable (orange); Scrap = 551 (red). Green = new row since the last report. Yellow = re-coded in Material Coding since this sheet was built – it moves under its new package on the next build. Click the + above the columns to open PO price / Qty / Rate, and the hidden reference columns.';
+    nt.font = { ...st.F, italic: true, color: { argb: 'FF5A6678' } }; nt.alignment = { horizontal: 'left', wrapText: false };
+    ws.properties.outlineLevelCol = 1; ws.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
+    ws.views = [{ state: 'frozen', xSplit: nI, ySplit: 3, showGridLines: false, zoomScale: 90 }];
+    ws.autoFilter = { from: { row: 3, column: 1 }, to: { row: RN, column: LASTC } };
+    ws.pageSetup = { paperSize: 8, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, printTitlesRow: '1:3',
+      margins: { left: 0.25, right: 0.25, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 } };
+    ws.getColumn(1).hidden = true;
+    return `SUM('Material Monthly'!${L(T0 + 3)}${R1}:${L(T0 + 3)}${RN})`;
   }
   const ymdDate = (d) => { const o = ymd(d); return new Date(Date.UTC(o.y, o.m - 1, o.d)); };
   const api = { analyse, summarize, readPrevious, buildWorkbook, detectKind, parseME2N, parseMB51, parseCJI3, classify, suggestFor, normPkg,

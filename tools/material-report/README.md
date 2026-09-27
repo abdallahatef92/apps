@@ -9,7 +9,7 @@ Each month you load three SAP exports, plus last month's report:
 | **MB51** | What physically moved, and where it went | material doc + year + item |
 | **CJI3** | What the project paid. Only goods issues are counted (document type **WA**) | CO doc + posting row + year |
 
-From these the page builds the Excel report: Dashboard, Materials, Price, Material Coding, Changes, Checks and Load history, plus the source sheets. The summary sheets are live formulas over *Cost Detail* and *Material Coding*. If you change a package code in Excel, the dashboard updates.
+From these the page builds the Excel report: Dashboard, **Material Monthly**, Materials, Price, Material Coding, Changes, Checks and Load history, plus the source sheets. The summary sheets are live formulas over *Cost Detail* and *Material Coding*. If you change a package code in Excel, the dashboard updates.
 
 ## How the numbers are made
 
@@ -36,6 +36,24 @@ From these the page builds the Excel report: Dashboard, Materials, Price, Materi
   - The material group suggests a package: M03… → DIV 03, M0302… → DIV 0302, M26… → DIV 26, SM/SP/CS/OS… → INDIRECT.
   - Suggestions count only once you accept them.
   - Codes are kept in the browser and written into the report's *Material Coding* sheet. Loading that report next month brings them back, together with load history and a *Changes* comparison.
+
+## Material Monthly
+
+This is the material counterpart of the subcontract report's *Service Monthly* sheet.
+
+- **Rows:** one per material × line type:
+  - **Project** (221/222)
+  - **To subcontractors** (Z21/Z22, recoverable)
+  - **Scrap** (551)
+- **Grouping:** rows sit under a header per work package, in catalogue order with UNALLOCATED last. Inside a package they are sorted by material group, then material.
+- **Columns:**
+  - Package, MNL and Cost element, looked up live from *Material Coding*.
+  - A Total block: weighted PO price, Qty, average rate, Amount.
+  - Then Qty / Rate / Amount for each month. Every one of these is a SUMIFS on *Cost Detail* by Row ID, so the sheet always agrees with the detail.
+- **Row IDs:** each row keeps a permanent Row ID from load to load, stored in the hidden `_Rows` sheet.
+- **TOTAL row:** on top, using SUBTOTAL, so it follows the filter.
+- **Re-coding:** a material re-coded in Excel turns yellow, and cell B1 counts such rows. The next build moves them under their new package.
+- **Cross-check:** the Dashboard carries "Material Monthly total", which must equal the cost.
 
 ## Build and test
 

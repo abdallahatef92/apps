@@ -105,11 +105,14 @@ eq(A.checks.find((c) => c.id === 'mvt').count, 1, 'unknown movement type flagged
 eq(A.checks.find((c) => c.id === 'nocost').count, 1, 'zero-value scrap without cost line listed');
 eq(A.months, [202601, 202602], 'months'); eq(A.byGroup[0].key, 'M030201', 'largest group first');
 eq(A.byPackage.map((p) => p.key), ['UNALLOCATED'], 'nothing coded yet');
+eq(A.monthlyRows.map((o) => [o.material, o.lineType, o.id]).sort(), [['13000040', 'Project', 1], ['13000040', 'To subcontractors', 2], ['14000077', 'No MB51 movement', 3], ['14000077', 'Project', 4]],
+  'Material Monthly rows = material × line type, numbered');
+eq(A.monthlyRows.find((o) => o.key === '13000040|Project').qtyByMonth, { 202601: 60, 202602: 35 }, 'monthly qty net of the 222 return');
 
 // ================================================================ workbook → next month
 const buf = await E.buildWorkbook(A, { ExcelJS });
 const wb = XLSX.read(buf, { cellDates: true });
-eq(['Dashboard', 'Materials', 'Price', 'Material Coding', 'Changes', 'Checks', 'Load history', 'Cost Detail', 'Movements', 'PO Lines', 'Movement Rules', 'Lists', '_Meta', '_Snap', '_POs'].every((n) => wb.SheetNames.includes(n)), true, 'all sheets written');
+eq(['Dashboard', 'Material Monthly', '_Rows', 'Materials', 'Price', 'Material Coding', 'Changes', 'Checks', 'Load history', 'Cost Detail', 'Movements', 'PO Lines', 'Movement Rules', 'Lists', '_Meta', '_Snap', '_POs'].every((n) => wb.SheetNames.includes(n)), true, 'all sheets written');
 const aoa = {}; for (const n of wb.SheetNames) aoa[n] = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: '' });
 const cd = aoa['Cost Detail']; const cdh = cd.findIndex((r) => r.includes('Amount'));
 eq(cd.slice(cdh + 1).filter((r) => r[0] instanceof Date).reduce((s, r) => s + r[cdh >= 0 ? cd[cdh].indexOf('Amount') : 0], 0), cost, 'Cost Detail sums to cost');
@@ -118,13 +121,17 @@ const mc = aoa['Material Coding'], h = mc.findIndex((r) => r.includes('Package')
 for (const r of mc.slice(h + 1)) if (r[0] === '13000040') { r[4] = 'DIV 0302'; r[5] = 'MAT'; }
 const P = E.readPrevious(aoa);
 eq(P.coding.get('13000040'), { package: 'DIV 0302', mnl: 'MAT', cec: '' }, 'coding read back from the report');
-eq(P.loads.length, 1, 'history carried'); eq(P.snap.size, A.list.length, 'snapshot carried');
+eq(P.loads.length, 1, 'history carried'); eq(P.rows.size, 4, 'row IDs carried');
+{ const mmS = aoa['Material Monthly']; const ids = mmS.slice(3).map((r) => r[mmS[1].indexOf('Row ID')]).filter((x) => typeof x === 'number');
+  eq(ids.length, 4, 'four data rows on Material Monthly'); } eq(P.snap.size, A.list.length, 'snapshot carried');
 // month 2: one more issue of rebar, one new PO line
 MB.push(MB[3].slice()); Object.assign(MB[MB.length - 1], { 7: '4900000010', 9: D('2026-03-03'), 12: -2, 13: -66000 });
 { const r = CJ[1].slice(); r[17] = 'A10'; r[27] = D('2026-03-03'); r[9] = 66000; r[42] = 2; r[55] = '4900000010'; r[57] = 1; r[34] = '2026'; CJ.splice(CJ.length - 2, 0, r); }
 ME.push(ME[1].slice()); Object.assign(ME[ME.length - 1], { 2: '5000000009', 3: D('2026-03-02'), 14: 5, 17: 150000, 18: 5, 19: 150000 });
 const B = E.analyse({ me: ME, mb: MB, cji: CJ }, { coding: P.coding, prev: P });
 eq(B.loadNo, 2, 'second load numbered');
+eq(B.monthlyRows.find((o) => o.key === '13000040|Project').id, 1, 'Row ID kept across loads');
+eq(B.monthlyRows.find((o) => o.key === '13000040|Project').qtyByMonth[202603], 2, 'new month lands on the same row');
 eq(B.mats.get('13000040').package, 'DIV 0302', 'package applied');
 eq(B.byPackage.find((p) => p.key === 'DIV 0302').total, rebar.cost + 66000, 'package roll-up');
 eq(B.changes.rows.map((x) => [x.type, x.r.material]), [['Cost moved', '13000040']], 'only rebar changed');
