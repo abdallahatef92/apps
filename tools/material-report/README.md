@@ -65,4 +65,4 @@ MCR_REAL=/path/to/exports npm test   # also reconcile real ME2N / MB51 / CJI3 fi
 npm run build             # → dist/Material_Cost_Report_Rev01.html (≈1.9 MB, works offline)
 ```
 
-`engine.js` is pure logic and runs in Node and in the page. `app.js` is the page. `style.css` is the Rev07 stylesheet plus a few additions. `build.mjs` inlines SheetJS, ExcelJS and Chart.js from `node_modules` into one file.
+`engine.js` is pure logic and runs in Node and in the page. `app.js` is the page. `style.css` is the Rev07 stylesheet plus a few additions. `build.mjs` inlines SheetJS, ExcelJS, Chart.js and JSZip from `node_modules` into one file.

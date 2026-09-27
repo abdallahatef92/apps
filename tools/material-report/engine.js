@@ -783,7 +783,27 @@
     for (const [k, v] of [...A.rowIds].sort((a, b) => a[1].id - b[1].id)) wsRows.addRow([k, v.id, v.first]);
     wsRows.getColumn(1).numFmt = '@';
     for (const ws of [wsSnap, wsPOs]) ws.getColumn(1).numFmt = '@';
-    return wb.xlsx.writeBuffer();
+    return fixSheetXml(await wb.xlsx.writeBuffer(), libs.JSZip);
+  }
+  // ExcelJS writes <pageSetUpPr> before <outlinePr> when a sheet has both fit-to-page and column grouping (Material Monthly).
+  // The schema wants tabColor → outlinePr → pageSetUpPr, and Excel refuses the sheet ("found a problem with some content")
+  // otherwise. Put the children of <sheetPr> in schema order in every sheet.
+  const SHEETPR_ORDER = ['tabColor', 'outlinePr', 'pageSetUpPr'];
+  function orderSheetPr(xml) {
+    const m = /<sheetPr([^>]*)>([\s\S]*?)<\/sheetPr>/.exec(xml); if (!m) return xml;
+    const kids = m[2].match(/<(\w+)[^>]*?(?:\/>|>[\s\S]*?<\/\1>)/g) || [];
+    const rank = (k) => { const i = SHEETPR_ORDER.indexOf(/^<(\w+)/.exec(k)[1]); return i < 0 ? 99 : i; };
+    const sorted = kids.slice().sort((a, b) => rank(a) - rank(b)).join('');
+    return sorted === m[2] ? xml : xml.replace(m[0], `<sheetPr${m[1]}>${sorted}</sheetPr>`);
+  }
+  async function fixSheetXml(buf, JSZip) {
+    if (!JSZip) throw new Error('JSZip is needed to write a valid workbook');
+    const z = await JSZip.loadAsync(buf);
+    for (const name of Object.keys(z.files).filter((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n))) {
+      const x = await z.file(name).async('string'), y = orderSheetPr(x);
+      if (y !== x) z.file(name, y);
+    }
+    return z.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
   }
   // ================================================================== MATERIAL MONTHLY
   // The material counterpart of Service Monthly: rows under a header per work package (catalogue order, UNALLOCATED last),
@@ -907,7 +927,7 @@
     return `SUM('Material Monthly'!${L(T0 + 3)}${R1}:${L(T0 + 3)}${RN})`;
   }
   const ymdDate = (d) => { const o = ymd(d); return new Date(Date.UTC(o.y, o.m - 1, o.d)); };
-  const api = { analyse, summarize, readPrevious, buildWorkbook, detectKind, parseME2N, parseMB51, parseCJI3, classify, suggestFor, normPkg,
+  const api = { orderSheetPr, analyse, summarize, readPrevious, buildWorkbook, detectKind, parseME2N, parseMB51, parseCJI3, classify, suggestFor, normPkg,
     CLASSES, CLASS, MVT, COST_CLASS, PACKAGES, MNLS, LAYOUT, mlabel, mtext, dtext, monthKey, esc, fmt, str, num, code };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.MaterialEngine = api;
 })(typeof window !== 'undefined' ? window : globalThis);

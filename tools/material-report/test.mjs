@@ -7,6 +7,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 const require = createRequire(import.meta.url);
 const E = require('./engine.js');
 const ExcelJS = require('exceljs');
+const JSZip = require('jszip');
 const XLSX = require('xlsx');
 
 let fails = 0, passes = 0;
@@ -110,8 +111,17 @@ eq(A.monthlyRows.map((o) => [o.material, o.lineType, o.id]).sort(), [['13000040'
 eq(A.monthlyRows.find((o) => o.key === '13000040|Project').qtyByMonth, { 202601: 60, 202602: 35 }, 'monthly qty net of the 222 return');
 
 // ================================================================ workbook → next month
-const buf = await E.buildWorkbook(A, { ExcelJS });
+const buf = await E.buildWorkbook(A, { ExcelJS, JSZip });
 const wb = XLSX.read(buf, { cellDates: true });
+// every sheet's <sheetPr> children in schema order – Excel rejects the file otherwise
+{ const z = await JSZip.loadAsync(buf); let bad = 0;
+  for (const n of Object.keys(z.files).filter((f) => /^xl\/worksheets\/sheet\d+\.xml$/.test(f))) {
+    const pr = (/<sheetPr[^>]*>([\s\S]*?)<\/sheetPr>/.exec(await z.file(n).async('string')) || [])[1] || '';
+    const tags = [...pr.matchAll(/<(\w+)/g)].map((m) => m[1]).filter((t) => ['tabColor', 'outlinePr', 'pageSetUpPr'].includes(t));
+    if (tags.join() !== ['tabColor', 'outlinePr', 'pageSetUpPr'].filter((t) => tags.includes(t)).join()) bad++; }
+  eq(bad, 0, 'sheetPr children in schema order'); }
+eq(E.orderSheetPr('<sheetPr><tabColor rgb="1"/><pageSetUpPr fitToPage="1"/><outlinePr summaryBelow="0"/></sheetPr>'),
+  '<sheetPr><tabColor rgb="1"/><outlinePr summaryBelow="0"/><pageSetUpPr fitToPage="1"/></sheetPr>', 'orderSheetPr reorders');
 eq(['Dashboard', 'Material Monthly', '_Rows', 'Materials', 'Price', 'Material Coding', 'Changes', 'Checks', 'Load history', 'Cost Detail', 'Movements', 'PO Lines', 'Movement Rules', 'Lists', '_Meta', '_Snap', '_POs'].every((n) => wb.SheetNames.includes(n)), true, 'all sheets written');
 const aoa = {}; for (const n of wb.SheetNames) aoa[n] = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: '' });
 const cd = aoa['Cost Detail']; const cdh = cd.findIndex((r) => r.includes('Amount'));

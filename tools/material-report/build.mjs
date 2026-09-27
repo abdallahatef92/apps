@@ -12,6 +12,7 @@ const libs = [
   lib('node_modules/xlsx/dist/xlsx.full.min.js', 'SheetJS 0.18.5 (Apache-2.0)'),
   lib('node_modules/exceljs/dist/exceljs.min.js', 'ExcelJS 4.4.0 (MIT)'),
   lib('node_modules/chart.js/dist/chart.umd.js', 'Chart.js 4.4.1 (MIT)'),
+  lib('node_modules/jszip/dist/jszip.min.js', 'JSZip 3.10.1 (MIT)'),
 ].join('\n');
 // String.replace with a function, so "$&" and friends inside the minified libraries are left alone
 const html = read('page.html')

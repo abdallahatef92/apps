@@ -26,7 +26,7 @@ try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () =
 themeLabel();
 function setFold(f) { $('layout').classList.toggle('folded', f); $('wrap').classList.toggle('wide', f); $('btn-fold').setAttribute('aria-expanded', String(!f)); $('btn-unfold').setAttribute('aria-expanded', String(!f)); lsSet(LS.folded, f); }
 $('btn-fold').addEventListener('click', () => setFold(true)); $('btn-unfold').addEventListener('click', () => setFold(false));
-{ const ok = typeof XLSX !== 'undefined' && typeof ExcelJS !== 'undefined' && typeof Chart !== 'undefined';
+{ const ok = typeof XLSX !== 'undefined' && typeof ExcelJS !== 'undefined' && typeof Chart !== 'undefined' && typeof JSZip !== 'undefined';
   $('dot-libs').className = 'dot ' + (ok ? 'on' : 'off'); $('txt-libs').textContent = ok ? 'Ready · works offline' : 'Libraries missing – rebuild the page'; }
 
 // ------------------------------------------------------------------ messages / status
@@ -411,7 +411,7 @@ function renderControl() {
 $('btn-download').addEventListener('click', async () => {
   const A = state.A; $('btn-download').disabled = true; $('dl-status').textContent = 'Writing the workbook…'; await tick();
   try {
-    const buf = await E.buildWorkbook(A, { ExcelJS });
+    const buf = await E.buildWorkbook(A, { ExcelJS, JSZip });
     const name = `Material Cost Report - ${A.PLANT || 'project'} - ${E.mtext(A.curMonth)}.xlsx`;
     const url = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
     const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000);
