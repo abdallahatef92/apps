@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Material Cost Report</title>
+<style>
+/*STYLE*/
+</style>
+</head>
+<body>
+<div class="wrap" id="wrap">
+  <header class="top">
+    <div>
+      <div class="eyebrow">SAP ME2N + MB51 + CJI3 → monthly material report</div>
+      <h1>Material Cost Report</h1>
+      <p>Drop this month's three SAP exports, plus last month's report if you have it. The page ties every CJI3 goods-issue cost line to its MB51 movement, builds the quantity chain per material and writes the Excel report. Works offline: files are read in this browser and nothing is uploaded.</p>
+    </div>
+    <div class="pillrow">
+      <button class="pill themebtn" id="btn-theme" type="button"></button>
+      <span class="pill"><i class="dot" id="dot-coding"></i><span id="txt-coding">Coding: none yet</span></span>
+      <span class="pill"><i class="dot" id="dot-libs"></i><span id="txt-libs">Loading tools…</span></span>
+    </div>
+  </header>
+
+  <div class="grid" id="layout">
+    <aside class="card" aria-labelledby="load-h">
+      <button class="rail" id="btn-unfold" aria-controls="load-body" aria-expanded="false" title="Show the load panel">› This month's load</button>
+      <div class="hd"><h2 id="load-h">This month's load</h2><span style="display:flex;gap:8px;align-items:center"><span class="eyebrow">Step 1</span><button class="fold" id="btn-fold" aria-controls="load-body" aria-expanded="true" title="Hide the load panel" aria-label="Hide the load panel">‹</button></span></div>
+      <div class="bd" id="load-body">
+        <div class="drop" id="drop" tabindex="0" role="button" aria-describedby="drop-help">
+          <strong>Drop files here or choose them</strong>
+          <span class="muted" id="drop-help">.xlsx · the page recognises each file from its columns</span>
+          <input type="file" id="file" accept=".xlsx,.xls,.xlsm" multiple hidden>
+        </div>
+        <div class="slots">
+          <div class="slot" id="slot-me"><span class="tag">ME2N</span><span class="name" id="name-me">Purchase orders — required</span><span class="meta" id="meta-me">Material group, PO prices, open quantities</span></div>
+          <div class="slot" id="slot-mb"><span class="tag">MB51</span><span class="name" id="name-mb">Material movements — required</span><span class="meta" id="meta-mb">Receipts, issues, transfers, stock</span></div>
+          <div class="slot" id="slot-cji"><span class="tag">CJI3</span><span class="name" id="name-cji">Actual cost — required</span><span class="meta" id="meta-cji">Goods issues (WA) on the project WBS</span></div>
+          <div class="slot" id="slot-prev"><span class="tag">LAST REPORT</span><span class="name" id="name-prev">Last month's report — optional</span><span class="meta" id="meta-prev">Brings coding, load history and changes forward</span></div>
+          <div class="slot" id="slot-master"><span class="tag">WP MASTER</span><span class="name" id="name-master">Work package master — optional</span><span class="meta" id="meta-master">Package and MNL lists shared with the subcontract report</span></div>
+        </div>
+        <div class="actions">
+          <button class="primary" id="btn-build" disabled>Build report</button>
+          <button id="btn-clear" disabled>Clear</button>
+        </div>
+        <div class="progress" id="prog" hidden><i id="prog-bar"></i></div>
+        <div class="status" id="status" role="status" aria-live="polite"></div>
+        <div id="msgs"></div>
+        <div class="note">Codes typed on the Coding tab are kept in this browser and written into the downloaded report's <b>Material Coding</b> sheet. Next month, load that report and they come back.</div>
+      </div>
+    </aside>
+
+    <main>
+      <section class="card empty" id="empty">
+        <div class="hd"><h2>How the monthly loop works</h2><span class="eyebrow">Each month</span></div>
+        <div class="bd">
+          <svg class="loop" viewBox="0 0 640 290" role="img" aria-label="ME2N, MB51, CJI3 and last month's report go into this page, which produces this month's report; next month that report goes back in.">
+            <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z"/></marker></defs>
+            <rect x="10" y="10" width="180" height="46" rx="7"/><text x="24" y="31" font-size="13" font-weight="600">ME2N</text><text class="sub" x="24" y="47">ordered · group · price</text>
+            <rect x="10" y="70" width="180" height="46" rx="7"/><text x="24" y="91" font-size="13" font-weight="600">MB51</text><text class="sub" x="24" y="107">what moved · qty</text>
+            <rect x="10" y="130" width="180" height="46" rx="7"/><text x="24" y="151" font-size="13" font-weight="600">CJI3 (WA)</text><text class="sub" x="24" y="167">what it cost</text>
+            <rect x="10" y="190" width="180" height="46" rx="7"/><text x="24" y="211" font-size="13" font-weight="600">Last month's report</text><text class="sub" x="24" y="227">coding + history</text>
+            <rect class="core" x="245" y="90" width="150" height="66" rx="8"/><text x="261" y="118" font-size="13" font-weight="600">This page</text><text class="sub" x="261" y="136">tie · classify · code</text>
+            <rect x="450" y="90" width="180" height="66" rx="8"/><text x="464" y="118" font-size="13" font-weight="600">This month's report</text><text class="sub" x="464" y="136">.xlsx with live formulas</text>
+            <path d="M190 33 C220 33 220 108 243 108" marker-end="url(#arr)"/>
+            <path d="M190 93 C215 93 215 116 243 116" marker-end="url(#arr)"/>
+            <path d="M190 153 C215 153 215 130 243 130" marker-end="url(#arr)"/>
+            <path d="M190 213 C220 213 220 138 243 138" marker-end="url(#arr)"/>
+            <path d="M395 123 L448 123" marker-end="url(#arr)"/>
+            <path class="back" d="M540 156 C540 275 100 275 100 238" marker-end="url(#arr)"/>
+            <text class="sub" x="300" y="282">next month it goes back in</text>
+          </svg>
+          <ul>
+            <li>Cost is CJI3 goods issues (document type WA) only. SAP's subtotal rows are dropped and the detail is tied to the printed grand total.</li>
+            <li>Each cost line is matched to its MB51 movement through the reference document (material document + year + item), so quantity and cost always belong together.</li>
+            <li>MB51 movements are classified – received from vendors, from stores, owner supplied, issued to project, to subcontractors, to orders, scrap, transfers – and summed into a quantity chain and stock balance per material.</li>
+            <li>ME2N gives each material its group, the PO prices and what is still to be delivered. Material groups suggest the Package; code on the Coding tab.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="results" hidden>
+        <div class="tabs" role="tablist" aria-label="Report views">
+          <button role="tab" id="tab-overview" aria-selected="true" aria-controls="view-overview">Overview</button>
+          <button role="tab" id="tab-materials" aria-selected="false" aria-controls="view-materials">Materials</button>
+          <button role="tab" id="tab-price" aria-selected="false" aria-controls="view-price">Price</button>
+          <button role="tab" id="tab-changes" aria-selected="false" aria-controls="view-changes">Changes</button>
+          <button role="tab" id="tab-coding" aria-selected="false" aria-controls="view-coding">Coding</button>
+          <button role="tab" id="tab-checks" aria-selected="false" aria-controls="view-checks">Checks</button>
+        </div>
+
+        <div id="view-overview" role="tabpanel" aria-labelledby="tab-overview">
+          <div class="card" style="margin-bottom:16px">
+            <div class="hd"><div><div class="eyebrow" id="ov-eyebrow"></div><h2 id="ov-title"></h2></div>
+              <div class="actions" style="margin:0"><button class="primary" id="btn-download">Download Excel report</button></div></div>
+            <div class="bd"><div class="status" id="dl-status" style="margin-top:0"></div></div>
+          </div>
+          <div class="kpis" id="kpis"></div>
+          <div class="card" style="margin-bottom:16px"><div class="hd"><h3>Material cost per month by material group</h3><span class="muted" style="font-size:12px">EGP · CJI3 goods issues · largest groups, rest as Other</span></div>
+            <div class="bd"><div class="chartbox tall"><canvas id="ch-month" aria-label="Stacked columns of material cost per month by material group"></canvas></div><div class="legend" id="lg-month"></div></div></div>
+          <div class="row2">
+            <div class="card"><div class="hd"><h3>Cost by package</h3><span class="muted" style="font-size:12px" id="pk-note"></span></div><div class="bd"><div class="chartbox"><canvas id="ch-pkg" aria-label="Bar chart of material cost by package"></canvas></div></div></div>
+            <div class="card"><div class="hd"><h3>Where the cost went</h3><span class="muted" style="font-size:12px">by the MB51 movement behind each line</span></div><div class="bd tblwrap"><table id="tb-class"></table></div></div>
+          </div>
+          <div class="card" style="margin-bottom:16px"><div class="hd"><h3>Cost by material group</h3><span class="muted" style="font-size:12px">click a group to see its materials</span></div><div class="bd tblwrap tall"><table id="tb-group" class="click"></table></div></div>
+          <div class="card"><div class="hd"><h3>Top 15 materials</h3><span class="muted" style="font-size:12px">qty and price from issues to the project and subcontractors</span></div><div class="bd tblwrap"><table id="tb-top" class="click"></table></div></div>
+        </div>
+
+        <div id="view-materials" role="tabpanel" aria-labelledby="tab-materials" hidden>
+          <div class="card detail" id="mat-detail" style="margin-bottom:16px" hidden></div>
+          <div class="card"><div class="hd"><h3>Quantity chain and cost per material</h3><span class="muted" style="font-size:12px" id="mat-note"></span></div>
+            <div class="bd">
+              <div class="tools">
+                <input type="search" id="mat-q" placeholder="Filter by code or description" aria-label="Filter materials">
+                <select id="mat-group" aria-label="Material group"></select>
+                <label><input type="checkbox" id="mat-cost" checked> With cost only</label>
+                <label><input type="checkbox" id="mat-neg"> Negative stock only</label>
+              </div>
+              <div class="tblwrap tall"><table id="tb-mat" class="click"></table></div>
+              <div class="note">Quantities are in each material's MB51 unit and signed as they move stock: in +, out −. <b>Stock balance</b> is the sum of the chain, so it is only as complete as the MB51 date range. <b>Direct / asset</b> receipts go straight to an order or asset and never enter stock. Click a row for its months, PO lines and movements.</div>
+            </div></div>
+        </div>
+
+        <div id="view-price" role="tabpanel" aria-labelledby="tab-price" hidden>
+          <div class="card detail" id="price-detail" style="margin-bottom:16px" hidden></div>
+          <div class="card"><div class="hd"><h3>PO price against issue price</h3><span class="muted" style="font-size:12px">PO price = net price ÷ price unit, purchase lines not deleted · issue price = CJI3 cost ÷ qty issued</span></div>
+            <div class="bd">
+              <div class="tools">
+                <input type="search" id="pr-q" placeholder="Filter by code or description" aria-label="Filter materials">
+                <select id="pr-group" aria-label="Material group"></select>
+                <label><input type="checkbox" id="pr-var"> Variance over ±10% only</label>
+              </div>
+              <div class="tblwrap tall"><table id="tb-price" class="click"></table></div>
+            </div></div>
+        </div>
+
+        <div id="view-changes" role="tabpanel" aria-labelledby="tab-changes" hidden>
+          <div class="card" style="margin-bottom:16px"><div class="hd"><h3>Load history</h3></div><div class="bd tblwrap"><table id="tb-loads"></table></div></div>
+          <div class="kpis" id="chg-kpis"></div>
+          <div class="card" style="margin-bottom:16px"><div class="hd"><h3>Materials that moved</h3><span class="muted" style="font-size:12px" id="chg-note"></span></div><div class="bd tblwrap tall"><table id="tb-chg"></table></div></div>
+          <div class="card"><div class="hd"><h3>New PO lines</h3><span class="muted" style="font-size:12px" id="npo-note"></span></div><div class="bd tblwrap tall"><table id="tb-npo"></table></div></div>
+        </div>
+
+        <div id="view-coding" role="tabpanel" aria-labelledby="tab-coding" hidden>
+          <div class="card"><div class="hd"><h3>Material coding</h3><span class="muted" style="font-size:12px" id="cd-summary"></span></div>
+            <div class="bd">
+              <div class="tools">
+                <input type="search" id="cd-q" placeholder="Filter by code, description or group" aria-label="Filter materials">
+                <select id="cd-group" aria-label="Material group"></select>
+                <label><input type="checkbox" id="cd-open"> Uncoded only</label>
+                <label><input type="checkbox" id="cd-cost" checked> With cost only</label>
+              </div>
+              <div class="wpbar" id="cd-bar">
+                <span class="muted" id="cd-count"></span>
+                <button class="acc" id="cd-accept">Accept suggestions for these rows</button>
+                <label class="wpo">Package <select id="cd-setpkg"></select></label>
+                <label class="wpo">MNL <select id="cd-setmnl"></select></label>
+                <button id="cd-apply">Apply to these rows</button>
+              </div>
+              <div class="tblwrap"><table id="tb-code"></table></div>
+              <div class="actions more"><button id="cd-more" hidden>Show more</button></div>
+              <div class="note">One code per material, used for every line of it. Dashed badges are suggestions from the material group (M03… → DIV 03, M0302… → DIV 0302, SM/SP/CS… → INDIRECT); they count only after you accept them. Package and MNL are the same lists as the subcontract report, so both roll up to the same packages.</div>
+            </div></div>
+        </div>
+
+        <div id="view-checks" role="tabpanel" aria-labelledby="tab-checks" hidden>
+          <div class="card" style="margin-bottom:16px"><div class="hd"><h3>Reconciliation and data checks</h3></div><div class="bd" id="checks"></div></div>
+          <div class="card"><div class="hd"><h3>Movement rules</h3><span class="muted" style="font-size:12px">how each MB51 movement type was classified in this load</span></div><div class="bd tblwrap"><table id="tb-rules"></table></div></div>
+        </div>
+        <div class="control" id="control" role="note"></div>
+      </section>
+    </main>
+  </div>
+</div>
+<!--LIBS-->
+<script>
+/*ENGINE*/
+</script>
+<script>
+/*APP*/
+</script>
+</body>
+</html>

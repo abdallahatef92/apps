@@ -1,0 +1,14 @@
+{
+  "name": "material-cost-report",
+  "private": true,
+  "description": "Standalone monthly material cost report (ME2N + MB51 + CJI3) built into one HTML file",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node test.mjs"
+  },
+  "devDependencies": {
+    "chart.js": "4.4.1",
+    "exceljs": "4.4.0",
+    "xlsx": "0.18.5"
+  }
+}
