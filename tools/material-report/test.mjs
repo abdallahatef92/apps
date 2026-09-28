@@ -119,7 +119,10 @@ const wb = XLSX.read(buf, { cellDates: true });
     const pr = (/<sheetPr[^>]*>([\s\S]*?)<\/sheetPr>/.exec(await z.file(n).async('string')) || [])[1] || '';
     const tags = [...pr.matchAll(/<(\w+)/g)].map((m) => m[1]).filter((t) => ['tabColor', 'outlinePr', 'pageSetUpPr'].includes(t));
     if (tags.join() !== ['tabColor', 'outlinePr', 'pageSetUpPr'].filter((t) => tags.includes(t)).join()) bad++; }
-  eq(bad, 0, 'sheetPr children in schema order'); }
+  eq(bad, 0, 'sheetPr children in schema order');
+  const mmx = await z.file('xl/worksheets/sheet2.xml').async('string');
+  eq((mmx.match(/<col [^>]*outlineLevel="1"[^>]*>/g) || []).filter((c) => /collapsed="1"/.test(c) && !/hidden="1"/.test(c)).length, 0, 'open month groups are not marked collapsed');
+  eq((mmx.match(/<col [^>]*outlineLevel="1"[^>]*>/g) || []).length > 0, true, 'month groups exist'); }
 eq(E.orderSheetPr('<sheetPr><tabColor rgb="1"/><pageSetUpPr fitToPage="1"/><outlinePr summaryBelow="0"/></sheetPr>'),
   '<sheetPr><tabColor rgb="1"/><outlinePr summaryBelow="0"/><pageSetUpPr fitToPage="1"/></sheetPr>', 'orderSheetPr reorders');
 eq(['Dashboard', 'Material Monthly', '_Rows', 'Materials', 'Price', 'Material Coding', 'Changes', 'Checks', 'Load history', 'Cost Detail', 'Movements', 'PO Lines', 'Movement Rules', 'Lists', '_Meta', '_Snap', '_POs'].every((n) => wb.SheetNames.includes(n)), true, 'all sheets written');
@@ -132,7 +135,7 @@ for (const r of mc.slice(h + 1)) if (r[0] === '13000040') { r[4] = 'DIV 0302'; r
 const P = E.readPrevious(aoa);
 eq(P.coding.get('13000040'), { package: 'DIV 0302', mnl: 'MAT', cec: '' }, 'coding read back from the report');
 eq(P.loads.length, 1, 'history carried'); eq(P.rows.size, 4, 'row IDs carried');
-{ const mmS = aoa['Material Monthly']; const ids = mmS.slice(3).map((r) => r[mmS[1].indexOf('Row ID')]).filter((x) => typeof x === 'number');
+{ const mmS = aoa['Material Monthly']; const ids = mmS.slice(3).map((r) => r[mmS[2].indexOf('Row ID')]).filter((x) => typeof x === 'number');
   eq(ids.length, 4, 'four data rows on Material Monthly'); } eq(P.snap.size, A.list.length, 'snapshot carried');
 // month 2: one more issue of rebar, one new PO line
 MB.push(MB[3].slice()); Object.assign(MB[MB.length - 1], { 7: '4900000010', 9: D('2026-03-03'), 12: -2, 13: -66000 });
@@ -147,6 +150,44 @@ eq(B.byPackage.find((p) => p.key === 'DIV 0302').total, rebar.cost + 66000, 'pac
 eq(B.changes.rows.map((x) => [x.type, x.r.material]), [['Cost moved', '13000040']], 'only rebar changed');
 eq(B.changes.rows[0].now.cost - B.changes.rows[0].prev.cost, 66000, 'Δ cost');
 eq(B.changes.newPO.map((l) => l.key), ['5000000009/10'], 'new PO line found');
+
+// ================================================================ cut-off
+// MB51 entry stamps are the posting date at 10:00 (see mv); CJI3 lines take their movement's stamp.
+{
+  const cut = (d, t) => Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10), ...(t || '23:59:59').split(':').map(Number));
+  // 1. Feb report, cut-off 25 Feb noon: A06 (no movement → its posting day, 28 Feb) and the 26 Feb movement wait
+  const C1 = E.analyse({ me: ME, mb: MB, cji: CJ }, { reportMonth: 202602, cutoff: cut('2026-02-25', '12:00:00') });
+  eq(C1.k.pending, 777 + 66000, 'after the cut-off or after the report month → pending'); eq(C1.pending.map((l) => l.docNo).sort(), ['A06', 'A10'], 'A06 (late entry) and A10 (March) pending');
+  eq(C1.pending.find((l) => l.docNo === 'A10').why, 'posted in Mar-26, after the report month', 'reason given');
+  eq(C1.k.cost, cost - 777, 'cost to the cut-off');
+  eq(C1.mats.get('11000001').qty.OTHER || 0, 0, 'movement after the cut-off is out of the quantity chain');
+  eq(C1.months, [202601, 202602], 'report months');
+  // 2. history: Jan reported with cut-off 3 Feb. A01 (posted 28 Jan) entered 10 Feb → too late for Jan → counted in Feb, flagged late
+  const MB2 = MB.map((r) => r.slice()); const row = MB2.find((r) => r[7] === '4900000001'); row[16] = D('2026-02-10');
+  const C2 = E.analyse({ me: ME, mb: MB2, cji: CJ }, { reportMonth: 202602, cutoff: cut('2026-03-05'), history: [{ reportMonth: 202601, cutoff: cut('2026-02-03') }] });
+  const a01 = C2.cost.find((l) => l.docNo === 'A01');
+  eq([a01.bucket, a01.late], [202602, true], 'back-dated line lands in the first open month');
+  eq(C2.byBucket[202601] || 0, 0, 'closed January stays empty'); eq(C2.k.lateLines, 1, 'one late posting');
+  eq(C2.checks.find((c) => c.id === 'late').count, 1, 'late check lists it');
+  // same line entered before the Jan cut-off is simply January
+  const C3 = E.analyse({ me: ME, mb: MB, cji: CJ }, { reportMonth: 202602, cutoff: cut('2026-03-05'), history: [{ reportMonth: 202601, cutoff: cut('2026-02-03') }] });
+  eq(C3.cost.find((l) => l.docNo === 'A01').bucket, 202601, 'on-time line keeps its posting month');
+  // 3. Opening roll-up: everything before Feb in Opening
+  const C4 = E.analyse({ me: ME, mb: MB, cji: CJ }, { reportMonth: 202602, cutoff: cut('2026-03-05'), openingBefore: 202602 });
+  eq(C4.byBucket.OPENING, 1800000, 'January rolled into Opening'); eq(C4.months, [202602], 'months start after Opening');
+  // 4. workbook: cut-off stored, read back as history, closed months unchanged next month
+  const b4 = await E.buildWorkbook(C3, { ExcelJS, JSZip }); const w4 = XLSX.read(b4, { cellDates: true }); const a4 = {};
+  for (const n of w4.SheetNames) a4[n] = XLSX.utils.sheet_to_json(w4.Sheets[n], { header: 1, raw: true, defval: '' });
+  const P4 = E.readPrevious(a4);
+  eq([P4.loads[0].reportMonth, P4.loads[0].cutoff], [202602, cut('2026-03-05')], 'report month and cut-off carried');
+  eq(P4.months.get('2026-01'), 1800000, 'month totals carried');
+  const C5 = E.analyse({ me: ME, mb: MB, cji: CJ }, { reportMonth: 202603, cutoff: cut('2026-04-03'), prev: P4, history: P4.loads });
+  eq(C5.checks.find((c) => c.id === 'frozen').level, 'good', 'closed months unchanged');
+  eq(C5.cost.find((l) => l.docNo === 'A10').bucket, 202603, 'March line counted in March');
+  const mm = a4['Material Monthly'], hdr = mm[2];
+  eq([hdr[11], hdr[14], hdr[hdr.indexOf('Total Price') - 1]], ['Opening Qty', 'Jan-26 Qty', 'Feb-26 Amount'], 'Material Monthly: Opening at L, first month at O, Total right after the last month');
+  eq(hdr.includes('Pending Amount') && hdr.indexOf('Pending Amount') > hdr.indexOf('Total Amount'), true, 'Pending after Total');
+}
 
 // ================================================================ real extracts (optional)
 if (process.env.MCR_REAL) {

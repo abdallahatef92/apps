@@ -38,7 +38,7 @@ const tick = () => new Promise((r) => setTimeout(r, 20));
 const KIND_TAG = { me: 'ME2N', mb: 'MB51', cji: 'CJI3' };
 async function readBook(file) {
   const buf = await file.arrayBuffer();
-  return XLSX.read(buf, { type: 'array', cellDates: true, dense: true });
+  return XLSX.read(buf, { type: 'array', cellDates: false, dense: true });   // raw serials: dates and entry times never shift with the PC's time zone
 }
 const aoaOf = (ws) => XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
 function setSlot(k, name, meta, ok) { $('name-' + k).textContent = name; $('meta-' + k).textContent = meta; $('slot-' + k).classList.toggle('ok', ok !== false); }
@@ -50,11 +50,11 @@ async function takeFiles(list) {
     let wb; try { wb = await readBook(f); } catch (e) { message('msgs', 'bad', `${esc(f.name)} could not be read: ${esc(e.message)}`); continue; }
     const names = wb.SheetNames;
     if (names.includes('_Meta') || names.includes('Material Coding')) {         // a previous material report
-      const aoa = {}; for (const n of ['_Meta', 'Material Coding', 'Load history', '_Snap', '_POs']) if (wb.Sheets[n]) aoa[n] = aoaOf(wb.Sheets[n]);
+      const aoa = {}; for (const n of ['_Meta', 'Material Coding', 'Load history', '_Snap', '_POs', '_Rows', '_Months']) if (wb.Sheets[n]) aoa[n] = aoaOf(wb.Sheets[n]);
       const P = E.readPrevious(aoa);
       if (!P) { message('msgs', 'warn', `${esc(f.name)} looks like a report but has no coding or history in it.`); continue; }
       state.prev = P; state.prevName = f.name;
-      setSlot('prev', f.name, `Load ${P.meta.loadNo || '?'} · data to ${E.dtext(P.meta.dataDate) || '?'} · ${P.coding.size} coded materials`);
+      setSlot('prev', f.name, P.meta.reportMonth ? `${E.mlabel(P.meta.reportMonth)} report · cut-off ${E.tsText(P.meta.cutoff) || 'none'} · ${P.coding.size} coded materials` : `Load ${P.meta.loadNo || '?'} · ${P.coding.size} coded materials (no cut-off recorded)`);
       continue;
     }
     if (names.includes('Packages') && (names.includes('Service Mapping') || names.includes('MNL'))) {   // the subcontract work package master
@@ -71,9 +71,11 @@ async function takeFiles(list) {
   }
   status('');
   const ready = ['me', 'mb', 'cji'].every((k) => state.files[k]);
-  $('btn-build').disabled = !ready; $('btn-clear').disabled = !Object.keys(state.files).length && !state.prev;
+  $('btn-clear').disabled = !Object.keys(state.files).length && !state.prev;
+  if (ready) setupPeriod(); else { $('period').hidden = true; state.period = null; }
+  updateBuild();
   if (!ready) status('Still needed: ' + ['me', 'mb', 'cji'].filter((k) => !state.files[k]).map((k) => KIND_TAG[k]).join(', '));
-  else if (state.A) build();                      // swapping one file rebuilds straight away
+  else if (state.A && cutoffValue() !== null) build();   // swapping one file rebuilds straight away
 }
 function readMasterLists(wb) {
   const rows = (n) => { const a = wb.Sheets[n] ? aoaOf(wb.Sheets[n]) : []; const h = (a[0] || []).map((x) => E.str(x)); return a.slice(1).map((r) => Object.fromEntries(h.map((k, j) => [k, r[j]]))); };
@@ -94,6 +96,7 @@ $('btn-clear').addEventListener('click', () => {
   $('meta-me').textContent = 'Material group, PO prices, open quantities'; $('meta-mb').textContent = 'Receipts, issues, transfers, stock';
   $('meta-cji').textContent = 'Goods issues (WA) on the project WBS'; $('meta-prev').textContent = 'Brings coding, load history and changes forward';
   $('meta-master').textContent = 'Package and MNL lists shared with the subcontract report';
+  $('period').hidden = true; state.period = null;
   $('results').hidden = true; $('empty').hidden = false; $('btn-build').disabled = true; $('btn-clear').disabled = true; $('msgs').innerHTML = ''; status('');
 });
 
@@ -131,7 +134,9 @@ async function build() {
 }
 const prevFits = () => state.prev && (!state.prev.project || state.prev.project === state.plant);
 function analyse() {
-  return E.analyse(state.files, { coding: state.coding, prev: prevFits() ? state.prev : null,
+  const prev = prevFits() ? state.prev : null;
+  return E.analyse(state.files, { coding: state.coding, prev, history: prev ? prev.loads : [],
+    reportMonth: +$('p-month').value || undefined, cutoff: cutoffValue(), openingBefore: +$('p-open').value || 0,
     packages: state.master ? state.master.packages : undefined, mnl: state.master ? state.master.mnl : undefined,
     files: { me: state.names.me, mb: state.names.mb, cji: state.names.cji } });
 }
@@ -187,12 +192,13 @@ function renderCharts() {
 // ------------------------------------------------------------------ overview
 function renderOverview() {
   const A = state.A, k = A.k, tie = A.checks.find((c) => c.id === 'total');
-  $('ov-eyebrow').textContent = `${A.PLANT}${A.PROJECT ? ' · ' + A.PROJECT : ''} · data to ${E.dtext(A.dataDate)} · load ${A.loadNo}`;
-  $('ov-title').textContent = `Material cost to date: ${n0(k.cost)} EGP`;
+  $('ov-eyebrow').textContent = `${A.PLANT}${A.PROJECT ? ' · ' + A.PROJECT : ''} · report ${E.mlabel(A.reportMonth)} · cut-off ${E.tsText(A.cutoff)} · load ${A.loadNo}`;
+  $('ov-title').textContent = `Material cost to the cut-off: ${n0(k.cost)} EGP`;
   const kpi = (l, v, s, lead) => `<div class="kpi${lead ? ' lead' : ''}"><div class="l">${esc(l)}</div><div class="v">${v}</div><div class="s">${s || ''}</div></div>`;
   $('kpis').innerHTML = [
     kpi('Material cost', mEGP(k.cost), `${k.costLines.toLocaleString('en-US')} WA lines · ${tie && tie.level === 'good' ? 'ties to SAP total ✓' : 'see Checks'}`, true),
-    kpi(`Cost in ${E.mlabel(k.curMonth)}`, mEGP(k.thisMonth), 'month of the data date'),
+    kpi(`Cost in ${E.mlabel(k.curMonth)}`, mEGP(k.thisMonth), k.lateLines ? `incl. ${n0(k.late)} late postings` : 'the report month'),
+    kpi('Pending · next report', mEGP(k.pending), `${k.pendingLines.toLocaleString('en-US')} lines after the cut-off`),
     kpi('Project consumption', mEGP(k.project), pc(k.cost ? k.project / k.cost : 0) + ' of cost'),
     kpi('To subcontractors', mEGP(k.subcon), 'Z21 · recoverable'),
     kpi('Received from vendors', mEGP(k.receivedVendor), 'MB51 value, 101/102/122'),
@@ -310,8 +316,8 @@ function renderPriceDetail(m) {
 // ------------------------------------------------------------------ changes
 function renderChanges() {
   const A = state.A, C = A.changes, loads = E.summarize(A).loads;
-  $('tb-loads').innerHTML = '<thead><tr><th>Load</th><th>Run on</th><th>Data date</th><th class="r">Material cost</th><th class="r">Project consumption</th><th class="r">To subcontractors</th><th class="r">Open PO value</th><th class="r">Materials</th><th>Files</th></tr></thead><tbody>' +
-    loads.map((l, i) => `<tr${i === loads.length - 1 ? ' class="tot"' : ''}><td class="num">${l.no}</td>${td(E.dtext(l.run), 'num')}${td(E.dtext(l.dataDate), 'num')}${tdn(l.cost)}${tdn(l.project)}${tdn(l.subcon)}${tdn(l.openPO)}<td class="r num">${l.materials || ''}</td>${td(`<span class="muted">${esc(l.files || '')}</span>`)}</tr>`).join('') + '</tbody>';
+  $('tb-loads').innerHTML = '<thead><tr><th>Load</th><th>Run on</th><th>Report</th><th>Cut-off</th><th class="r">Material cost</th><th class="r">Project consumption</th><th class="r">To subcontractors</th><th class="r">Open PO value</th><th class="r">Materials</th><th>Files</th></tr></thead><tbody>' +
+    loads.map((l, i) => `<tr${i === loads.length - 1 ? ' class="tot"' : ''}><td class="num">${l.no}</td>${td(E.dtext(l.run), 'num')}${td(l.reportMonth ? E.mlabel(l.reportMonth) : '')}${td(l.cutoff && isFinite(l.cutoff) ? E.tsText(l.cutoff) : '', 'num')}${tdn(l.cost)}${tdn(l.project)}${tdn(l.subcon)}${tdn(l.openPO)}<td class="r num">${l.materials || ''}</td>${td(`<span class="muted">${esc(l.files || '')}</span>`)}</tr>`).join('') + '</tbody>';
   if (!C.has) {
     $('chg-kpis').innerHTML = ''; $('chg-note').textContent = '';
     $('tb-chg').innerHTML = '<tbody><tr><td class="muted">No previous report loaded. Download this report, and load it next month alongside the new exports – this tab will then list every material whose cost, consumption, stock or open PO moved.</td></tr></tbody>';
@@ -401,7 +407,7 @@ function renderChecks() {
 }
 function renderControl() {
   const A = state.A, t = A.checks.find((c) => c.id === 'total'), u = A.checks.find((c) => c.id === 'unmatched');
-  $('control').innerHTML = `<b>CONTROL</b><span>CJI3 WA ${n0(A.k.cost)}</span><span>printed total ${A.k.printedTotal === null ? '–' : n0(A.k.printedTotal)}</span>` +
+  $('control').innerHTML = `<b>CONTROL</b><span>cut-off ${E.tsText(A.cutoff)}</span><span>reported ${n0(A.k.cost)} + pending ${n0(A.k.pending)} = CJI3 WA ${n0(A.k.costAll)}</span><span>printed total ${A.k.printedTotal === null ? '–' : n0(A.k.printedTotal)}</span>` +
     `<span class="${t.level === 'good' ? 'ok' : 'bad'}">${t.level === 'good' ? '✓ ties' : '✗ does not tie'}</span>` +
     `<span class="${u.level === 'good' ? 'ok' : 'bad'}">${u.level === 'good' ? '✓ every line has its movement' : `✗ ${u.count} lines without movement`}</span>` +
     `<span>${A.k.movements.toLocaleString('en-US')} movements · ${A.k.poLines.toLocaleString('en-US')} PO lines · ${A.k.wbs} WBS</span>`;
@@ -419,3 +425,63 @@ $('btn-download').addEventListener('click', async () => {
   } catch (e) { $('dl-status').textContent = 'Could not write the workbook: ' + e.message; }
   $('btn-download').disabled = false;
 });
+
+// ------------------------------------------------------------------ report period (step 2)
+// The cut-off is a moment in time: whatever SAP stamped as entered after it is Pending and belongs to the next report.
+// Every report stores its report month and cut-off, so months already reported never change.
+const two = (n) => String(n).padStart(2, '0');
+function cutoffValue() {
+  const d = $('p-date').value; if (!d) return null;
+  const t = ($('p-time').value || '23:59:59').split(':').map(Number);
+  return Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10), t[0] || 0, t[1] || 0, t[2] || 0);
+}
+function setCutoff(ms) { const x = new Date(ms); $('p-date').value = `${x.getUTCFullYear()}-${two(x.getUTCMonth() + 1)}-${two(x.getUTCDate())}`;
+  $('p-time').value = `${two(x.getUTCHours())}:${two(x.getUTCMinutes())}:${two(x.getUTCSeconds())}`; periodChanged(); }
+function setupPeriod() {
+  const info = E.periodInfo(state.files); if (!info) return;
+  state.period = info; $('period').hidden = false;
+  const prev = state.prev, pm = prev && prev.meta.reportMonth, pc0 = prev && prev.meta.cutoff;
+  const months = new Set(info.months); if (pm) months.add(E.nextMonth(pm));
+  const list = [...months].sort((a, b) => b - a), keep = +$('p-month').value;
+  $('p-month').innerHTML = list.map((m) => `<option value="${m}">${E.mlabel(m)}</option>`).join('');
+  $('p-month').value = String(list.includes(keep) ? keep : (pm && list.includes(E.nextMonth(pm)) ? E.nextMonth(pm) : list[0]));
+  const ob = $('p-open').value;
+  $('p-open').innerHTML = '<option value="0">No roll-up</option>' + [...info.months].sort((a, b) => a - b).slice(1).map((m) => `<option value="${m}">Months before ${E.mlabel(m)}</option>`).join('');
+  $('p-open').value = ob && [...$('p-open').options].some((o) => o.value === ob) ? ob : String(prev && prev.meta.openingBefore ? prev.meta.openingBefore : 0);
+  $('p-latest').textContent = `Latest entry in the files (${E.tsText(info.maxEntry)})`;
+  $('p-last').innerHTML = prev && pm ? `Last report: <b>${E.mlabel(pm)}</b>, cut-off <b>${esc(E.tsText(pc0))}</b>. Lines entered after it and posted in ${E.mlabel(pm)} or earlier are counted in this report as late postings.`
+    : 'First report: every line entered up to the cut-off sits in its posting month.';
+  if (!info.hasTs) message('msgs', 'warn', 'This CJI3 export has no "Created on" column, so the cut-off can only use posting dates. Add Created on and Time of Entry to the CJI3 layout.');
+  periodChanged();
+}
+let pvTimer = null;
+function periodChanged() { updateBuild(); clearTimeout(pvTimer); pvTimer = setTimeout(previewPeriod, 250); }
+for (const id of ['p-month', 'p-date', 'p-time', 'p-open']) $(id).addEventListener('input', periodChanged);
+$('p-eom').addEventListener('click', () => { const m = +$('p-month').value; setCutoff(Date.UTC(Math.floor(m / 100), m % 100, 1) - 1000); });
+$('p-latest').addEventListener('click', () => { if (state.period && state.period.maxEntry) setCutoff(state.period.maxEntry); });
+function periodProblem() {
+  const c = cutoffValue(), m = +$('p-month').value, prev = prevFits() || (state.prev && !state.plant) ? state.prev : null;
+  if (c === null) return 'Choose the cut-off date (and time) to build the report.';
+  if (m && c < Date.UTC(Math.floor(m / 100), (m % 100) - 1, 1)) return `The cut-off is before ${E.mlabel(m)} starts – pick a later cut-off or an earlier report month.`;
+  if (prev && prev.meta.reportMonth && m > prev.meta.reportMonth && prev.meta.cutoff && c <= prev.meta.cutoff)
+    return `The cut-off must be later than the last report's (${E.tsText(prev.meta.cutoff)}).`;
+  return null;
+}
+function updateBuild() {
+  const ready = ['me', 'mb', 'cji'].every((k) => state.files[k]);
+  $('btn-build').disabled = !ready || !!periodProblem();
+}
+function previewPeriod() {
+  const host = $('p-preview'); host.innerHTML = '';
+  if (!state.period) return;
+  const bad = periodProblem(); if (bad) { host.innerHTML = `<div class="msg warn">${esc(bad)}</div>`; return; }
+  if (!state.plant) state.plant = guessPlant();
+  if (!state.coding) state.coding = codingFor(state.plant);
+  const A = analyse(); if (A.errors) return;
+  const m = +$('p-month').value, prev = prevFits() ? state.prev : null;
+  const rerun = prev && prev.meta.reportMonth && m <= prev.meta.reportMonth;
+  host.innerHTML = `<div class="msg good">Up to the cut-off: <b>${n0(A.k.cost)}</b> EGP in ${A.k.costLines.toLocaleString('en-US')} lines` +
+    `<br>Pending for the next report: <b>${n0(A.k.pending)}</b> (${A.k.pendingLines.toLocaleString('en-US')} lines)` +
+    (A.history.length ? `<br>Late postings counted in ${E.mlabel(m)}: <b>${n0(A.k.late)}</b> (${A.k.lateLines} lines)` : '') + '</div>' +
+    (rerun ? `<div class="msg warn">${E.mlabel(m)} was already reported (load ${prev.meta.loadNo}). Building it again replaces that report; earlier months stay as they were.</div>` : '');
+}

@@ -40,6 +40,16 @@
           <div class="slot" id="slot-prev"><span class="tag">LAST REPORT</span><span class="name" id="name-prev">Last month's report — optional</span><span class="meta" id="meta-prev">Brings coding, load history and changes forward</span></div>
           <div class="slot" id="slot-master"><span class="tag">WP MASTER</span><span class="name" id="name-master">Work package master — optional</span><span class="meta" id="meta-master">Package and MNL lists shared with the subcontract report</span></div>
         </div>
+        <div class="period" id="period" hidden>
+          <div class="hd2"><span class="eyebrow">Step 2 · Report period</span></div>
+          <label class="pf">Report month <select id="p-month"></select></label>
+          <div class="pf">Cut-off <span class="muted">(entered in SAP up to)</span>
+            <span class="pin"><input type="date" id="p-date" aria-label="Cut-off date"><input type="time" id="p-time" step="1" aria-label="Cut-off time"></span></div>
+          <div class="pbtns"><button type="button" id="p-eom">End of report month</button><button type="button" id="p-latest">Latest entry in the files</button></div>
+          <label class="pf">Roll into Opening <select id="p-open"></select></label>
+          <div class="muted small" id="p-last"></div>
+          <div id="p-preview"></div>
+        </div>
         <div class="actions">
           <button class="primary" id="btn-build" disabled>Build report</button>
           <button id="btn-clear" disabled>Clear</button>

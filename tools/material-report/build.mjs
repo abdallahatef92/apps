@@ -1,4 +1,4 @@
-// Builds dist/Material_Cost_Report_Rev01.html: one self-contained page (libraries, engine, page) that works offline.
+// Builds dist/Material_Cost_Report_Rev02.html: one self-contained page (libraries, engine, page) that works offline.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +21,6 @@ const html = read('page.html')
   .replace('/*ENGINE*/', () => read('engine.js').replace(/<\/script/gi, '<\\/script'))
   .replace('/*APP*/', () => read('app.js').replace(/<\/script/gi, '<\\/script'));
 mkdirSync(join(here, 'dist'), { recursive: true });
-const out = join(here, 'dist', 'Material_Cost_Report_Rev01.html');
+const out = join(here, 'dist', 'Material_Cost_Report_Rev02.html');
 writeFileSync(out, html);
 console.log(`${out} ${(html.length / 1048576).toFixed(2)} MB`);

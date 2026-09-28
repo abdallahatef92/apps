@@ -37,6 +37,25 @@
   const mlabel = (m) => m ? MON[(m % 100) - 1] + '-' + String(Math.floor(m / 100)).slice(2) : '';
   const mtext = (m) => m ? `${Math.floor(m / 100)}-${String(m % 100).padStart(2, '0')}` : '';
   const dtext = (d) => { if (!d) return ''; const o = ymd(d); return `${o.y}-${String(o.m).padStart(2, '0')}-${String(o.d).padStart(2, '0')}`; };
+  // Entry timestamps are wall-clock times kept as Date.UTC numbers, so no time zone ever shifts a cut-off.
+  // SAP stamps "Created on" + "Time of Entry" when the document is saved; unlike the posting date it cannot be back-dated.
+  function secondsOf(v) {
+    if (typeof v === 'number') return Math.round((v - Math.floor(v)) * 86400);        // Excel time fraction
+    if (v instanceof Date) return v.getHours() * 3600 + v.getMinutes() * 60 + v.getSeconds();
+    const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(str(v)); return m ? (+m[1]) * 3600 + (+m[2]) * 60 + (+(m[3] || 0)) : null;
+  }
+  function stamp(dateV, timeV) {
+    const d = toDate(dateV); if (!d) return null; const o = ymd(d), sec = secondsOf(timeV);
+    return Date.UTC(o.y, o.m - 1, o.d) + (sec === null ? 86399 : sec) * 1000;      // no time → end of that day
+  }
+  const tsText = (t) => { if (t === null || t === undefined || !isFinite(t)) return ''; const d = new Date(t), p = (n) => String(n).padStart(2, '0');
+    return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`; };
+  const tsParse = (t) => { const m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/.exec(str(t)); return m ? Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] || 23), +(m[5] || 59), +(m[6] || (m[4] ? 0 : 59))) : null; };
+  const endOfMonth = (mk) => Date.UTC(Math.floor(mk / 100), mk % 100, 1) - 1000;         // last second of month mk
+  const monthOfTs = (t) => { const d = new Date(t); return d.getUTCFullYear() * 100 + d.getUTCMonth() + 1; };
+  const nextMonth = (mk) => (mk % 100 === 12 ? mk + 89 : mk + 1);
+  const bucketText = (b) => typeof b === 'number' ? mtext(b) : b;
+  const bucketLabel = (b) => typeof b === 'number' ? mlabel(b) : (b === 'OPENING' ? 'Opening' : 'Pending');
   const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
   const add = (o, k, v) => { o[k] = (o[k] || 0) + v; };
   const sum = (arr, f) => arr.reduce((s, x) => s + f(x), 0);
@@ -54,7 +73,8 @@
         amt: 'Val/COArea Crcy', wbs: 'WBS Element', coName: 'CO Object Name', pdate: 'Posting Date', docType: 'Document Type',
         refDoc: 'Ref. document number', refItem: ['Posting Row', 'Ref. document number'], refFy: 'Ref. Fiscal Year',
         material: 'Material', matDesc: 'Material Description', qty: 'Total quantity', uom: 'Posted unit of meas.',
-        revDoc: 'Reversal document', reversed: 'Reversed', project: 'Project definition', plant: 'Plant', user: 'User Name' },
+        revDoc: 'Reversal document', reversed: 'Reversed', project: 'Project definition', plant: 'Plant', user: 'User Name',
+        created: 'Created on', ctime: 'Time of Entry' },
       need: ['docNo', 'fy', 'ce', 'amt', 'wbs', 'pdate', 'docType', 'refDoc', 'refItem', 'refFy', 'material'],
     },
     mb: {
@@ -62,7 +82,8 @@
       cols: { material: 'Material', plant: 'Plant', sloc: 'Storage Location', mvt: 'Movement Type', mvtText: 'Movement Type Text',
         doc: 'Material Document', item: 'Material Doc.Item', pdate: 'Posting Date', desc: 'Material Description', year: 'Material Doc. Year',
         qty: 'Qty in unit of entry', amt: 'Amt.in Loc.Cur.', uom: 'Unit of Entry', po: 'Purchase order', poItem: ['Item', 'Purchase order'],
-        supplier: 'Supplier', ref: 'Reference', wbs: 'WBS Element', order: 'Order', text: 'Text', headerText: 'Document Header Text', user: 'User Name' },
+        supplier: 'Supplier', ref: 'Reference', wbs: 'WBS Element', order: 'Order', text: 'Text', headerText: 'Document Header Text', user: 'User Name',
+        edate: 'Entry Date', etime: 'Time of Entry' },
       need: ['material', 'mvt', 'doc', 'item', 'year', 'pdate', 'qty', 'amt'],
     },
     me: {
@@ -215,9 +236,10 @@
       rows.push({ material: code(g('material')), plant: str(g('plant')), sloc: str(g('sloc')), mvt: str(g('mvt')).toUpperCase(), mvtText: str(g('mvtText')),
         doc, item: code(g('item')), year: code(g('year')), key: doc + '/' + code(g('year')) + '/' + code(g('item')), date, month: monthKey(date),
         desc: str(g('desc')), qty: num(g('qty')), amt: num(g('amt')), uom: str(g('uom')), po: code(g('po')), poItem: code(g('poItem')),
+        ts: ix.edate >= 0 ? stamp(g('edate'), g('etime')) : null,
         supplier: code(g('supplier')), wbs: str(g('wbs')), order: code(g('order')), text: str(g('text')), headerText: str(g('headerText')) });
     }
-    return { rows, skipped };
+    return { rows, skipped, hasTs: ix.edate >= 0 };
   }
   function parseCJI3(aoa) {
     const { ix, hr, missing } = mapColumns('cji', aoa); if (missing.length) return { error: missing };
@@ -235,9 +257,10 @@
         docType: str(g('docType')), refDoc: code(g('refDoc')), refItem: code(g('refItem')), refFy: code(g('refFy')),
         refKey: code(g('refDoc')) + '/' + code(g('refFy')) + '/' + code(g('refItem')),
         material: code(g('material')), matDesc: str(g('matDesc')), qty: num(g('qty')), uom: str(g('uom')),
-        reversal: str(g('revDoc')) === 'X', reversed: str(g('reversed')) === 'X', project: str(g('project')), plant: str(g('plant')) });
+        reversal: str(g('revDoc')) === 'X', reversed: str(g('reversed')) === 'X', project: str(g('project')), plant: str(g('plant')),
+        ts: ix.created >= 0 ? stamp(g('created'), g('ctime')) : null });
     }
-    return { lines, skipped, printedTotal };
+    return { lines, skipped, printedTotal, hasTs: ix.created >= 0 };
   }
 
   // ================================================================== ANALYSE
@@ -263,24 +286,59 @@
     if (dupMov) warnings.push(`${dupMov} MB51 lines repeat a material document + item already seen – the second copy is ignored for matching.`);
     // ---- CJI3: WA only, tie each line to its movement
     const nonWA = CJ.lines.filter((l) => l.docType !== 'WA');
-    const cost = CJ.lines.filter((l) => l.docType === 'WA');
-    const dupCost = cost.length - new Set(cost.map((l) => l.key)).size;
+    const costAll = CJ.lines.filter((l) => l.docType === 'WA');
+    const dupCost = costAll.length - new Set(costAll.map((l) => l.key)).size;
     if (dupCost) warnings.push(`${dupCost} CJI3 lines repeat a document + posting row + year. Check that the extract was not pasted twice.`);
-    for (const l of cost) {
+    for (const l of costAll) {
       const m = movByKey.get(l.refKey);
       l.mov = m || null; l.cls = m ? m.cls : null; l.costClass = costClassOf(l.cls);
       l.mqty = m ? -m.qty : 0;                        // consumption quantity (MB51 issues are negative)
       if (m) m.costLine = l;
+      // a cost line and its movement are one save in SAP (their stamps differ by a second at most); the movement's stamp decides,
+      // so quantity and cost always fall on the same side of the cut-off
+      l.entry = (m && m.ts !== null) ? m.ts : (l.ts !== null ? l.ts : (l.date ? stamp(l.date, null) : null));
     }
-    const plants = [...new Set(MB.rows.map((m) => m.plant).concat(cost.map((l) => l.plant)).filter(Boolean))];
+    const plants = [...new Set(MB.rows.map((m) => m.plant).concat(costAll.map((l) => l.plant)).filter(Boolean))];
     const PLANT = plants.length === 1 ? plants[0] : (plants.sort().join('+') || '');
-    const PROJECT = [...new Set(cost.map((l) => l.project).filter(Boolean))].join(', ');
+    const PROJECT = [...new Set(costAll.map((l) => l.project).filter(Boolean))].join(', ');
 
-    // ---- months and data date
-    const maxDate = [...cost.map((l) => l.date), ...MB.rows.map((m) => m.date)].filter(Boolean).reduce((a, b) => (b > a ? b : a), null);
-    const dataDate = opts.dataDate || maxDate;
-    const months = [...new Set(cost.map((l) => l.month).filter(Boolean))].sort((a, b) => a - b);
-    const curMonth = monthKey(dataDate);
+    // ---- report period: report month + cut-off (a moment in time), and the cut-offs of the reports before this one
+    const postMonths = [...new Set(costAll.map((l) => l.month).filter(Boolean))].sort((a, b) => a - b);
+    const maxEntry = costAll.reduce((a, l) => (l.entry !== null && l.entry > a ? l.entry : a), -Infinity);
+    const reportMonth = opts.reportMonth || postMonths[postMonths.length - 1] || 0;
+    const cutoff = (opts.cutoff !== undefined && opts.cutoff !== null) ? opts.cutoff : Infinity;
+    const openingBefore = opts.openingBefore || 0;
+    if (!CJ.hasTs) warnings.push('CJI3 has no "Created on" column – the cut-off falls back to the posting date, so back-dated postings cannot be caught.');
+    // reports already issued, oldest first; a re-run of this month (or an earlier one) is not history
+    const history = (opts.history || []).filter((h) => h.reportMonth && h.cutoff && h.reportMonth < reportMonth && h.cutoff < cutoff)
+      .sort((a, b) => a.reportMonth - b.reportMonth);
+    const periods = history.concat([{ reportMonth, cutoff, current: true }]);
+    // A line belongs to the first report whose cut-off it was entered before and whose month it has reached. In that report
+    // it sits in its posting month if that month was still open, else in the report month (a late posting). Months already
+    // reported never change: a back-dated line entered after their cut-off lands in the first report that sees it.
+    const place = (entry, month) => {
+      const t = entry === null ? endOfMonth(month) : entry;
+      let closed = 0;
+      for (const p of periods) {
+        if (t <= p.cutoff && month <= p.reportMonth) return { bucket: month > closed ? month : p.reportMonth, late: !(month > closed), in: p.reportMonth, now: !!p.current };
+        closed = p.reportMonth;
+      }
+      return { bucket: 'PENDING', late: false, in: null, now: false };
+    };
+    for (const l of costAll) {
+      const x = place(l.entry, l.month); l.bucket = x.bucket; l.late = x.late; l.reportedIn = x.in;
+      if (typeof l.bucket === 'number' && openingBefore && l.bucket < openingBefore) l.bucket = 'OPENING';
+      l.why = l.bucket === 'PENDING' ? (l.month > reportMonth ? `posted in ${mlabel(l.month)}, after the report month` : `entered ${tsText(l.entry)}, after the cut-off`)
+        : (l.late ? `posted ${dtext(l.date)} but entered ${tsText(l.entry)}, after ${mlabel(l.month)} was reported – counted in ${mlabel(l.reportedIn)}` : '');
+    }
+    for (const m of MB.rows) { const x = place(m.ts !== null ? m.ts : (m.date ? stamp(m.date, null) : null), m.month); m.pending = x.bucket === 'PENDING'; }
+    const cost = costAll.filter((l) => l.bucket !== 'PENDING'), pending = costAll.filter((l) => l.bucket === 'PENDING');
+    const movIn = MB.rows.filter((m) => !m.pending);
+    const dataDate = isFinite(cutoff) ? new Date(cutoff) : (opts.dataDate || [...costAll.map((l) => l.date)].filter(Boolean).reduce((a, b) => (b > a ? b : a), null));
+    const first = cost.reduce((a, l) => (typeof l.bucket === 'number' && l.bucket < a ? l.bucket : a), reportMonth || Infinity);
+    const months = []; if (reportMonth) for (let mk = first; mk <= reportMonth; mk = nextMonth(mk)) months.push(mk);   // contiguous, oldest first
+    const hasOpening = cost.some((l) => l.bucket === 'OPENING');
+    const curMonth = reportMonth;
 
     // ---- materials: every material that has cost, a movement, or an open PO line
     const mats = new Map();
@@ -288,14 +346,15 @@
       let r = mats.get(id);
       if (!r) { const me = matME.get(id);
         r = { material: id, desc: me ? me.text : '', group: me ? me.group : '', unit: '', poUnit: me ? me.unit : '', qty: {}, val: {}, ordered: 0, orderedVal: 0,
-          openQty: 0, openVal: 0, stoOrdered: 0, stoOpen: 0, cost: 0, costBy: {}, costQty: 0, consQty: 0, byMonth: {}, qtyByMonth: {}, issCostByMonth: {}, wbs: new Set(),
-          po: [], cjiUnit: '', lastMove: null };
+          openQty: 0, openVal: 0, stoOrdered: 0, stoOpen: 0, cost: 0, pendingCost: 0, costBy: {}, costQty: 0, consQty: 0, byMonth: {}, qtyByMonth: {}, issCostByMonth: {}, wbs: new Set(),
+          po: [], cjiUnit: '', lastMove: null, pendingMov: 0 };
         mats.set(id, r); }
       return r;
     };
     for (const m of MB.rows) {
       const r = mat(m.material);
       if (!r.desc) r.desc = m.desc; if (!r.unit) r.unit = m.uom;
+      if (m.pending) { r.pendingMov++; continue; }     // after the cut-off: next report's movement
       add(r.qty, m.cls, m.qty); add(r.val, m.cls, m.amt);
       if (m.date && (!r.lastMove || m.date > r.lastMove)) r.lastMove = m.date;
     }
@@ -306,10 +365,11 @@
       if (l.kind === 'PUR') { r.ordered += l.qty; r.orderedVal += l.value; r.openQty += l.openQty; r.openVal += l.openVal; }
       else { r.stoOrdered += l.qty; r.stoOpen += l.openQty; }
     }
-    for (const l of cost) {
+    for (const l of costAll) {
       const r = mat(l.material); if (!r.desc) r.desc = l.matDesc; if (!r.cjiUnit) r.cjiUnit = l.uom; if (!r.unit) r.unit = l.uom;
-      r.cost += l.amt; add(r.costBy, l.costClass, l.amt); add(r.byMonth, l.month, l.amt);
-      if (l.cls === 'ISS_P' || l.cls === 'ISS_S') { r.consQty += l.mqty; add(r.qtyByMonth, l.month, l.mqty); add(r.issCostByMonth, l.month, l.amt); r.costQty += l.amt; }
+      if (l.bucket === 'PENDING') { r.pendingCost += l.amt; continue; }
+      r.cost += l.amt; add(r.costBy, l.costClass, l.amt); add(r.byMonth, l.bucket, l.amt);
+      if (l.cls === 'ISS_P' || l.cls === 'ISS_S') { r.consQty += l.mqty; add(r.qtyByMonth, l.bucket, l.mqty); add(r.issCostByMonth, l.bucket, l.amt); r.costQty += l.amt; }
       if (l.wbs) r.wbs.add(l.wbs);
     }
     // coding: what was coded, else nothing (suggestions are only proposals until someone accepts them)
@@ -323,13 +383,17 @@
       r.balance = q6(CLASSES.filter((c) => c.stock).reduce((s, c) => s + (r.qty[c.code] || 0), 0));
       r.issuePrice = r.consQty > 1e-9 ? r.costQty / r.consQty : null;
       // price: purchase lines only, priced, not deleted
-      const pl = r.po.filter((l) => l.kind === 'PUR' && l.unitPrice > 0 && l.del !== 'L').sort((a, b) => cmp(a.date ? a.date.getTime() : 0, b.date ? b.date.getTime() : 0) || cmp(a.key, b.key));
+      const byDate = (a, b) => cmp(a.date ? a.date.getTime() : 0, b.date ? b.date.getTime() : 0) || cmp(a.key, b.key);
+      const pl = r.po.filter((l) => l.kind === 'PUR' && l.unitPrice > 0 && l.del !== 'L').sort(byDate);
       if (pl.length) {
         const q = sum(pl, (l) => l.qty);
         r.price = { n: pl.length, vendors: new Set(pl.map((l) => l.vendor)).size, min: Math.min(...pl.map((l) => l.unitPrice)), max: Math.max(...pl.map((l) => l.unitPrice)),
           last: pl[pl.length - 1], wavg: q ? sum(pl, (l) => l.unitPrice * l.qty) / q : sum(pl, (l) => l.unitPrice) / pl.length };
         r.price.spread = r.price.min ? r.price.max / r.price.min - 1 : null;
       } else r.price = null;
+      // last vendor: the latest purchase line (issues from stock carry no vendor)
+      const lv = r.po.filter((l) => l.kind === 'PUR').sort(byDate).pop();
+      r.lastVendorCode = lv ? lv.vendorCode : ''; r.lastVendorName = lv ? lv.vendor.slice(lv.vendorCode.length).trim() : '';
       r.priceVar = r.price && r.issuePrice !== null && r.price.wavg ? r.issuePrice / r.price.wavg - 1 : null;
       if (!r.unit) r.unit = r.poUnit;
     }
@@ -340,12 +404,13 @@
     // Each row keeps a permanent Row ID from load to load (hidden _Rows sheet); new rows take the next free number.
     const prevRows = (opts.prev && opts.prev.rows) || new Map();
     const mm = new Map();
-    for (const l of cost) {
+    for (const l of costAll) {
       l.lineType = LINE_TYPE[l.cls] || (l.cls ? 'Other (' + l.cls + ')' : 'No MB51 movement');
       const key = l.material + '|' + l.lineType, q = l.mov ? l.mqty : l.qty; l.rowKey = key;
       let o = mm.get(key);
       if (!o) { o = { key, material: l.material, lineType: l.lineType, amt: 0, qty: 0, byMonth: {}, qtyByMonth: {} }; mm.set(key, o); }
-      o.amt += l.amt; o.qty += q; add(o.byMonth, l.month, l.amt); add(o.qtyByMonth, l.month, q);
+      if (l.bucket !== 'PENDING') { o.amt += l.amt; o.qty += q; }
+      add(o.byMonth, l.bucket, l.amt); add(o.qtyByMonth, l.bucket, q);
     }
     let nextId = Math.max(0, ...[...prevRows.values()].map((x) => x.id || 0));
     const rowIds = new Map(prevRows);                 // rows that went away keep their number, so an ID is never reused
@@ -353,15 +418,18 @@
     for (const o of mm.values()) { const x = rowIds.get(o.key); o.id = x.id; o.first = x.first; o.isNew = !!opts.prev && x.first === loadNo; }
     const monthlyRows = [...mm.values()];
 
-    // ---- totals
+    // ---- totals (reported = up to the cut-off; pending is shown, never added)
     const T = sum(cost, (l) => l.amt);
     const byClassCost = {}; for (const l of cost) add(byClassCost, l.costClass, l.amt);
-    const val = (cls) => sum(MB.rows.filter((m) => m.cls === cls), (m) => m.amt);
+    const val = (cls) => sum(movIn.filter((m) => m.cls === cls), (m) => m.amt);
+    const lateL = cost.filter((l) => l.late);
     const k = {
-      cost: T, costLines: cost.length, printedTotal: CJ.printedTotal, skippedCji: CJ.skipped,
+      cost: T, costLines: cost.length, costAll: sum(costAll, (l) => l.amt), printedTotal: CJ.printedTotal, skippedCji: CJ.skipped,
+      pending: sum(pending, (l) => l.amt), pendingLines: pending.length, late: sum(lateL, (l) => l.amt), lateLines: lateL.length,
+      pendingMov: MB.rows.length - movIn.length, maxEntry: isFinite(maxEntry) ? maxEntry : null,
       project: byClassCost[COST_CLASS.ISS_P] || 0, subcon: byClassCost[COST_CLASS.ISS_S] || 0, scrap: byClassCost[COST_CLASS.SCRAP] || 0,
-      unmatched: sum(cost.filter((l) => !l.mov), (l) => l.amt),
-      thisMonth: sum(cost.filter((l) => l.month === curMonth), (l) => l.amt), curMonth,
+      unmatched: sum(cost.filter((l) => !l.mov), (l) => l.amt), opening: sum(cost.filter((l) => l.bucket === 'OPENING'), (l) => l.amt),
+      thisMonth: sum(cost.filter((l) => l.bucket === reportMonth), (l) => l.amt), curMonth,
       receivedVendor: val('RCV_V'), ownerSupplied: val('OWNER'), toOrders: -val('ISS_O'),
       openPO: sum(ME.lines.filter((l) => l.kind === 'PUR' && l.del !== 'L'), (l) => l.openVal),
       orderedVal: sum(ME.lines.filter((l) => l.kind === 'PUR' && l.del !== 'L'), (l) => l.value),
@@ -369,34 +437,46 @@
       pos: new Set(ME.lines.filter((l) => l.kind === 'PUR').map((l) => l.po)).size,
       vendors: new Set(ME.lines.filter((l) => l.kind === 'PUR').map((l) => l.vendor)).size,
       groups: new Set(list.filter((r) => Math.abs(r.cost) > 1e-9).map((r) => r.group)).size,
-      movements: MB.rows.length, poLines: ME.lines.length, wbs: new Set(cost.map((l) => l.wbs)).size,
+      movements: movIn.length, poLines: ME.lines.length, wbs: new Set(cost.map((l) => l.wbs)).size,
     };
 
-    // ---- roll-ups (cost by month by group / package)
+    // ---- roll-ups (cost by report bucket by group / package)
     const roll = (keyOf) => {
       const m = new Map();
       for (const l of cost) { const r = mats.get(l.material), key = keyOf(r);
         let o = m.get(key); if (!o) { o = { key, total: 0, byMonth: {}, materials: new Set() }; m.set(key, o); }
-        o.total += l.amt; add(o.byMonth, l.month, l.amt); o.materials.add(l.material); }
+        o.total += l.amt; add(o.byMonth, l.bucket, l.amt); o.materials.add(l.material); }
       return [...m.values()].sort((a, b) => b.total - a.total || cmp(a.key, b.key));
     };
     const byGroup = roll((r) => r.group || '(no group)');
     const byPackage = roll((r) => r.package || 'UNALLOCATED');
     const byClassMonth = {};
-    for (const l of cost) { byClassMonth[l.costClass] = byClassMonth[l.costClass] || {}; add(byClassMonth[l.costClass], l.month, l.amt); }
+    for (const l of cost) { byClassMonth[l.costClass] = byClassMonth[l.costClass] || {}; add(byClassMonth[l.costClass], l.bucket, l.amt); }
+    const byBucket = {}; for (const l of cost) add(byBucket, l.bucket, l.amt);
 
-    // ---- movement type summary (what the rules did)
+    // ---- movement type summary (what the rules did, up to the cut-off)
     const mvtSum = new Map();
-    for (const m of MB.rows) { const kk = m.mvt + '\u0001' + m.mvtText + '\u0001' + m.cls;
+    for (const m of movIn) { const kk = m.mvt + '\u0001' + m.mvtText + '\u0001' + m.cls;
       const o = mvtSum.get(kk) || { mvt: m.mvt, text: m.mvtText, cls: m.cls, n: 0, qty: 0, amt: 0, cost: 0, costN: 0 };
-      o.n++; o.qty += m.qty; o.amt += m.amt; if (m.costLine) { o.cost += m.costLine.amt; o.costN++; } mvtSum.set(kk, o); }
+      o.n++; o.qty += m.qty; o.amt += m.amt; if (m.costLine && m.costLine.bucket !== 'PENDING') { o.cost += m.costLine.amt; o.costN++; } mvtSum.set(kk, o); }
     const mvtTypes = [...mvtSum.values()].sort((a, b) => cmp(a.mvt, b.mvt) || cmp(a.text, b.text));
 
-    const A = { PLANT, PROJECT, dataDate, months, curMonth, files: opts.files || {}, me: ME, mb: MB, cji: CJ, cost, nonWA, mats, list, k, monthlyRows, rowIds, loadNo,
+    const A = { PLANT, PROJECT, dataDate, months, curMonth, reportMonth, cutoff, openingBefore, hasOpening, history, postMonths,
+      files: opts.files || {}, me: ME, mb: MB, cji: CJ, cost, costAll, pending, nonWA, mats, list, k, monthlyRows, rowIds, loadNo, byBucket,
       byGroup, byPackage, byClassMonth, mvtTypes, warnings, packages, mnls, prev: opts.prev || null };
     A.checks = runChecks(A);
     A.changes = diffPrevious(A);
     return A;
+  }
+
+  // What the page needs to offer a report period before building: posting months and the latest entry stamp.
+  function periodInfo(src) {
+    const CJ = parseCJI3(src.cji || [[]]), MB = parseMB51(src.mb || [[]]);
+    if (CJ.error || MB.error) return null;
+    const wa = CJ.lines.filter((l) => l.docType === 'WA');
+    const months = [...new Set(wa.map((l) => l.month).filter(Boolean))].sort((a, b) => a - b);
+    const stamps = wa.map((l) => l.ts).concat(MB.rows.map((m) => m.ts)).filter((t) => t !== null);
+    return { months, maxEntry: stamps.length ? Math.max(...stamps) : null, hasTs: CJ.hasTs, lastPosting: wa.reduce((a, l) => (l.date && (!a || l.date > a) ? l.date : a), null) };
   }
 
   // ================================================================== CHECKS
@@ -417,15 +497,15 @@
         cols: ['Doc type', 'Document', 'Posting date', 'WBS', 'Cost element', 'Material', 'Amount'], rows: A.nonWA.slice(0, 500).map((l) => [l.docType, l.docNo, dtext(l.date), l.wbs, l.ce, l.material, l.amt]) });
     }
     // 3. cost lines with no movement behind them
-    const un = A.cost.filter((l) => !l.mov);
+    const un = A.costAll.filter((l) => !l.mov);
     push({ id: 'unmatched', level: un.length ? 'bad' : 'good', title: 'Every WA cost line has its MB51 movement', count: un.length, amount: sum(un, (l) => l.amt),
       detail: un.length ? `${un.length} CJI3 lines (${fmt(sum(un, (l) => l.amt))}) point to a material document that is not in MB51. Widen the MB51 date range or plant selection.`
-        : `All ${A.cost.length.toLocaleString('en-US')} lines found their movement (material document + year + item).`,
+        : `All ${A.costAll.length.toLocaleString('en-US')} lines found their movement (material document + year + item).`,
       cols: ['Ref. document', 'Year', 'Item', 'Posting date', 'Material', 'Description', 'WBS', 'Amount'],
       rows: un.slice(0, 500).map((l) => [l.refDoc, l.refFy, l.refItem, dtext(l.date), l.material, l.matDesc, l.wbs, l.amt]) });
     // 4. matched, but disagreeing
     const dis = [];
-    for (const l of A.cost) { const m = l.mov; if (!m) continue; const why = [];
+    for (const l of A.costAll) { const m = l.mov; if (!m) continue; const why = [];
       if (m.material !== l.material) why.push(`material ${m.material} in MB51`);
       if (Math.abs(m.amt + l.amt) > 0.01) why.push(`MB51 value ${fmt(-m.amt)}`);
       if (m.wbs && l.wbs && m.wbs !== l.wbs) why.push(`MB51 WBS ${m.wbs}`);
@@ -435,7 +515,7 @@
       detail: dis.length ? `${dis.length} matched lines differ in at least one field (a zero CJI3 quantity is not counted as a difference).` : 'No differences on any matched line.',
       cols: ['CO document', 'Material doc', 'Posting date', 'Material', 'WBS', 'Amount', 'Difference'], rows: dis.slice(0, 500) });
     // 5. issues to the project with no cost line
-    const nc = A.mb.rows.filter((m) => CLASS[m.cls].cost && !m.costLine);
+    const nc = A.mb.rows.filter((m) => CLASS[m.cls].cost && !m.costLine && !m.pending);
     const ncv = sum(nc, (m) => m.amt);
     push({ id: 'nocost', level: !nc.length ? 'good' : (Math.abs(ncv) > tol ? 'warn' : 'info'), title: 'MB51 issues to the project that have no CJI3 cost line', count: nc.length, amount: -ncv,
       detail: nc.length ? `${nc.length} issue / scrap movements (value ${fmt(-ncv)}) are not in CJI3. Zero-value lines are usually scrap without a price; others may be outside the CJI3 date range or posted to another WBS.` : 'Every issue to the project reached CJI3.',
@@ -469,7 +549,32 @@
     push({ id: 'mvt', level: ot.length ? 'warn' : 'good', title: 'Every movement type is in the classification rules', count: sum(ot, (t) => t.n),
       detail: ot.length ? `Movement types ${ot.map((t) => t.mvt).join(', ')} are not classified; they count toward the stock balance under "Other".` : `${A.mvtTypes.length} movement type variants, all classified.`,
       cols: ['Movement', 'Text', 'Lines', 'Qty', 'Value'], rows: ot.map((t) => [t.mvt, t.text, t.n, t.qty, t.amt]) });
-    // 11. price variance
+    // 11. the cut-off: what waits for the next report, and what arrived late for a month already reported
+    push({ id: 'cutoff', level: 'info', title: `Cut-off ${isFinite(A.cutoff) ? tsText(A.cutoff) : '(none – everything counted)'} for ${mlabel(A.reportMonth)}`,
+      count: A.pending.length, amount: A.k.pending,
+      detail: `${A.pending.length.toLocaleString('en-US')} cost lines (${fmt(A.k.pending)}) were entered after the cut-off or posted after ${mlabel(A.reportMonth)}: they are Pending here and count in the next report. `
+        + `${A.k.pendingMov.toLocaleString('en-US')} MB51 movements are outside the quantity chain for the same reason. Latest entry in the files: ${tsText(A.k.maxEntry)}.`,
+      cols: ['Posting date', 'Entered', 'Material', 'Description', 'WBS', 'Amount', 'Why'],
+      rows: A.pending.slice().sort((a, b) => a.entry - b.entry).slice(0, 500).map((l) => [dtext(l.date), tsText(l.entry), l.material, l.matDesc, l.wbs, l.amt, l.why]) });
+    const late = A.cost.filter((l) => l.late);
+    if (A.history.length) push({ id: 'late', level: late.length ? 'warn' : 'good', title: 'Late postings into months already reported', count: late.length, amount: A.k.late,
+      detail: late.length ? `${late.length} lines (${fmt(A.k.late)}) were posted in a month that an earlier report had already closed. Closed months stay as reported; these lines are counted in the month of the report that first saw them.`
+        : 'No back-dated postings reached a closed month.',
+      cols: ['Posting date', 'Entered', 'Material', 'Description', 'Counted in', 'Amount'],
+      rows: late.slice(0, 500).map((l) => [dtext(l.date), tsText(l.entry), l.material, l.matDesc, mlabel(l.bucket), l.amt]) });
+    // 12. closed months must not move: every month an earlier report showed should come out the same
+    const snapM = A.prev && A.prev.months;
+    if (snapM && snapM.size && A.history.length) {
+      const lastRM = A.history[A.history.length - 1].reportMonth, diffs = [];
+      for (const [b, v] of snapM) { if (b === 'PENDING' || (b === 'OPENING' && (A.prev.meta.openingBefore || 0) !== (A.openingBefore || 0))) continue; const mk = /^\d{4}-\d{2}$/.test(b) ? +b.replace('-', '') : b;
+        if (typeof mk === 'number' && mk > lastRM) continue;
+        const now = typeof mk === 'number' && A.openingBefore && mk < A.openingBefore ? null : (A.byBucket[mk] || 0);
+        if (now !== null && Math.abs(now - v) > 1) diffs.push([bucketLabel(mk), v, now, now - v]); }
+      push({ id: 'frozen', level: diffs.length ? 'bad' : 'good', title: 'Months already reported are unchanged', count: diffs.length,
+        detail: diffs.length ? 'These months differ from the last report. Check that the CJI3 extract covers the whole project period and that the last report was loaded.' : 'Every month the last report showed comes out the same.',
+        cols: ['Month', 'Last report', 'Now', 'Difference'], rows: diffs });
+    }
+    // 13. price variance
     const pv = A.list.filter((r) => r.priceVar !== null && Math.abs(r.priceVar) > 0.10 && Math.abs(r.cost) > 1000);
     push({ id: 'price', level: pv.length ? 'info' : 'good', title: 'Issue price within ±10% of the weighted PO price', count: pv.length,
       detail: pv.length ? `${pv.length} materials with more than 1,000 of cost are issued at a price more than 10% away from what they were bought for (stock bought earlier, owner-supplied stock, or price changes).` : 'All issue prices sit within 10% of the PO price.',
@@ -516,7 +621,10 @@
     if (lh) { const hr = lh.findIndex((r) => (r || []).map(str).includes('Load')); const i = idx(lh, hr);
       for (const r of lh.slice(hr + 1)) { if (!num(r[i('Load')])) continue;
         P.loads.push({ no: num(r[i('Load')]), run: toDate(r[i('Run on')]), dataDate: toDate(r[i('Data date')]), files: str(r[i('Files')]), cost: num(r[i('Material cost')]),
-          project: num(r[i('Project consumption')]), subcon: num(r[i('To subcontractors')]), openPO: num(r[i('Open PO value')]), materials: num(r[i('Materials with cost')]), lines: num(r[i('Cost lines')]) }); } }
+          project: num(r[i('Project consumption')]), subcon: num(r[i('To subcontractors')]), openPO: num(r[i('Open PO value')]), materials: num(r[i('Materials with cost')]), lines: num(r[i('Cost lines')]),
+          reportMonth: /^\d{4}-\d{2}$/.test(str(r[i('Report month')])) ? +str(r[i('Report month')]).replace('-', '') : 0, cutoff: tsParse(r[i('Cut-off')]), pending: num(r[i('Pending')]) }); } }
+    const mo = aoaBySheet['_Months'];
+    if (mo) { P.months = new Map(); for (const r of mo.slice(1)) if (str(r[0])) P.months.set(str(r[0]), num(r[1])); }
     const sn = aoaBySheet['_Snap'];
     if (sn) { const i = idx(sn, 0);
       for (const r of sn.slice(1)) { const m = code(r[i('Material')]); if (!m) continue;
@@ -526,6 +634,8 @@
     const rw = aoaBySheet['_Rows'];
     if (rw) for (const r of rw.slice(1)) if (str(r[0]) && num(r[1])) P.rows.set(str(r[0]), { id: num(r[1]), first: num(r[2]) || 1 });
     P.meta.dataDate = toDate(P.meta.dataDate);
+    P.meta.cutoff = tsParse(P.meta.cutoff); P.meta.reportMonth = /^\d{4}-\d{2}$/.test(str(P.meta.reportMonth)) ? +str(P.meta.reportMonth).replace('-', '') : 0;
+    P.meta.openingBefore = /^\d{4}-\d{2}$/.test(str(P.meta.openingBefore)) ? +str(P.meta.openingBefore).replace('-', '') : 0;
     P.project = str(P.meta.plant);
     return P;
   }
@@ -536,7 +646,7 @@
     return { k: A.k, months: A.months, byGroup: A.byGroup, byPackage: A.byPackage, top: top(A.list.filter((r) => Math.abs(r.cost) > 1e-9), 15), checks: A.checks,
       loads: (A.prev && A.prev.loads ? A.prev.loads : []).concat([loadRow(A)]) };
   }
-  const loadRow = (A) => ({ no: A.loadNo, run: new Date(), dataDate: A.dataDate, files: Object.values(A.files || {}).filter(Boolean).join(' · '), cost: A.k.cost,
+  const loadRow = (A) => ({ no: A.loadNo, run: new Date(), dataDate: A.dataDate, reportMonth: A.reportMonth, cutoff: A.cutoff, pending: A.k.pending, files: Object.values(A.files || {}).filter(Boolean).join(' · '), cost: A.k.cost,
     project: A.k.project, subcon: A.k.subcon, openPO: A.k.openPO, materials: A.k.materials, lines: A.k.costLines });
 
   // ================================================================== WORKBOOK
@@ -566,7 +676,7 @@
   }
   function titleBand(ws, A, title, sub) {
     ws.getCell('A1').value = title; ws.getCell('A1').font = st.T1;
-    ws.getCell('A2').value = sub || `${A.PLANT}${A.PROJECT ? ' · ' + A.PROJECT : ''} · data to ${dtext(A.dataDate)} · load ${A.loadNo}`; ws.getCell('A2').font = st.T2;
+    ws.getCell('A2').value = sub || `${A.PLANT}${A.PROJECT ? ' · ' + A.PROJECT : ''} · report ${mlabel(A.reportMonth)} · cut-off ${isFinite(A.cutoff) ? tsText(A.cutoff) : 'none'} · load ${A.loadNo}`; ws.getCell('A2').font = st.T2;
   }
 
   async function buildWorkbook(A, libs) {
@@ -577,6 +687,7 @@
     // ---------------- sheet order: reports first, then files, then the hidden machinery
     const wsDash = wb.addWorksheet('Dashboard', { properties: { tabColor: { argb: 'FF1F4E9A' } } });
     const wsMM = wb.addWorksheet('Material Monthly', { properties: { tabColor: { argb: 'FF1F4E9A' } } });
+    const wsPM = wb.addWorksheet('Package Monthly', { properties: { tabColor: { argb: 'FF1F4E9A' } } });
     const wsMat = wb.addWorksheet('Materials', { properties: { tabColor: { argb: 'FF1F4E9A' } } });
     const wsPrice = wb.addWorksheet('Price', { properties: { tabColor: { argb: 'FF1F4E9A' } } });
     const wsCode = wb.addWorksheet('Material Coding', { properties: { tabColor: { argb: 'FFEDA100' } } });
@@ -616,21 +727,22 @@
     const costCols = [{ h: 'Posting date', w: 11, nf: NF.date }, { h: 'Month', w: 9, text: true }, { h: 'Material', w: 11, text: true }, { h: 'Description', w: 36 },
       { h: 'Group', w: 10, text: true }, { h: 'Package', w: 11 }, { h: 'MNL', w: 7 }, { h: 'Cost class', w: 26 }, { h: 'WBS', w: 24 }, { h: 'WBS name', w: 22 },
       { h: 'Cost element', w: 11, text: true }, { h: 'Cost element name', w: 20 }, { h: 'Qty', w: 11, nf: NF.qty }, { h: 'Unit', w: 6 }, { h: 'Amount', w: 14, nf: NF.amt2 },
-      { h: 'Movement', w: 8 }, { h: 'Material doc', w: 12, text: true }, { h: 'Item', w: 5 }, { h: 'CO document', w: 12, text: true }, { h: 'Row', w: 5 }, { h: 'Fiscal year', w: 7 }, { h: 'Row ID', w: 7 }];
-    const costSorted = A.cost.slice().sort((a, b) => cmp(a.date ? a.date.getTime() : 0, b.date ? b.date.getTime() : 0) || cmp(a.key, b.key));
+      { h: 'Movement', w: 8 }, { h: 'Material doc', w: 12, text: true }, { h: 'Item', w: 5 }, { h: 'CO document', w: 12, text: true }, { h: 'Row', w: 5 }, { h: 'Fiscal year', w: 7 }, { h: 'Row ID', w: 7 }, { h: 'Entered', w: 17 }, { h: 'Report bucket', w: 10, text: true }, { h: 'Note', w: 60 }];
+    const costSorted = A.costAll.slice().sort((a, b) => cmp(a.date ? a.date.getTime() : 0, b.date ? b.date.getTime() : 0) || cmp(a.key, b.key));
     const CD = 4;
-    titleBand(wsCost, A, 'Cost detail – CJI3 goods issues (WA)', 'One row per CO line item. Package and MNL are looked up from Material Coding, so a code changed there moves the cost here and on the Dashboard.');
+    titleBand(wsCost, A, 'Cost detail – CJI3 goods issues (WA)', `One row per CO line item. Report bucket = the month this line is reported in (Opening / a month / PENDING = after the cut-off ${tsText(A.cutoff)}, next report). Package and MNL are looked up from Material Coding.`);
     table(wsCost, CD, costCols, costSorted.map((l, i) => { const r = A.mats.get(l.material), n = CD + 1 + i;
       return [l.date ? ymdDate(l.date) : null, mtext(l.month), l.material, l.matDesc || r.desc, r.group || '(no group)',
         { formula: lk('E', `C${n}`, '"UNALLOCATED"'), result: r.package || 'UNALLOCATED' }, { formula: lk('F', `C${n}`, '""'), result: r.mnl || '' },
-        l.costClass, l.wbs, l.coName, l.ce, l.ceName, l.mov ? l.mqty : (l.qty || null), l.uom || r.unit, l.amt, l.mov ? l.mov.mvt : '', l.refDoc, l.refItem, l.docNo, l.postRow, l.fy, A.rowIds.get(l.rowKey).id]; }), { xSplit: 3 });
-    const cdEnd = CD + Math.max(1, nC);
+        l.costClass, l.wbs, l.coName, l.ce, l.ceName, l.mov ? l.mqty : (l.qty || null), l.uom || r.unit, l.amt, l.mov ? l.mov.mvt : '', l.refDoc, l.refItem, l.docNo, l.postRow, l.fy, A.rowIds.get(l.rowKey).id, tsText(l.entry), bucketText(l.bucket), l.why || null]; }), { xSplit: 3 });
+    const cdEnd = CD + Math.max(1, A.costAll.length);
     const CDR = (col) => `'Cost Detail'!$${col}$${CD + 1}:$${col}$${cdEnd}`;
-    const cdTot = CD + nC + 1;
-    wsCost.getCell(cdTot, 1).value = 'Total'; wsCost.getCell(cdTot, 15).value = { formula: `SUBTOTAL(9,O${CD + 1}:O${cdEnd})`, result: A.k.cost };
+    const cdTot = CD + A.costAll.length + 1;
+    wsCost.getCell(cdTot, 1).value = 'Total (follows the filter)'; wsCost.getCell(cdTot, 15).value = { formula: `SUBTOTAL(9,O${CD + 1}:O${cdEnd})`, result: A.k.costAll };
     for (const j of [1, 15]) { wsCost.getCell(cdTot, j).font = st.FB; wsCost.getCell(cdTot, j).fill = FILL.TOT; } wsCost.getCell(cdTot, 15).numFmt = NF.amt2;
 
-    const MM_TOTAL = materialMonthly(wsMM, A, CDR, lk);
+    const MMX = materialMonthly(wsMM, A, CDR, lk), MM_TOTAL = MMX.total;
+    packageMonthly(wsPM, A, MMX);
 
     // ---------------- Movements (MB51 with its class)
     titleBand(wsMov, A, 'Movements – MB51', 'Every movement with the class the rules gave it (see Movement Rules). Cost line = the CJI3 amount tied to this movement.');
@@ -667,8 +779,8 @@
       return [r.material, r.desc, r.group || '(no group)', { formula: lk('E', `A${n}`, '"UNALLOCATED"'), result: r.package || 'UNALLOCATED' }, r.unit, r.ordered]
         .concat(chainV)
         .concat([{ formula: `SUM(${colL(c0)}${n}:${colL(cBal - 1)}${n})`, result: r.balance }, r.openQty, r.qty.DIRECT || 0,
-          { formula: `SUMIFS(${CDR('O')},${CDR('C')},A${n})`, result: r.cost }, r.consQty || 0,
-          { formula: `IF(${colL(cCons)}${n}<=0,"",(SUMIFS(${CDR('O')},${CDR('C')},A${n},${CDR('H')},"${COST_CLASS.ISS_P}")+SUMIFS(${CDR('O')},${CDR('C')},A${n},${CDR('H')},"${COST_CLASS.ISS_S}"))/${colL(cCons)}${n})`, result: r.issuePrice === null ? '' : r.issuePrice },
+          { formula: `SUMIFS(${CDR('O')},${CDR('C')},A${n},${CDR('X')},"<>PENDING")`, result: r.cost }, r.consQty || 0,
+          { formula: `IF(${colL(cCons)}${n}<=0,"",(SUMIFS(${CDR('O')},${CDR('C')},A${n},${CDR('H')},"${COST_CLASS.ISS_P}",${CDR('X')},"<>PENDING")+SUMIFS(${CDR('O')},${CDR('C')},A${n},${CDR('H')},"${COST_CLASS.ISS_S}",${CDR('X')},"<>PENDING"))/${colL(cCons)}${n})`, result: r.issuePrice === null ? '' : r.issuePrice },
           r.price ? r.price.wavg : null, r.price ? r.price.last.unitPrice : null,
           { formula: `IF(OR(${colL(cIss)}${n}="",${colL(cW)}${n}=""),"",${colL(cIss)}${n}/${colL(cW)}${n}-1)`, result: r.priceVar === null ? '' : r.priceVar }]); }), { xSplit: 2 });
     const mEnd = MT + nM, mTot = mEnd + 1;
@@ -676,7 +788,7 @@
     for (const j of [1, cCost]) { wsMat.getCell(mTot, j).font = st.FB; wsMat.getCell(mTot, j).fill = FILL.TOT; } wsMat.getCell(mTot, cCost).numFmt = NF.amt;
 
     // ---------------- Price
-    titleBand(wsPrice, A, 'Price analysis', 'PO prices across POs and vendors (purchase lines, not deleted) against the price the material was issued at (CJI3 cost ÷ quantity), by month.');
+    titleBand(wsPrice, A, 'Price analysis', 'PO prices across POs and vendors (purchase lines, not deleted) against the price the material was issued at (CJI3 cost ÷ quantity), by report month.');
     const priced = A.list.filter((r) => r.price || r.issuePrice !== null);
     const pCols = [{ h: 'Material', w: 11, text: true }, { h: 'Description', w: 34 }, { h: 'Group', w: 10, text: true }, { h: 'Unit', w: 6 }, { h: 'PO lines', w: 6 },
       { h: 'Vendors', w: 6 }, { h: 'Min PO price', w: 11, nf: NF.amt2 }, { h: 'Max PO price', w: 11, nf: NF.amt2 }, { h: 'Spread', w: 8, nf: NF.pct },
@@ -690,13 +802,15 @@
 
     // ---------------- Dashboard
     titleBand(wsDash, A, 'Material cost report');
-    const kp = [['Material cost (CJI3 WA)', { formula: `SUM(${CDR('O')})`, result: A.k.cost }],
-      ['  Project consumption', { formula: `SUMIFS(${CDR('O')},${CDR('H')},"${COST_CLASS.ISS_P}")`, result: A.k.project }],
-      ['  Issued to subcontractors (recoverable)', { formula: `SUMIFS(${CDR('O')},${CDR('H')},"${COST_CLASS.ISS_S}")`, result: A.k.subcon }],
-      ['  Scrap / damages', { formula: `SUMIFS(${CDR('O')},${CDR('H')},"${COST_CLASS.SCRAP}")`, result: A.k.scrap }],
+    const kp = [[`Material cost to the cut-off (${tsText(A.cutoff)})`, { formula: `SUMIFS(${CDR('O')},${CDR('X')},"<>PENDING")`, result: A.k.cost }],
+      ['  Project consumption', { formula: `SUMIFS(${CDR('O')},${CDR('H')},"${COST_CLASS.ISS_P}",${CDR('X')},"<>PENDING")`, result: A.k.project }],
+      ['  Issued to subcontractors (recoverable)', { formula: `SUMIFS(${CDR('O')},${CDR('H')},"${COST_CLASS.ISS_S}",${CDR('X')},"<>PENDING")`, result: A.k.subcon }],
+      ['  Scrap / damages', { formula: `SUMIFS(${CDR('O')},${CDR('H')},"${COST_CLASS.SCRAP}",${CDR('X')},"<>PENDING")`, result: A.k.scrap }],
+      ['Pending – entered after the cut-off (next report)', { formula: `SUMIFS(${CDR('O')},${CDR('X')},"PENDING")`, result: A.k.pending }],
+      ['Late postings counted in this report', A.k.late],
       ['  With no MB51 movement', A.k.unmatched],
       ['Material Monthly total (must equal the cost)', { formula: MM_TOTAL, result: A.k.cost }],
-      [`Cost in ${mlabel(A.curMonth)}`, { formula: `SUMIFS(${CDR('O')},${CDR('B')},"${mtext(A.curMonth)}")`, result: A.k.thisMonth }],
+      [`Cost in ${mlabel(A.reportMonth)}`, { formula: `SUMIFS(${CDR('O')},${CDR('X')},"${mtext(A.reportMonth)}")`, result: A.k.thisMonth }],
       ['Received from vendors (MB51 value)', A.k.receivedVendor], ['Owner supplied (MB51 value)', A.k.ownerSupplied],
       ['Issued to orders – outside project cost', A.k.toOrders], ['Ordered value (purchase POs)', A.k.orderedVal], ['Still to be delivered (value)', A.k.openPO],
       ['Materials with cost', A.k.materials], ['Material groups with cost', A.k.groups], ['Purchase orders', A.k.pos], ['Vendors', A.k.vendors]];
@@ -704,16 +818,17 @@
     kp.forEach(([l, v], i) => { const c = wsDash.getCell(5 + i, 1); c.value = l; c.font = /^ {2}/.test(l) ? st.F : st.FB;
       const x = wsDash.getCell(5 + i, 2); x.value = v; x.numFmt = NF.amt; x.font = st.FB; });
     wsDash.getColumn(1).width = 40; wsDash.getColumn(2).width = 16;
-    // monthly matrices by material group and by package: live SUMIFS on Cost Detail
+    // monthly matrices by material group and by package: live SUMIFS on Cost Detail by report bucket
+    const bks = (A.hasOpening ? ['OPENING'] : []).concat(months);
     const matrix = (top, title, keys, keyCol) => {
       wsDash.getCell(top, 1).value = title; wsDash.getCell(top, 1).font = st.FB;
-      const hr = top + 1; const heads = [keyCol === 'E' ? 'Material group' : 'Package', 'Total'].concat(months.map(mtext));
+      const hr = top + 1; const heads = [keyCol === 'E' ? 'Material group' : 'Package', 'Total'].concat(bks.map(bucketText));
       heads.forEach((h, j) => { const c = wsDash.getCell(hr, j + 1); c.value = h; c.font = st.H; c.fill = FILL.HF; c.alignment = { horizontal: 'center' }; if (j >= 2) wsDash.getColumn(j + 1).width = Math.max(wsDash.getColumn(j + 1).width || 0, 12); });
       keys.forEach((o, i) => { const n = hr + 1 + i; wsDash.getCell(n, 1).value = o.key; wsDash.getCell(n, 1).font = st.F;
-        wsDash.getCell(n, 2).value = { formula: `SUM(C${n}:${colL(2 + months.length)}${n})`, result: o.total }; wsDash.getCell(n, 2).numFmt = NF.amt; wsDash.getCell(n, 2).font = st.FB;
-        months.forEach((m, j) => { const c = wsDash.getCell(n, 3 + j); c.value = { formula: `SUMIFS(${CDR('O')},${CDR(keyCol)},$A${n},${CDR('B')},${colL(3 + j)}$${hr})`, result: o.byMonth[m] || 0 }; c.numFmt = NF.amt; c.font = st.F; }); });
+        wsDash.getCell(n, 2).value = { formula: `SUM(C${n}:${colL(2 + bks.length)}${n})`, result: o.total }; wsDash.getCell(n, 2).numFmt = NF.amt; wsDash.getCell(n, 2).font = st.FB;
+        bks.forEach((m, j) => { const c = wsDash.getCell(n, 3 + j); c.value = { formula: `SUMIFS(${CDR('O')},${CDR(keyCol)},$A${n},${CDR('X')},${colL(3 + j)}$${hr})`, result: o.byMonth[m] || 0 }; c.numFmt = NF.amt; c.font = st.F; }); });
       const tn = hr + 1 + keys.length; wsDash.getCell(tn, 1).value = 'Total'; wsDash.getCell(tn, 1).font = st.FB;
-      for (let j = 2; j <= 2 + months.length; j++) { const c = wsDash.getCell(tn, j); c.value = { formula: `SUM(${colL(j)}${hr + 1}:${colL(j)}${tn - 1})`, result: j === 2 ? A.k.cost : sum(keys, (o) => o.byMonth[months[j - 3]] || 0) };
+      for (let j = 2; j <= 2 + bks.length; j++) { const c = wsDash.getCell(tn, j); c.value = { formula: `SUM(${colL(j)}${hr + 1}:${colL(j)}${tn - 1})`, result: j === 2 ? A.k.cost : sum(keys, (o) => o.byMonth[bks[j - 3]] || 0) };
         c.numFmt = NF.amt; c.font = st.FB; c.fill = FILL.TOT; }
       wsDash.getCell(tn, 1).fill = FILL.TOT;
       return tn + 2;
@@ -767,14 +882,20 @@
     // ---------------- Load history
     const loads = (A.prev && A.prev.loads ? A.prev.loads : []).concat([loadRow(A)]);
     titleBand(wsHist, A, 'Load history');
-    table(wsHist, 4, [{ h: 'Load', w: 6 }, { h: 'Run on', w: 11, nf: NF.date }, { h: 'Data date', w: 11, nf: NF.date }, { h: 'Material cost', w: 15, nf: NF.amt },
-      { h: 'Project consumption', w: 15, nf: NF.amt }, { h: 'To subcontractors', w: 14, nf: NF.amt }, { h: 'Open PO value', w: 14, nf: NF.amt }, { h: 'Materials with cost', w: 10 },
-      { h: 'Cost lines', w: 9 }, { h: 'Files', w: 60 }],
-    loads.map((l) => [l.no, l.run ? ymdDate(l.run) : null, l.dataDate ? ymdDate(l.dataDate) : null, l.cost, l.project, l.subcon, l.openPO, l.materials, l.lines, l.files]));
+    table(wsHist, 4, [{ h: 'Load', w: 6 }, { h: 'Run on', w: 11, nf: NF.date }, { h: 'Report month', w: 9, text: true }, { h: 'Cut-off', w: 18, text: true }, { h: 'Data date', w: 11, nf: NF.date },
+      { h: 'Material cost', w: 15, nf: NF.amt }, { h: 'Pending', w: 13, nf: NF.amt }, { h: 'Project consumption', w: 15, nf: NF.amt }, { h: 'To subcontractors', w: 14, nf: NF.amt },
+      { h: 'Open PO value', w: 14, nf: NF.amt }, { h: 'Materials with cost', w: 10 }, { h: 'Cost lines', w: 9 }, { h: 'Files', w: 60 }],
+    loads.map((l) => [l.no, l.run ? ymdDate(l.run) : null, l.reportMonth ? mtext(l.reportMonth) : null, l.cutoff && isFinite(l.cutoff) ? tsText(l.cutoff) : null,
+      l.dataDate ? ymdDate(l.dataDate) : null, l.cost, l.pending || null, l.project, l.subcon, l.openPO, l.materials, l.lines, l.files]));
+    wsHist.getCell(3, 1).value = 'Each load keeps its report month and cut-off: the next report uses them to keep closed months exactly as they were reported.'; wsHist.getCell(3, 1).font = st.T2;
 
     // ---------------- machinery for next month
-    [['plant', A.PLANT], ['project', A.PROJECT], ['dataDate', dtext(A.dataDate)], ['loadNo', A.loadNo], ['tool', 'Material cost report Rev01'], ['saved', new Date().toISOString()]]
+    [['plant', A.PLANT], ['project', A.PROJECT], ['dataDate', dtext(A.dataDate)], ['loadNo', A.loadNo], ['reportMonth', mtext(A.reportMonth)],
+      ['cutoff', isFinite(A.cutoff) ? tsText(A.cutoff) : ''], ['openingBefore', A.openingBefore ? mtext(A.openingBefore) : ''], ['tool', 'Material cost report Rev02'], ['saved', new Date().toISOString()]]
       .forEach((r) => wsMeta.addRow(r));
+    const wsMonths = wb.addWorksheet('_Months', { state: 'hidden' });
+    wsMonths.addRow(['Bucket', 'Amount']); for (const [b, v] of Object.entries(A.byBucket)) wsMonths.addRow([bucketText(isNaN(+b) ? b : +b), round2(v)]);
+    wsMonths.getColumn(1).numFmt = '@';
     wsSnap.addRow(['Material', 'Description', 'Group', 'Unit', 'Cost', 'Consumed', 'Balance', 'Open PO']);
     for (const r of A.list) wsSnap.addRow([r.material, r.desc, r.group, r.unit, round2(r.cost), r.consQty, r.balance, r.openQty]);
     wsPOs.addRow(['PO/item']); for (const l of A.me.lines) wsPOs.addRow([l.key]);
@@ -796,138 +917,143 @@
     const sorted = kids.slice().sort((a, b) => rank(a) - rank(b)).join('');
     return sorted === m[2] ? xml : xml.replace(m[0], `<sheetPr${m[1]}>${sorted}</sheetPr>`);
   }
+  // ExcelJS marks every grouped column collapsed="1" even when it is shown, so Excel draws "+" over an open group and the
+  // first click seems to do nothing. A shown column is not collapsed: drop the flag where the column is not hidden.
+  const openColumns = (xml) => xml.replace(/<col [^>]*>/g, (c) => (/hidden="1"/.test(c) ? c : c.replace(/ collapsed="1"/, '')));
   async function fixSheetXml(buf, JSZip) {
     if (!JSZip) throw new Error('JSZip is needed to write a valid workbook');
     const z = await JSZip.loadAsync(buf);
     for (const name of Object.keys(z.files).filter((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n))) {
-      const x = await z.file(name).async('string'), y = orderSheetPr(x);
+      const x = await z.file(name).async('string'), y = openColumns(orderSheetPr(x));
       if (y !== x) z.file(name, y);
     }
     return z.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
   }
   // ================================================================== MATERIAL MONTHLY
-  // The material counterpart of Service Monthly: rows under a header per work package (catalogue order, UNALLOCATED last),
-  // identity columns frozen, a Total block, then Qty / Rate / Amount per month – all SUMIFS on Cost Detail by Row ID, so the
-  // sheet always agrees with the detail. Package / MNL / Cost element are live from Material Coding.
+  // The main sheet, and the block people copy (Paste Special › Values) into their cost report every month.
+  // One flat table – one header row, no merged cells, no header or blank rows between data – so sorting, filtering and
+  // copying never break it. Column layout shared with Service Monthly (Rev08):
+  //   Identity (11) | Opening (3) | month 1 … month n (3 each) | Total (4) | Pending (3, not in Total) | reference (hidden)
+  // CSI / MNL / Cost element are live lookups from Material Coding; Qty and Amount are SUMIFS on Cost Detail by Row ID and
+  // Report bucket, so re-coding changes a row where it stands and closed months stay exactly as reported.
+  const MM_ID = ['Row ID', 'CSI', 'MNL', 'Cost element', 'Material', 'Description', 'Material group', 'Last vendor code', 'Last vendor name', 'Line type', 'Unit'];
   function materialMonthly(ws, A, CDR, lk) {
-    const months = A.months, BLK = 100000;
-    const cat = A.packages, NB = cat.length + 1;
-    const blocks = cat.map((p) => ({ code: p.code, label: p.label, color: p.color || GROUP_COLOR[p.group] || '6B7280' }))
-      .concat([{ code: '', label: 'UNALLOCATED · no work package yet', color: 'B4413C' }]);
-    const pkgOf = (o) => { const c = A.mats.get(o.material).package; return cat.some((p) => p.code === c) ? c : ''; };
-    const inBlock = (a, b) => { const ra = A.mats.get(a.material), rb = A.mats.get(b.material);
-      return cmp(ra.group || '~', rb.group || '~') || cmp(a.material, b.material) || (LINE_ORDER[a.lineType] ?? 9) - (LINE_ORDER[b.lineType] ?? 9) || cmp(a.lineType, b.lineType); };
-    for (const b of blocks) b.rows = A.monthlyRows.filter((o) => pkgOf(o) === b.code).sort(inBlock);
-    const layout = blocks.flatMap((b, k) => [{ pkg: b, k: k + 1 }, ...b.rows.map((o) => ({ o })), { blank: true, k: k + 1 }]);
-    const ID = ['Order', 'Package', 'MNL', 'Cost element', 'Material', 'Description', 'Group', 'Line type', 'Unit'];
-    const TOTH = ['PO price', 'Qty', 'Avg rate', 'Amount'];
-    const REF = ['Row ID', 'First seen (load)', 'Last PO price', 'Issue vs PO', 'Stock balance', 'Open on PO', 'Row type', 'Block', 'Re-coded'];
-    const nI = ID.length, T0 = nI + 1, M0 = T0 + TOTH.length, RF = M0 + 3 * months.length, LASTC = RF + REF.length - 1;
-    const rc = (n) => RF + REF.indexOf(n);
-    const L = colL, R1 = 4, RN = R1 + layout.length - 1;
-    const AMTF = '#,##0;[Red]-#,##0;;@', QTYF = '#,##0.00;[Red]-#,##0.00;;@', PRF = '#,##0.00;[Red]-#,##0.00;;@';
+    const L = colL, cat = A.packages;
+    const blocks = [{ key: 'OPENING', label: 'Opening', fill: '7A5C1E' }]
+      .concat(A.months.map((m, i) => ({ key: m, label: mlabel(m), fill: i % 2 ? '1F3E6B' : '0F2A52' })));
+    const nI = MM_ID.length, B0 = nI + 1;                       // first time block starts in column L
+    const T0 = B0 + 3 * blocks.length, P0 = T0 + 4, RF = P0 + 3;
+    const REF = ['First seen (load)', 'Last PO price', 'Issue vs PO', 'Stock balance', 'Open on PO'];
+    const LASTC = RF + REF.length - 1;
+    const pkOrder = (c) => { const i = cat.findIndex((p) => p.code === c); return i < 0 ? cat.length : i; };
+    const rows = A.monthlyRows.slice().sort((a, b) => { const ra = A.mats.get(a.material), rb = A.mats.get(b.material);
+      return pkOrder(ra.package) - pkOrder(rb.package) || cmp(ra.group || '~', rb.group || '~') || cmp(a.material, b.material)
+        || (LINE_ORDER[a.lineType] ?? 9) - (LINE_ORDER[b.lineType] ?? 9) || cmp(a.lineType, b.lineType); });
+    const R1 = 4, RN = R1 + Math.max(1, rows.length) - 1, HR = 3;
+    const AMTF = '#,##0;[Red]-#,##0;"–"', QTYF = '#,##0.00;[Red]-#,##0.00;"–"', PRF = '#,##0.00;[Red]-#,##0.00;""';
     const H = { ...st.H, size: 9.5 };
-    const hd = (r, c, v, f) => { const x = ws.getCell(r, c); x.value = v; x.font = H; x.fill = solid('FF' + f); x.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }; };
-    ID.forEach((h, j) => { hd(2, 1 + j, h, '0F2A52'); hd(3, 1 + j, null, '0F2A52'); ws.mergeCells(2, 1 + j, 3, 1 + j); });
-    hd(2, T0, 'Total', '7A5C1E'); for (let j = 1; j < TOTH.length; j++) hd(2, T0 + j, null, '7A5C1E'); ws.mergeCells(2, T0, 2, T0 + TOTH.length - 1);
-    TOTH.forEach((h, j) => hd(3, T0 + j, h, '7A5C1E'));
-    months.forEach((m, i) => { const c = M0 + 3 * i, f = i % 2 ? '1F3E6B' : '0F2A52'; hd(2, c, mlabel(m), f); hd(2, c + 1, null, f); hd(2, c + 2, null, f); ws.mergeCells(2, c, 2, c + 2);
-      ['Qty', 'Rate', 'Amount'].forEach((t, o) => hd(3, c + o, t, f)); });
-    REF.forEach((h, j) => { hd(2, RF + j, h, '6B7280'); hd(3, RF + j, null, '6B7280'); ws.mergeCells(2, RF + j, 3, RF + j); });
-    ws.getCell(2, 1).note = 'Order = block of the row\'s current package (live from Material Coding) + its place in the block. Rows are regrouped under their package on every build.';
-    ws.getCell(3, T0).note = 'Weighted PO price: purchase lines of this material in ME2N (net price ÷ price unit, weighted by order qty, deleted items left out).';
-    ws.getCell(2, rc('Row ID')).note = 'Permanent: a row keeps its Row ID in every later report. Cost Detail → Row ID carries the same number.';
-    const PL = `Lists!$F$2:$F$${cat.length + 1}`, ORDc = `$A$${R1}:$A$${RN}`;
+    // header: one row, one cell per column
+    const head = (c, v, f) => { const x = ws.getCell(HR, c); x.value = v; x.font = H; x.fill = solid('FF' + f); x.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }; };
+    MM_ID.forEach((h, j) => head(1 + j, h, '0F2A52'));
+    blocks.forEach((b, i) => ['Qty', 'Rate', 'Amount'].forEach((t, o) => head(B0 + 3 * i + o, `${b.label} ${t}`, b.fill)));
+    ['Total Price', 'Total Qty', 'Total Avg rate', 'Total Amount'].forEach((t, o) => head(T0 + o, t, 'A07A2C'));
+    ['Pending Qty', 'Pending Rate', 'Pending Amount'].forEach((t, o) => head(P0 + o, t, '8E3B37'));
+    REF.forEach((h, j) => head(RF + j, h, '6B7280'));
+    ws.getRow(HR).height = 30;
+    const bt = (b) => `"${bucketText(b)}"`;
     const DF = solid('FFF3F6FB'), WF = solid('FFFFFFFF'), NEWF = solid('FFE2EFDA'), SUBF = solid('FFFDF3E1'), SCRF = solid('FFFDE8E6');
-    const tint = (hex, t) => { const n = parseInt(hex, 16), ch = (s) => Math.round(((n >> s) & 255) * (1 - t) + 255 * t); return 'FF' + [16, 8, 0].map((s) => ch(s).toString(16).padStart(2, '0')).join('').toUpperCase(); };
-    const pkgRows = []; let seq = 0, band = 0, prevGroup = null;
-    layout.forEach((item, n) => {
-      const i = R1 + n, row = ws.getRow(i); row.height = 17;
-      if (item.blank) { row.getCell(1).value = item.k * BLK + BLK - 1; row.getCell(rc('Row type')).value = 'BLANK'; row.getCell(rc('Block')).value = { formula: `${L(rc('Block'))}${i - 1}` }; return; }
-      if (item.pkg) {                                   // header: name and a live row count only, so SUMIFS and totals are unaffected
-        const b = item.pkg, lo = item.k * BLK; pkgRows.push([i, b.color]); band = 0; prevGroup = null;
-        const cnt = `COUNTIFS(${ORDc},">"&${lo},${ORDc},"<"&${lo + BLK - 1})`;
-        const name = (b.code ? b.code + ' · ' + b.label : b.label).replace(/"/g, '""');
-        row.getCell(1).value = lo; row.getCell(rc('Row type')).value = 'HEADER'; row.getCell(rc('Block')).value = item.k;
-        row.getCell(6).value = { formula: `"${name}   ("&IF(${cnt}=0,"no materials coded yet",${cnt}&IF(${cnt}=1," row"," rows"))&")"`, result: `${name.replace(/""/g, '"')}   (${b.rows.length ? b.rows.length + (b.rows.length === 1 ? ' row' : ' rows') : 'no materials coded yet'})` };
-        const tf = solid(tint(b.color, 0.84)); for (let c = 1; c <= LASTC; c++) row.getCell(c).fill = tf;
-        return; }
-      const o = item.o, r = A.mats.get(o.material); seq++;
+    let band = 0, prevGroup = null;
+    rows.forEach((o, n) => {
+      const i = R1 + n, r = A.mats.get(o.material), row = ws.getRow(i), v = [];
       if (r.group !== prevGroup) { band ^= 1; prevGroup = r.group; }
-      const IDc = `$${L(rc('Row ID'))}${i}`, pk = r.package && cat.some((p) => p.code === r.package) ? r.package : '';
-      const v = [];
-      v[0] = { formula: `IFERROR(MATCH(SUBSTITUTE(UPPER(B${i})," ",""),${PL},0),${NB})*${BLK}+${seq}`, result: (pk ? cat.findIndex((p) => p.code === pk) + 1 : NB) * BLK + seq };
+      const pk = r.package && cat.some((p) => p.code === r.package) ? r.package : '';
+      v[0] = o.id;
       v[1] = { formula: lk('E', `$E${i}`, '"UNALLOCATED"'), result: pk || 'UNALLOCATED' };
       v[2] = { formula: lk('F', `$E${i}`, '""'), result: r.mnl || '' };
       v[3] = { formula: lk('G', `$E${i}`, '""'), result: r.cec || '' };
-      v[4] = o.material; v[5] = r.desc; v[6] = r.group || '(no group)'; v[7] = o.lineType; v[8] = r.unit;
+      v[4] = o.material; v[5] = r.desc; v[6] = r.group || '(no group)'; v[7] = r.lastVendorCode || null; v[8] = r.lastVendorName || null; v[9] = o.lineType; v[10] = r.unit;
+      const q = (b) => o.qtyByMonth[b] || 0, a = (b) => o.byMonth[b] || 0;
+      const trio = (c, b) => {                                  // Qty / Rate / Amount of one bucket
+        v[c - 1] = { formula: `SUMIFS(${CDR('M')},${CDR('V')},$A${i},${CDR('X')},${bt(b)})`, result: q(b) };
+        v[c] = { formula: `IF(${L(c)}${i}=0,"",${L(c + 2)}${i}/${L(c)}${i})`, result: q(b) ? a(b) / q(b) : '' };
+        v[c + 1] = { formula: `SUMIFS(${CDR('O')},${CDR('V')},$A${i},${CDR('X')},${bt(b)})`, result: a(b) };
+      };
+      blocks.forEach((b, bi) => trio(B0 + 3 * bi, b.key));
       v[T0 - 1] = r.price ? round2(r.price.wavg) : null;
-      months.forEach((m, mi) => { const c = M0 + 3 * mi, q = o.qtyByMonth[m] || 0, a = o.byMonth[m] || 0;
-        v[c - 1] = { formula: `SUMIFS(${CDR('M')},${CDR('V')},${IDc},${CDR('B')},"${mtext(m)}")`, result: q };
-        v[c] = { formula: `IF(${L(c)}${i}=0,"",${L(c + 2)}${i}/${L(c)}${i})`, result: q ? a / q : '' };
-        v[c + 1] = { formula: `SUMIFS(${CDR('O')},${CDR('V')},${IDc},${CDR('B')},"${mtext(m)}")`, result: a }; });
-      v[T0] = { formula: months.length ? months.map((_, mi) => L(M0 + 3 * mi) + i).join('+') : '0', result: o.qty };
-      v[T0 + 2] = { formula: months.length ? months.map((_, mi) => L(M0 + 3 * mi + 2) + i).join('+') : '0', result: o.amt };
+      v[T0] = { formula: blocks.map((_, bi) => L(B0 + 3 * bi) + i).join('+'), result: o.qty };
+      v[T0 + 2] = { formula: blocks.map((_, bi) => L(B0 + 3 * bi + 2) + i).join('+'), result: o.amt };
       v[T0 + 1] = { formula: `IF(${L(T0 + 1)}${i}=0,"",${L(T0 + 3)}${i}/${L(T0 + 1)}${i})`, result: o.qty ? o.amt / o.qty : '' };
-      const ref = { 'Row ID': o.id, 'First seen (load)': o.first, 'Last PO price': r.price ? round2(r.price.last.unitPrice) : null,
-        'Issue vs PO': { formula: `IF(OR(${L(T0)}${i}="",${L(T0 + 2)}${i}=""),"",${L(T0 + 2)}${i}/${L(T0)}${i}-1)`, result: r.price && o.qty ? (o.amt / o.qty) / r.price.wavg - 1 : '' },
-        'Stock balance': r.balance, 'Open on PO': r.openQty, 'Row type': 'DATA', Block: { formula: `${L(rc('Block'))}${i - 1}`, result: blocks.findIndex((b) => b.code === pk) + 1 },
-        'Re-coded': { formula: `IF(INT($A${i}/${BLK})<>$${L(rc('Block'))}${i},1,0)`, result: 0 } };
-      REF.forEach((h, j) => { v[RF - 1 + j] = ref[h]; });
-      row.values = v;
+      trio(P0, 'PENDING');
+      const ref = [o.first, r.price ? round2(r.price.last.unitPrice) : null,
+        { formula: `IF(OR(${L(T0)}${i}="",${L(T0 + 2)}${i}=""),"",${L(T0 + 2)}${i}/${L(T0)}${i}-1)`, result: r.price && o.qty ? (o.amt / o.qty) / r.price.wavg - 1 : '' },
+        r.balance, r.openQty];
+      ref.forEach((x, j) => { v[RF - 1 + j] = x; });
+      row.values = v; row.height = 17;
       const base = o.lineType === 'To subcontractors' ? SUBF : o.lineType === 'Project' ? (band ? DF : WF) : SCRF;
       for (let c = 1; c <= LASTC; c++) row.getCell(c).fill = base;
-      if (o.isNew) for (const c of [5, 6, 7, 8, rc('First seen (load)')]) row.getCell(c).fill = NEWF;
+      if (o.isNew) for (const c of [5, 6]) row.getCell(c).fill = NEWF;
     });
-    // formats and widths
-    [8, 12, 7, 12, 11, 40, 10, 16, 6].forEach((w, j) => { ws.getColumn(1 + j).width = w; });
-    [11, 11, 11, 14].forEach((w, j) => { ws.getColumn(T0 + j).width = w; });
+    // formats, widths, fold buttons
+    [7, 11, 7, 12, 11, 40, 11, 12, 26, 16, 6].forEach((w, j) => { ws.getColumn(1 + j).width = w; });
     for (let c = 1; c <= LASTC; c++) ws.getColumn(c).font = { ...st.F, size: 9.5 };
-    ws.getColumn(5).font = { ...st.F, name: 'Consolas', size: 9.5 }; ws.getColumn(5).numFmt = '@';
-    ws.getColumn(6).alignment = { horizontal: 'right', readingOrder: 'rtl', indent: 1 };
-    ws.getColumn(T0).numFmt = PRF; ws.getColumn(T0 + 1).numFmt = QTYF; ws.getColumn(T0 + 2).numFmt = PRF; ws.getColumn(T0 + 3).numFmt = AMTF;
-    ws.getColumn(T0 + 3).font = { ...st.FB, size: 9.5 };
-    months.forEach((_, mi) => { const c = M0 + 3 * mi; ws.getColumn(c).width = 9; ws.getColumn(c + 1).width = 10; ws.getColumn(c + 2).width = 12;
-      ws.getColumn(c).numFmt = QTYF; ws.getColumn(c + 1).numFmt = PRF; ws.getColumn(c + 2).numFmt = AMTF;
-      ws.getColumn(c).outlineLevel = 1; ws.getColumn(c + 1).outlineLevel = 1; });
-    for (let j = 0; j < 3; j++) ws.getColumn(T0 + j).outlineLevel = 1;           // PO price, Qty, Avg rate fold like a month
-    REF.forEach((h, j) => { const col = ws.getColumn(RF + j); col.width = [8, 9, 11, 9, 11, 11, 9, 7, 8][j]; col.outlineLevel = 1; col.hidden = true; });
-    ws.getColumn(rc('Last PO price')).numFmt = PRF; ws.getColumn(rc('Issue vs PO')).numFmt = NF.pct;
-    ws.getColumn(rc('Stock balance')).numFmt = QTYF; ws.getColumn(rc('Open on PO')).numFmt = QTYF;
-    for (let i = 2; i <= RN; i++) { const g = ws.getCell(i, T0); g.border = { left: { style: 'medium', color: { argb: 'FFC8A45C' } } };
-      months.forEach((_, mi) => { ws.getCell(i, M0 + 3 * mi).border = { left: { style: 'thin', color: { argb: 'FF8EA9DB' } } }; }); }
-    // TOTAL row on top – SUBTOTAL follows the filter and the filter never hides it
-    for (let c = 1; c <= LASTC; c++) { const x = ws.getCell(1, c); x.fill = solid('FFFBF4E3'); x.numFmt = 'General';
-      x.border = { top: { style: 'medium', color: { argb: 'FFC8A45C' } }, bottom: { style: 'medium', color: { argb: 'FFC8A45C' } } }; x.font = { ...st.FB, size: 9.5 }; }
-    ws.getCell(1, 6).value = `TOTAL · ${A.monthlyRows.length} rows under ${blocks.length} work packages · follows the filter`; ws.getCell(1, 6).alignment = { horizontal: 'right' };
-    for (const c of [T0 + 3, ...months.map((_, mi) => M0 + 3 * mi + 2)]) {
-      const mi = (c - M0 - 2) / 3, res = c === T0 + 3 ? A.k.cost : sum(A.monthlyRows, (o) => o.byMonth[months[mi]] || 0);
-      const x = ws.getCell(1, c); x.value = { formula: `SUBTOTAL(9,${L(c)}${R1}:${L(c)}${RN})`, result: res }; x.numFmt = AMTF; }
-    // re-coded rows: their live Order points at another package than the block they sit in → yellow until the next build regroups them
-    const moved = `SUM(${L(rc('Re-coded'))}${R1}:${L(rc('Re-coded'))}${RN})`;          // a helper column per row, not array arithmetic
-    ws.getCell(1, 2).value = { formula: `IF(${moved}=0,"✔ grouped by package",${moved}&" re-coded – regrouped on the next build")`, result: '✔ grouped by package' };
-    ws.getCell(1, 2).font = { ...st.FB, size: 9.5, color: { argb: 'FFB0561F' } };
-    ws.addConditionalFormatting({ ref: `A${R1}:${L(LASTC)}${RN}`, rules: [{ type: 'expression', priority: 1,
-      formulae: [`$${L(rc('Re-coded'))}${R1}=1`],
-      style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: 'FFFFE699' }, fgColor: { argb: 'FFFFE699' } } } }] });
-    for (const [i, color] of pkgRows) for (let c = 1; c <= LASTC; c++) { const x = ws.getCell(i, c);
-      x.font = c === 6 ? { name: 'Arial', size: 10.5, bold: true, color: { argb: 'FF' + color } } : { ...st.F, size: 9.5 };
-      x.alignment = c === 6 ? { horizontal: 'right', vertical: 'middle' } : { horizontal: 'left', vertical: 'middle' }; }
-    for (const rr of [2, 3]) for (let c = 1; c <= LASTC; c++) { const x = ws.getCell(rr, c); x.font = H; x.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }; x.numFmt = 'General'; }
-    ws.getRow(2).height = 18; ws.getRow(3).height = 16;
-    const nt = ws.getCell(RN + 2, 6);
-    nt.value = 'Qty is not totalled across rows – units differ. Rate = Amount ÷ Qty. Line type: Project = issued to the WBS (221/222); To subcontractors = Z21/Z22, recoverable (orange); Scrap = 551 (red). Green = new row since the last report. Yellow = re-coded in Material Coding since this sheet was built – it moves under its new package on the next build. Click the + above the columns to open PO price / Qty / Rate, and the hidden reference columns.';
-    nt.font = { ...st.F, italic: true, color: { argb: 'FF5A6678' } }; nt.alignment = { horizontal: 'left', wrapText: false };
-    ws.properties.outlineLevelCol = 1; ws.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
-    ws.views = [{ state: 'frozen', xSplit: nI, ySplit: 3, showGridLines: false, zoomScale: 90 }];
-    ws.autoFilter = { from: { row: 3, column: 1 }, to: { row: RN, column: LASTC } };
-    ws.pageSetup = { paperSize: 8, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, printTitlesRow: '1:3',
-      margins: { left: 0.25, right: 0.25, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 } };
+    for (const c of [5, 7, 8]) { ws.getColumn(c).font = { ...st.F, name: 'Consolas', size: 9.5 }; ws.getColumn(c).numFmt = '@'; }
+    ws.getColumn(6).alignment = { horizontal: 'right', readingOrder: 'rtl' }; ws.getColumn(9).alignment = { horizontal: 'right', readingOrder: 'rtl' };
     ws.getColumn(1).hidden = true;
-    return `SUM('Material Monthly'!${L(T0 + 3)}${R1}:${L(T0 + 3)}${RN})`;
+    const trioFmt = (c, fold) => { ws.getColumn(c).numFmt = QTYF; ws.getColumn(c + 1).numFmt = PRF; ws.getColumn(c + 2).numFmt = AMTF;
+      ws.getColumn(c).width = 10; ws.getColumn(c + 1).width = 10; ws.getColumn(c + 2).width = 13;
+      if (fold) { ws.getColumn(c).outlineLevel = 1; ws.getColumn(c + 1).outlineLevel = 1; } };   // "+" sits over the Amount column
+    blocks.forEach((_, bi) => trioFmt(B0 + 3 * bi, true));
+    trioFmt(P0, true);
+    ws.getColumn(T0).numFmt = PRF; ws.getColumn(T0 + 1).numFmt = QTYF; ws.getColumn(T0 + 2).numFmt = PRF; ws.getColumn(T0 + 3).numFmt = AMTF;
+    [11, 11, 11, 14].forEach((w, j) => { ws.getColumn(T0 + j).width = w; });
+    for (let j = 0; j < 3; j++) ws.getColumn(T0 + j).outlineLevel = 1;
+    ws.getColumn(T0 + 3).font = { ...st.FB, size: 9.5 };
+    REF.forEach((h, j) => { const col = ws.getColumn(RF + j); col.width = [9, 11, 9, 11, 11][j]; col.outlineLevel = 1; col.hidden = true; });
+    ws.getColumn(RF + 1).numFmt = PRF; ws.getColumn(RF + 2).numFmt = NF.pct; ws.getColumn(RF + 3).numFmt = QTYF; ws.getColumn(RF + 4).numFmt = QTYF;
+    for (let i = HR; i <= RN; i++) { ws.getCell(i, B0).border = { left: { style: 'medium', color: { argb: 'FFC8A45C' } } };
+      for (let bi = 1; bi < blocks.length; bi++) ws.getCell(i, B0 + 3 * bi).border = { left: { style: 'thin', color: { argb: 'FF8EA9DB' } } };
+      ws.getCell(i, T0).border = { left: { style: 'medium', color: { argb: 'FFC8A45C' } } }; ws.getCell(i, P0).border = { left: { style: 'medium', color: { argb: 'FF8E3B37' } } }; }
+    // TOTAL row (follows the filter) and the tie-out check, above the header so a filter never hides them
+    const amtCols = blocks.map((_, bi) => B0 + 3 * bi + 2).concat([T0 + 3, P0 + 2]);
+    for (let c = 1; c <= LASTC; c++) { const x = ws.getCell(1, c); x.fill = solid('FFFBF4E3'); x.font = { ...st.FB, size: 9.5 };
+      x.border = { top: { style: 'medium', color: { argb: 'FFC8A45C' } }, bottom: { style: 'thin', color: { argb: 'FFC8A45C' } } }; }
+    ws.getCell(1, 6).value = { formula: `"TOTAL · "&SUBTOTAL(3,$E$${R1}:$E$${RN})&" of ${rows.length} rows shown"`, result: `TOTAL · ${rows.length} of ${rows.length} rows shown` };
+    ws.getCell(1, 6).alignment = { horizontal: 'right' };
+    for (const c of amtCols) { const res = c === T0 + 3 ? A.k.cost : c === P0 + 2 ? A.k.pending : (A.byBucket[blocks[(c - B0 - 2) / 3].key] || 0);
+      const x = ws.getCell(1, c); x.value = { formula: `SUBTOTAL(9,${L(c)}${R1}:${L(c)}${RN})`, result: res }; x.numFmt = AMTF; }
+    const tie = `SUM(${L(T0 + 3)}${R1}:${L(T0 + 3)}${RN})-SUMIFS(${CDR('O')},${CDR('X')},"<>PENDING")`;
+    const c2 = ws.getCell(2, 6);
+    c2.value = { formula: `IF(ABS(${tie})<1,"✔ Total = CJI3 cost to the cut-off ${tsText(A.cutoff)}","✗ Total differs from Cost Detail by "&TEXT(${tie},"#,##0"))`, result: `✔ Total = CJI3 cost to the cut-off ${tsText(A.cutoff)}` };
+    c2.font = { ...st.FB, size: 9.5, color: { argb: 'FF1B7F4B' } }; c2.alignment = { horizontal: 'right' };
+    const c2b = ws.getCell(2, B0); c2b.value = `Report ${mlabel(A.reportMonth)} · Pending = entered after the cut-off, counted next month, not in Total`;
+    c2b.font = { ...st.F, size: 9, italic: true, color: { argb: 'FF5A6678' } };
+    ws.properties.outlineLevelCol = 1;
+    ws.views = [{ state: 'frozen', xSplit: nI, ySplit: HR, showGridLines: false, zoomScale: 90 }];
+    ws.autoFilter = { from: { row: HR, column: 1 }, to: { row: RN, column: LASTC } };
+    ws.pageSetup = { paperSize: 8, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, printTitlesRow: `${HR}:${HR}`,
+      margins: { left: 0.25, right: 0.25, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 } };
+    return { total: `SUM('Material Monthly'!${L(T0 + 3)}${R1}:${L(T0 + 3)}${RN})`, R1, RN, blocks, amt: (bi) => L(B0 + 3 * bi + 2), totalAmt: L(T0 + 3), pendingAmt: L(P0 + 2) };
+  }
+  // Package Monthly: CSI × report month, summed from Material Monthly's CSI column – right whatever order the rows are in
+  function packageMonthly(ws, A, X) {
+    titleBand(ws, A, 'Package monthly', 'Cost per CSI package and month, summed from Material Monthly (live: re-coding a material in Material Coding moves its cost here at once).');
+    const MM = (c) => `'Material Monthly'!$${c}$${X.R1}:$${c}$${X.RN}`;
+    const cols = [{ h: 'CSI', w: 11 }, { h: 'Package', w: 30 }].concat(X.blocks.map((b) => ({ h: b.label, w: 13, nf: NF.amt })))
+      .concat([{ h: 'Total', w: 15, nf: NF.amt }, { h: 'Pending', w: 13, nf: NF.amt }]);
+    const keys = A.packages.map((p) => [p.code, p.label]).concat([['UNALLOCATED', 'No package yet']]);
+    const top = 4, nB = X.blocks.length;
+    const byPk = new Map(A.byPackage.map((o) => [o.key, o]));
+    const pend = {}; for (const l of A.pending) { const k = A.mats.get(l.material).package || 'UNALLOCATED'; pend[k] = (pend[k] || 0) + l.amt; }
+    table(ws, top, cols, keys.map(([c, label], i) => { const n = top + 1 + i, o = byPk.get(c) || { total: 0, byMonth: {} };
+      return [c, label].concat(X.blocks.map((b, bi) => ({ formula: `SUMIFS(${MM(X.amt(bi))},${MM('B')},$A${n})`, result: o.byMonth[b.key] || 0 })))
+        .concat([{ formula: `SUM(C${n}:${colL(2 + nB)}${n})`, result: o.total }, { formula: `SUMIFS(${MM(X.pendingAmt)},${MM('B')},$A${n})`, result: pend[c] || 0 }]); }),
+    { filter: false, xSplit: 2 });
+    const tn = top + keys.length + 1; ws.getCell(tn, 1).value = 'Total';
+    for (let j = 3; j <= 4 + nB; j++) { const c = ws.getCell(tn, j); c.value = { formula: `SUM(${colL(j)}${top + 1}:${colL(j)}${tn - 1})` }; c.numFmt = NF.amt; }
+    for (let j = 1; j <= 4 + nB; j++) { const c = ws.getCell(tn, j); c.font = st.FB; c.fill = FILL.TOT; }
   }
   const ymdDate = (d) => { const o = ymd(d); return new Date(Date.UTC(o.y, o.m - 1, o.d)); };
-  const api = { orderSheetPr, analyse, summarize, readPrevious, buildWorkbook, detectKind, parseME2N, parseMB51, parseCJI3, classify, suggestFor, normPkg,
+  const api = { openColumns, periodInfo, tsText, tsParse, nextMonth, bucketLabel, orderSheetPr, analyse, summarize, readPrevious, buildWorkbook, detectKind, parseME2N, parseMB51, parseCJI3, classify, suggestFor, normPkg,
     CLASSES, CLASS, MVT, COST_CLASS, PACKAGES, MNLS, LAYOUT, mlabel, mtext, dtext, monthKey, esc, fmt, str, num, code };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.MaterialEngine = api;
 })(typeof window !== 'undefined' ? window : globalThis);
