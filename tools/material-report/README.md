@@ -9,7 +9,7 @@ Each month you load three SAP exports, plus last month's report:
 | **MB51** | What physically moved, and where it went | material doc + year + item |
 | **CJI3** | What the project paid. Only goods issues are counted (document type **WA**) | CO doc + posting row + year |
 
-From these the page builds the Excel report: Dashboard, **Material Monthly**, Package Monthly, Materials, Price, Material Coding, Changes, Checks and Load history, plus the source sheets. The summary sheets are live formulas over *Cost Detail* and *Material Coding*. If you change a package code in Excel, the dashboard updates.
+From these the page builds the Excel report: Dashboard, **Material Monthly**, Package Monthly, Materials, Price, Material Coding, Changes, Checks and Load history, plus the source sheets. Package codes are live lookups from *Material Coding*, and Material Monthly, Package Monthly and the Dashboard are live formulas. If you change a package code in Excel, the dashboard updates. Figures that never depend on coding (Material Quarterly amounts, the Materials sheet's cost) are written as values, each checked live against *Cost Detail*, so a long project stays fast in Excel.
 
 ## How the numbers are made
 
@@ -97,7 +97,7 @@ Rows are sorted CSI → group → material → line type on every build. Each ke
 - Qty and Amount are SUMIFS on *Cost Detail* by Row ID and **Report bucket**.
 - The TOTAL row (follows the filter) and a tie-out check against CJI3 cost posted up to the cut date sit above the header.
 
-**Material Quarterly** has the same rows and identity columns as Material Monthly, with one Qty / Rate / Amount block per **calendar quarter** (Q1 = Jan–Mar), then Total and Pending. A 3-year project has 12 quarter blocks (36 columns) instead of 36 month blocks (108 columns). The current quarter holds the months reported so far. Figures are SUMIFS on Cost Detail's *Report quarter* column, and the Dashboard checks that its total equals the cost.
+**Material Quarterly** has the same rows and identity columns as Material Monthly, with one Qty / Rate / Amount block per **calendar quarter** (Q1 = Jan–Mar), then Total and Pending. A 3-year project has 12 quarter blocks (36 columns) instead of 36 month blocks (108 columns). The current quarter holds the months reported so far. Qty and Amount are written as values, because a row's amount never changes when it is re-coded; CSI / MNL / Cost element stay live. Row 2 re-adds every quarter (and Pending) live from Cost Detail's *Report quarter* column and shows ✔ or the difference, and the Dashboard checks that the total equals the cost. This keeps a 5-year report light: the ~25,000 SUMIFS it used to need were a quarter of Excel's recalculation work.
 
 **Package Monthly** sums Material Monthly by CSI and month, so it is right whatever the row order.
 

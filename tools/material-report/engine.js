@@ -887,14 +887,13 @@
         { h: 'Cost (CJI3)', w: 14, nf: NF.amt }, { h: 'Qty consumed', w: 11, nf: NF.qty }, { h: 'Avg issue price', w: 11, nf: NF.amt2 },
         { h: 'Weighted PO price', w: 11, nf: NF.amt2 }, { h: 'Last PO price', w: 11, nf: NF.amt2 }, { h: 'Issue vs PO', w: 9, nf: NF.pct }]);
     const MT = 4, c0 = 7, cBal = c0 + chain.length, cCost = cBal + 3, cCons = cCost + 1, cIss = cCons + 1, cW = cIss + 1;
-    titleBand(wsMat, A, 'Materials – quantity chain and cost', 'Quantities in the material’s MB51 unit, signed as they move stock (in +, out −). Stock balance = sum of the chain. Cost is summed live from Cost Detail.');
+    titleBand(wsMat, A, 'Materials – quantity chain and cost', 'Quantities in the material’s MB51 unit, signed as they move stock (in +, out −). Stock balance = sum of the chain. Cost is the CJI3 cost up to the cut date (the Dashboard checks the total against Cost Detail).');
     table(wsMat, MT, matCols, A.list.map((r, i) => { const n = MT + 1 + i;
       const chainV = chain.map((c) => r.qty[c] || 0);
       return [r.material, r.desc, r.group || '(no group)', { formula: lk('E', `A${n}`, '"UNALLOCATED"'), result: r.package || 'UNALLOCATED' }, r.unit, r.ordered]
         .concat(chainV)
         .concat([{ formula: `SUM(${colL(c0)}${n}:${colL(cBal - 1)}${n})`, result: r.balance }, r.openQty, r.qty.DIRECT || 0,
-          { formula: `SUMIFS(${CDR('O')},${CDR('C')},A${n},${CDR('X')},"<>PENDING")`, result: r.cost }, r.consQty || 0,
-          { formula: `IF(${colL(cCons)}${n}<=0,"",(SUMIFS(${CDR('O')},${CDR('C')},A${n},${CDR('H')},"${COST_CLASS.ISS_P}",${CDR('X')},"<>PENDING")+SUMIFS(${CDR('O')},${CDR('C')},A${n},${CDR('H')},"${COST_CLASS.ISS_S}",${CDR('X')},"<>PENDING"))/${colL(cCons)}${n})`, result: r.issuePrice === null ? '' : r.issuePrice },
+          round2(r.cost), r.consQty || 0, r.issuePrice === null ? null : r.issuePrice,
           r.price ? r.price.wavg : null, r.price ? r.price.last.unitPrice : null,
           { formula: `IF(OR(${colL(cIss)}${n}="",${colL(cW)}${n}=""),"",${colL(cIss)}${n}/${colL(cW)}${n}-1)`, result: r.priceVar === null ? '' : r.priceVar }]); }), { xSplit: 2 });
     const mEnd = MT + nM, mTot = mEnd + 1;
@@ -925,6 +924,7 @@
       ['  With no MB51 movement', A.k.unmatched],
       ['Material Monthly total (must equal the cost)', { formula: MM_TOTAL, result: A.k.cost }],
       ['Material Quarterly total (must equal the cost)', { formula: MQX.total, result: A.k.cost }],
+      ['Materials sheet total (must equal the cost)', { formula: `'Materials'!${colL(cCost)}${mTot}`, result: A.k.cost }],
       [`Cost in ${mlabel(A.reportMonth)}`, { formula: `SUMIFS(${CDR('O')},${CDR('X')},"${mtext(A.reportMonth)}")`, result: A.k.thisMonth }],
       ['Received from vendors (MB51 value)', A.k.receivedVendor], ['Owner supplied (MB51 value)', A.k.ownerSupplied],
       ['Issued to orders – outside project cost', A.k.toOrders], ['Ordered value (purchase POs)', A.k.orderedVal], ['Still to be delivered (value)', A.k.openPO],
@@ -937,15 +937,18 @@
     kp.forEach(([l, v], i) => { const c = wsDash.getCell(5 + i, 1); c.value = l; c.font = /^ {2}/.test(l) ? st.F : st.FB;
       const x = wsDash.getCell(5 + i, 2); x.value = v; x.numFmt = NF.amt; x.font = st.FB; });
     wsDash.getColumn(1).width = 40; wsDash.getColumn(2).width = 16;
-    // monthly matrices by material group and by package: live SUMIFS on Cost Detail by report bucket
+    // monthly matrices by package and by material group: live, but read from Package Monthly / Material Monthly (a few
+    // hundred rows) rather than scanning every Cost Detail line once per cell
     const bks = (A.hasOpening ? ['OPENING'] : []).concat(months);
+    const MMr = (c) => `'Material Monthly'!$${c}$${MMX.R1}:$${c}$${MMX.RN}`, bIx = (m) => MMX.blocks.findIndex((b) => b.key === m);
+    const cellFor = { F: (i, m) => `'Package Monthly'!${colL(3 + bIx(m))}${5 + i}`, E: (i, m, n) => `SUMIFS(${MMr(MMX.amt(bIx(m)))},${MMr('G')},$A${n})` };
     const matrix = (top, title, keys, keyCol) => {
       wsDash.getCell(top, 1).value = title; wsDash.getCell(top, 1).font = st.FB;
       const hr = top + 1; const heads = [keyCol === 'E' ? 'Material group' : 'Package', 'Total'].concat(bks.map(bucketText));
       heads.forEach((h, j) => { const c = wsDash.getCell(hr, j + 1); c.value = h; c.font = st.H; c.fill = FILL.HF; c.alignment = { horizontal: 'center' }; if (j >= 2) wsDash.getColumn(j + 1).width = Math.max(wsDash.getColumn(j + 1).width || 0, 12); });
       keys.forEach((o, i) => { const n = hr + 1 + i; wsDash.getCell(n, 1).value = o.key; wsDash.getCell(n, 1).font = st.F;
         wsDash.getCell(n, 2).value = { formula: `SUM(C${n}:${colL(2 + bks.length)}${n})`, result: o.total }; wsDash.getCell(n, 2).numFmt = NF.amt; wsDash.getCell(n, 2).font = st.FB;
-        bks.forEach((m, j) => { const c = wsDash.getCell(n, 3 + j); c.value = { formula: `SUMIFS(${CDR('O')},${CDR(keyCol)},$A${n},${CDR('X')},${colL(3 + j)}$${hr})`, result: o.byMonth[m] || 0 }; c.numFmt = NF.amt; c.font = st.F; }); });
+        bks.forEach((m, j) => { const c = wsDash.getCell(n, 3 + j); c.value = { formula: cellFor[keyCol](i, m, n), result: o.byMonth[m] || 0 }; c.numFmt = NF.amt; c.font = st.F; }); });
       const tn = hr + 1 + keys.length; wsDash.getCell(tn, 1).value = 'Total'; wsDash.getCell(tn, 1).font = st.FB;
       for (let j = 2; j <= 2 + bks.length; j++) { const c = wsDash.getCell(tn, j); c.value = { formula: `SUM(${colL(j)}${hr + 1}:${colL(j)}${tn - 1})`, result: j === 2 ? A.k.cost : sum(keys, (o) => o.byMonth[bks[j - 3]] || 0) };
         c.numFmt = NF.amt; c.font = st.FB; c.fill = FILL.TOT; }
@@ -1116,10 +1119,12 @@
       v[4] = o.material; v[5] = r.desc; v[6] = r.group || '(no group)'; v[7] = r.lastVendorCode || null; v[8] = r.lastVendorName || null; v[9] = o.lineType; v[10] = r.unit;
       const blk = (b) => Q && b !== 'PENDING' ? (blocks.find((x) => x.key === b) || { months: [] }).months : [b];
       const q = (b) => sum(blk(b), (m) => o.qtyByMonth[m] || 0), a = (b) => sum(blk(b), (m) => o.byMonth[m] || 0);
+      // Monthly: live SUMIFS on Cost Detail. Quarterly: Qty and Amount written as values – a row's amount never depends on
+      // coding, and ~25k SUMIFS over Cost Detail are what made a long project slow; row 2 re-adds each quarter live instead.
       const trio = (c, b, col) => {                             // Qty / Rate / Amount of one bucket
-        v[c - 1] = { formula: `SUMIFS(${CDR('M')},${CDR('V')},$A${i},${CDR(col)},${bt(b)})`, result: q(b) };
+        v[c - 1] = Q ? Math.round(q(b) * 1000) / 1000 || 0 : { formula: `SUMIFS(${CDR('M')},${CDR('V')},$A${i},${CDR(col)},${bt(b)})`, result: q(b) };
         v[c] = { formula: `IF(${L(c)}${i}=0,"",${L(c + 2)}${i}/${L(c)}${i})`, result: q(b) ? a(b) / q(b) : '' };
-        v[c + 1] = { formula: `SUMIFS(${CDR('O')},${CDR('V')},$A${i},${CDR(col)},${bt(b)})`, result: a(b) };
+        v[c + 1] = Q ? round2(a(b)) || 0 : { formula: `SUMIFS(${CDR('O')},${CDR('V')},$A${i},${CDR(col)},${bt(b)})`, result: a(b) };
       };
       blocks.forEach((b, bi) => trio(B0 + 3 * bi, b.key, critCol));
       v[T0 - 1] = r.price ? round2(r.price.wavg) : null;
@@ -1169,7 +1174,12 @@
     const c2 = ws.getCell(2, 6);
     c2.value = { formula: `IF(ABS(${tie})<1,"✔ Total = CJI3 cost posted up to ${cutText(A.cutoff)}","✗ Total differs from Cost Detail by "&TEXT(${tie},"#,##0"))`, result: `✔ Total = CJI3 cost posted up to ${cutText(A.cutoff)}` };
     c2.font = { ...st.FB, size: 9.5, color: { argb: 'FF1B7F4B' } }; c2.alignment = { horizontal: 'right' };
-    const c2b = ws.getCell(2, B0); c2b.value = `Report ${mlabel(A.reportMonth)} · Pending = posted after the cut date, counted next month, not in Total`;
+    // Quarterly: one live check per quarter (and Pending) – the column must equal Cost Detail for that quarter
+    if (Q) blocks.map((b, bi) => [B0 + 3 * bi + 2, 'AA', b.key]).concat([[P0 + 2, 'X', 'PENDING']]).forEach(([c, col, key]) => {
+      const d = `SUM(${L(c)}${R1}:${L(c)}${RN})-SUMIFS(${CDR('O')},${CDR(col)},"${key}")`, x = ws.getCell(2, c);
+      x.value = { formula: `IF(ABS(${d})<1,"✔ = Cost Detail","✗ "&TEXT(${d},"#,##0"))`, result: '✔ = Cost Detail' };
+      x.font = { ...st.FB, size: 9, color: { argb: 'FF1B7F4B' } }; x.alignment = { horizontal: 'right' }; });
+    const c2b = ws.getCell(2, Q ? T0 : B0); c2b.value = `Report ${mlabel(A.reportMonth)} · Pending = posted after the cut date, counted next month, not in Total`;
     c2b.font = { ...st.F, size: 9, italic: true, color: { argb: 'FF5A6678' } };
     for (const [r, c, font, alignment, fill] of headLook) { const x = ws.getCell(r, c); x.font = font; x.alignment = alignment; x.fill = fill; x.numFmt = 'General'; }
     ws.properties.outlineLevelCol = 1;
