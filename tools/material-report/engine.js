@@ -470,7 +470,7 @@
     const mvtTypes = [...mvtSum.values()].sort((a, b) => cmp(a.mvt, b.mvt) || cmp(a.text, b.text));
 
     const A = { PLANT, PROJECT, dataDate, months, curMonth, reportMonth, cutoff, openingBefore, hasOpening, history, postMonths,
-      boxes, files: opts.files || {}, me: ME, mb: MB, cji: CJ, cost, costAll, pending, nonWA, mats, list, k, monthlyRows, rowIds, loadNo, byBucket,
+      boxes, exportCheck: opts.exportCheck || null, carryStats: opts.carryStats || null, carry: { cji: src.cji, mb: src.mb }, files: opts.files || {}, me: ME, mb: MB, cji: CJ, cost, costAll, pending, nonWA, mats, list, k, monthlyRows, rowIds, loadNo, byBucket,
       byGroup, byPackage, byClassMonth, mvtTypes, warnings, packages, mnls, prev: opts.prev || null };
     A.checks = runChecks(A);
     A.changes = diffPrevious(A);
@@ -505,16 +505,72 @@
     return { months, maxEntry: stamps.length ? Math.max(...stamps) : null, hasTs: CJ.hasTs, lines: wa.map((l) => ({ month: l.month, entry: l.ts !== null ? l.ts : (l.date ? stamp(l.date, null) : null) })), lastPosting: wa.reduce((a, l) => (l.date && (!a || l.date > a) ? l.date : a), null) };
   }
 
+  // ================================================================== CARRY-FORWARD (window exports)
+  // The report keeps every CJI3 line and MB51 movement it has seen, in hidden sheets with SAP's own headers, so next month
+  // SAP only has to export a posting-date window (from the 1st of the previous month). Carried + new are merged on SAP's
+  // line key; a line in both counts once and the new export wins (SAP is the truth).
+  const canonHeader = (kind) => { const cols = LAYOUT[kind].cols, out = [];
+    for (const n of Object.values(cols)) out.push(Array.isArray(n) ? n[0] : n); return out; };   // key order keeps "Posting Row" after "Ref. document number"
+  const CANON = { cji: canonHeader('cji'), mb: canonHeader('mb') };
+  function toCanon(kind, aoa) {
+    const { ix, hr, missing } = mapColumns(kind, aoa); if (missing.length) return { error: missing };
+    const keys = Object.keys(LAYOUT[kind].cols), rows = [];
+    for (const row of aoa.slice(hr + 1)) { const r = row || [];
+      const idKey = kind === 'cji' ? 'docNo' : 'doc'; if (!str(r[ix[idKey]])) continue;           // subtotal rows are not lines
+      rows.push(keys.map((k) => (ix[k] >= 0 && r[ix[k]] !== undefined ? r[ix[k]] : ''))); }
+    return { rows };
+  }
+  const canonKey = (kind) => { const ks = Object.keys(LAYOUT[kind].cols), at = (k) => ks.indexOf(k);
+    return kind === 'cji' ? (r) => [code(r[at('docNo')]), code(r[at('postRow')]), code(r[at('fy')])].join('/')
+      : (r) => [code(r[at('doc')]), code(r[at('year')]), code(r[at('item')])].join('/'); };
+  const canonDate = (kind) => { const i = Object.keys(LAYOUT[kind].cols).indexOf('pdate'); return (r) => toDate(r[i]); };
+  // newSrc: this month's exports; carried: { cji: aoa, mb: aoa } from the last report (or null for a first report)
+  function mergeSources(newSrc, carried) {
+    const out = { me: newSrc.me, stats: {}, errors: [] };
+    for (const kind of ['cji', 'mb']) {
+      const N = toCanon(kind, newSrc[kind] || [[]]); if (N.error) { out.errors.push(`${LAYOUT[kind].title}: missing column${N.error.length > 1 ? 's' : ''} ${N.error.map((x) => '"' + x + '"').join(', ')}`); continue; }
+      const C = carried && carried[kind] ? toCanon(kind, carried[kind]) : { rows: [] };
+      const key = canonKey(kind), pd = canonDate(kind);
+      const dates = N.rows.map(pd).filter(Boolean), from = dates.length ? dates.reduce((a, b) => (b < a ? b : a)) : null;
+      const byKey = new Map(); for (const r of C.rows || []) byKey.set(key(r), r);
+      const newKeys = new Set(); let replaced = 0, changed = 0, added = 0;
+      for (const r of N.rows) { const k = key(r); newKeys.add(k);
+        if (byKey.has(k)) { replaced++; if (JSON.stringify(byKey.get(k).map(str)) !== JSON.stringify(r.map(str))) changed++; } else added++;
+        byKey.set(k, r); }
+      // carried lines inside the new export's window that the export does not contain: kept, but reported
+      const missing = from ? (C.rows || []).filter((r) => { const d = pd(r); return d && d >= from && !newKeys.has(key(r)); }) : [];
+      out[kind] = [CANON[kind]].concat([...byKey.values()]);
+      out.stats[kind] = { carried: (C.rows || []).length, exported: N.rows.length, added, replaced, changed, missing: missing.length, missingRows: missing, from,
+        to: dates.length ? dates.reduce((a, b) => (b > a ? b : a)) : null, window: !!(carried && carried[kind]) };
+    }
+    const E0 = parseCJI3(newSrc.cji || [[]]);
+    if (!E0.error) out.exportCheck = { printed: E0.printedTotal, detail: sum(E0.lines, (l) => l.amt), lines: E0.lines.length, skipped: E0.skipped };
+    return out;
+  }
+
   // ================================================================== CHECKS
   function runChecks(A) {
     const out = [], k = A.k, tol = 1;
     const push = (c) => out.push(Object.assign({ rows: [], cols: [] }, c));
     // 1. the file ties to its own printed total
-    if (k.printedTotal !== null && k.printedTotal !== undefined) {
-      const all = sum(A.cji.lines, (l) => l.amt), d = all - k.printedTotal;
-      push({ id: 'total', level: Math.abs(d) <= tol ? 'good' : 'bad', title: 'CJI3 detail ties to the grand total printed in the file',
-        detail: `${A.cji.lines.length.toLocaleString('en-US')} detail lines sum to ${fmt(all)}; the file prints ${fmt(k.printedTotal)} (difference ${fmt(d)}). ${k.skippedCji} subtotal rows were skipped.`, amount: d });
+    const X = A.exportCheck || { printed: k.printedTotal, detail: sum(A.cji.lines, (l) => l.amt), lines: A.cji.lines.length, skipped: k.skippedCji };
+    if (X.printed !== null && X.printed !== undefined) {
+      const d = X.detail - X.printed;
+      push({ id: 'total', level: Math.abs(d) <= tol ? 'good' : 'bad', title: 'CJI3 export ties to the grand total printed in the file',
+        detail: `${X.lines.toLocaleString('en-US')} detail lines of this month's export sum to ${fmt(X.detail)}; the file prints ${fmt(X.printed)} (difference ${fmt(d)}). ${X.skipped} subtotal rows were skipped.`, amount: d });
     } else push({ id: 'total', level: 'warn', title: 'CJI3 has no printed grand total', detail: 'The export carries no total row, so the detail cannot be tied to SAP’s own total. Export with totals to get this check.' });
+    // carry-forward: what came from the last report, what from this export, and anything missing from the window
+    const cs = A.carryStats;
+    if (cs && cs.cji && cs.cji.window) for (const kind of ['cji', 'mb']) { const t = cs[kind]; if (!t) continue;
+      const name = kind === 'cji' ? 'CJI3 lines' : 'MB51 movements';
+      push({ id: 'carry-' + kind, level: t.missing ? 'warn' : 'good', title: `${kind === 'cji' ? 'CJI3' : 'MB51'} export window merged with the last report`, count: t.missing,
+        detail: `${t.carried.toLocaleString('en-US')} ${name} carried from the last report + ${t.exported.toLocaleString('en-US')} in this export (posting dates ${dtext(t.from)} → ${dtext(t.to)}): `
+          + `${t.added.toLocaleString('en-US')} new, ${t.replaced.toLocaleString('en-US')} already known${t.changed ? ` (${t.changed} changed in SAP – the export's version is used)` : ''}.`
+          + (t.missing ? ` ${t.missing} carried ${name} posted inside this window are NOT in the export – kept as they were. Check that the export used the same selection (project / WBS / plant).` : ''),
+        cols: kind === 'cji' ? ['Document', 'Row', 'Year', 'Posting date', 'Material', 'Amount'] : ['Material doc', 'Item', 'Year', 'Posting date', 'Material', 'Qty'],
+        rows: t.missingRows.slice(0, 300).map((r) => { const ks = Object.keys(LAYOUT[kind].cols), g = (x) => r[ks.indexOf(x)];
+          return kind === 'cji' ? [str(g('docNo')), code(g('postRow')), code(g('fy')), dtext(toDate(g('pdate'))), code(g('material')), num(g('amt'))]
+            : [code(g('doc')), code(g('item')), code(g('year')), dtext(toDate(g('pdate'))), code(g('material')), num(g('qty'))]; }) }); }
     // 2. other document types
     if (A.nonWA.length) {
       const by = {}; for (const l of A.nonWA) add(by, l.docType || '(blank)', l.amt);
@@ -655,6 +711,7 @@
     if (sn) { const i = idx(sn, 0);
       for (const r of sn.slice(1)) { const m = code(r[i('Material')]); if (!m) continue;
         P.snap.set(m, { desc: str(r[i('Description')]), group: str(r[i('Group')]), unit: str(r[i('Unit')]), cost: num(r[i('Cost')]), cons: num(r[i('Consumed')]), bal: num(r[i('Balance')]), open: num(r[i('Open PO')]) }); } }
+    if (aoaBySheet['_CJI3'] && aoaBySheet['_MB51']) P.carried = { cji: aoaBySheet['_CJI3'], mb: aoaBySheet['_MB51'] };
     const pk = aoaBySheet['_POs'];
     if (pk) for (const r of pk.slice(1)) if (str(r[0])) P.poKeys.add(str(r[0]));
     const rw = aoaBySheet['_Rows'];
@@ -927,6 +984,13 @@
     wsSnap.addRow(['Material', 'Description', 'Group', 'Unit', 'Cost', 'Consumed', 'Balance', 'Open PO']);
     for (const r of A.list) wsSnap.addRow([r.material, r.desc, r.group, r.unit, round2(r.cost), r.consQty, r.balance, r.openQty]);
     wsPOs.addRow(['PO/item']); for (const l of A.me.lines) wsPOs.addRow([l.key]);
+    // every line seen so far, with SAP's headers: next month's window export is merged with these
+    for (const [name, aoa] of [['_CJI3', A.carry.cji], ['_MB51', A.carry.mb]]) {
+      const ws = wb.addWorksheet(name, { state: 'hidden' });
+      const canon = aoa && aoa.length ? (aoa[0].join('|') === CANON[name === '_CJI3' ? 'cji' : 'mb'].join('|') ? aoa : null) : null;
+      const rows = canon || [CANON[name === '_CJI3' ? 'cji' : 'mb']].concat((toCanon(name === '_CJI3' ? 'cji' : 'mb', aoa || [[]]).rows) || []);
+      for (const r of rows) ws.addRow(r.map((v) => (v instanceof Date ? new Date(Date.UTC(ymd(v).y, ymd(v).m - 1, ymd(v).d)) : v)));
+    }
     const wsRows = wb.addWorksheet('_Rows', { state: 'hidden' });
     wsRows.addRow(['Row key', 'Row ID', 'First seen (load)']);
     for (const [k, v] of [...A.rowIds].sort((a, b) => a[1].id - b[1].id)) wsRows.addRow([k, v.id, v.first]);
@@ -1081,7 +1145,7 @@
     for (let j = 1; j <= 4 + nB; j++) { const c = ws.getCell(tn, j); c.font = st.FB; c.fill = FILL.TOT; }
   }
   const ymdDate = (d) => { const o = ymd(d); return new Date(Date.UTC(o.y, o.m - 1, o.d)); };
-  const api = { suggestCutoff, cutText, openColumns, periodInfo, tsText, tsParse, nextMonth, bucketLabel, orderSheetPr, analyse, summarize, readPrevious, buildWorkbook, detectKind, parseME2N, parseMB51, parseCJI3, classify, suggestFor, normPkg,
+  const api = { mergeSources, toCanon, CANON, suggestCutoff, cutText, openColumns, periodInfo, tsText, tsParse, nextMonth, bucketLabel, orderSheetPr, analyse, summarize, readPrevious, buildWorkbook, detectKind, parseME2N, parseMB51, parseCJI3, classify, suggestFor, normPkg,
     CLASSES, CLASS, MVT, COST_CLASS, PACKAGES, MNLS, LAYOUT, mlabel, mtext, dtext, monthKey, esc, fmt, str, num, code };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.MaterialEngine = api;
 })(typeof window !== 'undefined' ? window : globalThis);

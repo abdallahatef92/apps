@@ -50,7 +50,7 @@ async function takeFiles(list) {
     let wb; try { wb = await readBook(f); } catch (e) { message('msgs', 'bad', `${esc(f.name)} could not be read: ${esc(e.message)}`); continue; }
     const names = wb.SheetNames;
     if (names.includes('_Meta') || names.includes('Material Coding')) {         // a previous material report
-      const aoa = {}; for (const n of ['_Meta', 'Material Coding', 'Load history', '_Snap', '_POs', '_Rows', '_Months']) if (wb.Sheets[n]) aoa[n] = aoaOf(wb.Sheets[n]);
+      const aoa = {}; for (const n of ['_Meta', 'Material Coding', 'Load history', '_Snap', '_POs', '_Rows', '_Months', '_CJI3', '_MB51']) if (wb.Sheets[n]) aoa[n] = aoaOf(wb.Sheets[n]);
       const P = E.readPrevious(aoa);
       if (!P) { message('msgs', 'warn', `${esc(f.name)} looks like a report but has no coding or history in it.`); continue; }
       state.prev = P; state.prevName = f.name;
@@ -70,6 +70,7 @@ async function takeFiles(list) {
     if (!hit) message('msgs', 'warn', `${esc(f.name)} is not an ME2N, MB51 or CJI3 export, a material report or a work package master – its columns were not recognised.`);
   }
   status('');
+  state.merged = null;                            // files or last report changed: merge again
   const ready = ['me', 'mb', 'cji'].every((k) => state.files[k]);
   $('btn-clear').disabled = !Object.keys(state.files).length && !state.prev;
   if (ready) setupPeriod(); else { $('period').hidden = true; state.period = null; }
@@ -132,10 +133,16 @@ async function build() {
   status(''); $('empty').hidden = true; $('results').hidden = false;
   renderAll();
 }
+// this month's exports merged with every line the last report carried (window exports need only reach back one month)
+function merged() {
+  if (!state.merged) { const prev = prevFits() ? state.prev : null; state.merged = E.mergeSources(state.files, prev && prev.carried ? prev.carried : null); }
+  return state.merged;
+}
 const prevFits = () => state.prev && (!state.prev.project || state.prev.project === state.plant);
 function analyse() {
   const prev = prevFits() ? state.prev : null;
-  return E.analyse(state.files, { coding: state.coding, prev, history: prev ? prev.loads : [],
+  const M = merged();
+  return E.analyse({ me: M.me, cji: M.cji, mb: M.mb }, { coding: state.coding, prev, history: prev ? prev.loads : [], exportCheck: M.exportCheck, carryStats: M.stats,
     reportMonth: +$('p-month').value || undefined, cutoff: cutoffValue(), openingBefore: +$('p-open').value || 0,
     packages: state.master ? state.master.packages : undefined, mnl: state.master ? state.master.mnl : undefined,
     files: { me: state.names.me, mb: state.names.mb, cji: state.names.cji } });
@@ -445,7 +452,9 @@ function applySuggestion() {
   setCutoff(sg.cutoff);
 }
 function setupPeriod() {
-  const info = E.periodInfo(state.files); if (!info) return;
+  if (!state.plant) state.plant = guessPlant();
+  const M = merged(); if (M.errors.length) { M.errors.forEach((e) => message('msgs', 'bad', esc(e))); return; }
+  const info = E.periodInfo({ cji: M.cji, mb: M.mb }); if (!info) return;
   state.period = info; $('period').hidden = false;
   const prev = state.prev, pm = prev && prev.meta.reportMonth, pc0 = prev && prev.meta.cutoff;
   const months = new Set(info.months); if (pm) months.add(E.nextMonth(pm));
@@ -456,7 +465,8 @@ function setupPeriod() {
   $('p-open').innerHTML = '<option value="0">No roll-up</option>' + [...info.months].sort((a, b) => a - b).slice(1).map((m) => `<option value="${m}">Months before ${E.mlabel(m)}</option>`).join('');
   $('p-open').value = ob && [...$('p-open').options].some((o) => o.value === ob) ? ob : String(prev && prev.meta.openingBefore ? prev.meta.openingBefore : 0);
   $('p-last').innerHTML = prev && pm ? `Last report: <b>${E.mlabel(pm)}</b>, cut-off <b>${esc(E.cutText(pc0))}</b>. Lines entered after it and posted in ${E.mlabel(pm)} or earlier are counted in this report as late postings.`
-    : 'First report: every line entered up to the cut-off sits in its posting month.';
+    : 'First report: every line entered up to the cut-off sits in its posting month. The exports must start at the project start.';
+  $('p-last').innerHTML += windowText();
   if (!info.hasTs) message('msgs', 'warn', 'This CJI3 export has no "Created on" column, so the cut-off can only use posting dates. Add Created on and Time of Entry to the CJI3 layout.');
   applySuggestion();
 }
@@ -466,7 +476,22 @@ for (const id of ['p-date', 'p-open']) $(id).addEventListener('input', periodCha
 $('p-month').addEventListener('input', applySuggestion);                 // a new month gets its own suggested cut-off
 $('p-sugg').addEventListener('click', applySuggestion);
 $('p-eom').addEventListener('click', () => { const m = +$('p-month').value; setCutoff(Date.UTC(Math.floor(m / 100), m % 100, 1) - 1000); });
+function windowText() {
+  const st = merged().stats; if (!st.cji) return '';
+  const w = (t, name) => `${name}: posting dates ${E.dtext(t.from)} → ${E.dtext(t.to)} (${t.exported.toLocaleString('en-US')} lines)` + (t.window ? ` + ${t.carried.toLocaleString('en-US')} carried from the last report` : '');
+  return `<br><span class="muted">${w(st.cji, 'CJI3')} · ${w(st.mb, 'MB51')}</span>`;
+}
+// a window export must reach back into the last reported month, so late postings into it are caught
+function windowProblem() {
+  const prev = prevFits() ? state.prev : null, st = merged().stats;
+  if (!prev || !prev.carried || !prev.meta.reportMonth) return null;
+  const need = prev.meta.reportMonth, first = `01-${E.mlabel(need)}`;
+  for (const [k, name] of [['cji', 'CJI3'], ['mb', 'MB51']]) { const t = st[k]; if (!t || !t.from) continue;
+    if (E.monthKey(t.from) > need) return `The ${name} export starts on ${E.dtext(t.from)}. Export it again with posting date from ${first} (the last reported month), so late postings into ${E.mlabel(need)} are caught.`; }
+  return null;
+}
 function periodProblem() {
+  const wp = windowProblem(); if (wp) return wp;
   const c = cutoffValue(), m = +$('p-month').value, prev = prevFits() || (state.prev && !state.plant) ? state.prev : null;
   if (c === null) return 'Choose the cut-off date (and time) to build the report.';
   if (m && c < Date.UTC(Math.floor(m / 100), (m % 100) - 1, 1)) return `The cut-off is before ${E.mlabel(m)} starts – pick a later cut-off or an earlier report month.`;

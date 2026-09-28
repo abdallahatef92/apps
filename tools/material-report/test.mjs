@@ -203,6 +203,33 @@ eq(B.changes.newPO.map((l) => l.key), ['5000000009/10'], 'new PO line found');
   eq(hdr.includes('Pending Amount') && hdr.indexOf('Pending Amount') > hdr.indexOf('Total Amount'), true, 'Pending after Total');
 }
 
+// ================================================================ window exports merged with the carried lines
+{
+  const cut = (d) => Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10), 23, 59, 59);
+  const run = (src, prev, M, c) => { const m = E.mergeSources(src, prev ? prev.carried : null);
+    return E.analyse({ me: m.me, cji: m.cji, mb: m.mb }, { reportMonth: M, cutoff: cut(c), prev, history: prev ? prev.loads : [], exportCheck: m.exportCheck, carryStats: m.stats }); };
+  const back = async (A) => { const w = XLSX.read(await E.buildWorkbook(A, { ExcelJS, JSZip }), { cellDates: true }); const a = {};
+    for (const n of w.SheetNames) a[n] = XLSX.utils.sheet_to_json(w.Sheets[n], { header: 1, raw: true, defval: '' }); return E.readPrevious(a); };
+  const J1 = run({ me: ME, mb: MB, cji: CJ }, null, 202601, '2026-02-03');
+  eq([J1.exportCheck.lines, J1.exportCheck.printed], [CJ.slice(1).filter((r) => r[17]).length, all], 'printed-total check reads the export itself, not the merged lines');
+  const P1 = await back(J1);
+  eq([P1.carried.cji.length - 1, P1.carried.mb.length - 1], [CJ.slice(1).filter((r) => r[17]).length, MB.length - 1], 'every CJI3 line and movement carried');
+  // February window: posting date from 01-Jan (the last reported month); the A02 amount was corrected in SAP
+  const inWin = (r, i) => i === 0 || (r[27] instanceof Date && r[27] >= D('2026-01-01'));
+  const CJw = CJ.filter(inWin).map((r) => r.slice()); CJw.find((r) => r[17] === 'A02')[9] = 1300001;
+  const MBw = MB.filter((r, i) => i === 0 || r[9] >= D('2026-01-01'));
+  const F1 = run({ me: ME, mb: MBw, cji: CJw }, P1, 202602, '2026-03-05');
+  const F2 = run({ me: ME, mb: MB, cji: CJw.concat([]) }, P1, 202602, '2026-03-05');
+  eq(F1.carryStats.cji.changed, 1, 'a line changed in SAP is noticed'); eq(F1.costAll.find((l) => l.docNo === 'A02').amt, 1300001, "the export's version wins");
+  eq(F1.costAll.length, J1.costAll.length, 'overlap counted once');
+  eq(Math.abs(F1.k.cost - F2.k.cost) < 0.01, true, 'window + carried = full');
+  // a window that drops a carried line inside its range: kept, and reported
+  const CJm = CJw.filter((r) => r[17] !== 'A03');
+  const F3 = run({ me: ME, mb: MBw, cji: CJm }, P1, 202602, '2026-03-05');
+  eq([F3.carryStats.cji.missing, F3.costAll.some((l) => l.docNo === 'A03')], [1, true], 'missing carried line kept and reported');
+  eq(F3.checks.find((c) => c.id === 'carry-cji').level, 'warn', 'carry check warns');
+}
+
 // ================================================================ real extracts (optional)
 if (process.env.MCR_REAL) {
   const dir = process.env.MCR_REAL, s = {};

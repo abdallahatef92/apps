@@ -64,6 +64,27 @@ The period box shows these counts before you build.
 
 **Opening roll-up.** *Roll into Opening* sums all months before a chosen month into the Opening block.
 
+## Monthly exports: a window, not the whole history
+
+The report carries every CJI3 line and MB51 movement it has seen, in two hidden sheets (`_CJI3`, `_MB51`) that use SAP's own column names. So after the first report, SAP only has to export a **posting-date window**.
+
+| Export | Posting date from | Posting date to |
+|---|---|---|
+| **CJI3** and **MB51**, first report | project start | open |
+| **CJI3** and **MB51**, every month after | **the 1st of the last reported month** (e.g. 01-Aug for the September report) | open |
+| **ME2N** | no date filter | – |
+
+**How the merge works.**
+- The tool merges the window with the carried lines on SAP's line key: CO document + posting row + year, and material document + item + year for MB51.
+- A line in both is counted once, and the export's version wins if SAP changed it.
+- A carried line whose posting date falls inside the window but is missing from the export is kept, and reported in Checks. That usually means a different selection (WBS / plant) was used.
+
+**Guards.**
+- An export that starts after the last reported month blocks the build, with the date to export from.
+- The printed-total check runs on the export itself.
+
+**Tested on DIST.** September built from the one-month window (1,261 CJI3 lines) plus the August report is identical to September built from the full export (5,315 lines). That covers every month, every Material Monthly row and every stock balance.
+
 ## Material Monthly
 
 This is the main sheet, and the block you copy into your cost report each month with Paste Special → Values. It is one flat table: one header row, no merged cells, and no header or blank rows between the data.
