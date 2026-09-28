@@ -66,7 +66,7 @@ The report carries every CJI3 line and MB51 movement it has seen, in two hidden 
 **The filter date.** It is printed on the Dashboard ("NEXT MONTH'S EXPORT …"). It is **7 days before the newest Created on date in that report**, which is the day its export was taken.
 
 **How the tool proves an export complete.** That week of overlap needs no typed number:
-- Every carried line entered between the export's first entry date and the last cut-off must be in the new export. All present means the selection is the same and nothing entered since was skipped.
+- Every carried line entered between the export's first entry date and the last report's newest line must be in the new export. All present means the selection is the same and nothing entered since was skipped.
 - If any are missing, the selection differs. The build is blocked and the lines are listed in Checks.
 - If the export has no overlap at all (the filter started after the last report's newest line), the build is blocked and the tool gives the date to filter from.
 - An unfiltered, full export always passes.
@@ -97,7 +97,7 @@ Rows are sorted CSI → group → material → line type on every build. Each ke
 **Formulas.**
 - CSI, MNL and Cost element are live lookups from *Material Coding*. Re-coding changes the row where it stands; nothing needs regrouping.
 - Qty and Amount are SUMIFS on *Cost Detail* by Row ID and **Report bucket**.
-- The TOTAL row (follows the filter) and a tie-out check against CJI3 cost to the cut-off sit above the header.
+- The TOTAL row (follows the filter) and a tie-out check against CJI3 cost posted up to the cut date sit above the header.
 
 **Package Monthly** sums Material Monthly by CSI and month, so it is right whatever the row order.
 
