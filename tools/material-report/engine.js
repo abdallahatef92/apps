@@ -507,8 +507,8 @@
 
   // ================================================================== CARRY-FORWARD (window exports)
   // The report keeps every CJI3 line and MB51 movement it has seen, in hidden sheets with SAP's own headers, so next month
-  // SAP only has to export a posting-date window (from the 1st of the previous month). Carried + new are merged on SAP's
-  // line key; a line in both counts once and the new export wins (SAP is the truth).
+  // SAP only has to export what was ENTERED since (Created on / Entry Date filter) – back-dated lines of any age included.
+  // Carried + new are merged on SAP's line key; a line in both counts once and the new export wins (SAP is the truth).
   const canonHeader = (kind) => { const cols = LAYOUT[kind].cols, out = [];
     for (const n of Object.values(cols)) out.push(Array.isArray(n) ? n[0] : n); return out; };   // key order keeps "Posting Row" after "Ref. document number"
   const CANON = { cji: canonHeader('cji'), mb: canonHeader('mb') };
@@ -524,24 +524,39 @@
     return kind === 'cji' ? (r) => [code(r[at('docNo')]), code(r[at('postRow')]), code(r[at('fy')])].join('/')
       : (r) => [code(r[at('doc')]), code(r[at('year')]), code(r[at('item')])].join('/'); };
   const canonDate = (kind) => { const i = Object.keys(LAYOUT[kind].cols).indexOf('pdate'); return (r) => toDate(r[i]); };
-  // newSrc: this month's exports; carried: { cji: aoa, mb: aoa } from the last report (or null for a first report)
-  function mergeSources(newSrc, carried) {
+  // the day a row was entered in SAP (CJI3 Created on / MB51 Entry Date), as a day number; posting date if the column is empty
+  const canonEntryDay = (kind) => { const ks = Object.keys(LAYOUT[kind].cols), e = ks.indexOf(kind === 'cji' ? 'created' : 'edate'), p = ks.indexOf('pdate');
+    return (r) => { const d = toDate(r[e]) || toDate(r[p]); if (!d) return null; const o = ymd(d); return Date.UTC(o.y, o.m - 1, o.d) / DAY; }; };
+  // Next month's exports are filtered on Created on / Entry Date from OVERLAP_DAYS before this report's cut-off. The overlap
+  // week is what proves an export complete without anyone typing a number: every carried line entered in it must come back.
+  const OVERLAP_DAYS = 7;
+  const nextFilterFrom = (cutoff) => (cutoff && isFinite(cutoff)) ? Math.floor(cutoff / DAY) * DAY - OVERLAP_DAYS * DAY : null;
+  // newSrc: this month's exports; carried: { cji: aoa, mb: aoa } from the last report (or null for a first report);
+  // lastCutoff: that report's cut-off
+  function mergeSources(newSrc, carried, lastCutoff) {
     const out = { me: newSrc.me, stats: {}, errors: [] };
+    const cutDay = lastCutoff && isFinite(lastCutoff) ? Math.floor(lastCutoff / DAY) : null;
     for (const kind of ['cji', 'mb']) {
       const N = toCanon(kind, newSrc[kind] || [[]]); if (N.error) { out.errors.push(`${LAYOUT[kind].title}: missing column${N.error.length > 1 ? 's' : ''} ${N.error.map((x) => '"' + x + '"').join(', ')}`); continue; }
       const C = carried && carried[kind] ? toCanon(kind, carried[kind]) : { rows: [] };
-      const key = canonKey(kind), pd = canonDate(kind);
-      const dates = N.rows.map(pd).filter(Boolean), from = dates.length ? dates.reduce((a, b) => (b < a ? b : a)) : null;
+      const key = canonKey(kind), pd = canonDate(kind), ed = canonEntryDay(kind);
+      const minOf = (xs) => xs.length ? xs.reduce((a, b) => (b < a ? b : a)) : null, maxOf = (xs) => xs.length ? xs.reduce((a, b) => (b > a ? b : a)) : null;
+      const dates = N.rows.map(pd).filter(Boolean), eDays = N.rows.map(ed).filter((x) => x !== null);
+      const eFrom = minOf(eDays), eTo = maxOf(eDays);
       const byKey = new Map(); for (const r of C.rows || []) byKey.set(key(r), r);
       const newKeys = new Set(); let replaced = 0, changed = 0, added = 0;
       for (const r of N.rows) { const k = key(r); newKeys.add(k);
         if (byKey.has(k)) { replaced++; if (JSON.stringify(byKey.get(k).map(str)) !== JSON.stringify(r.map(str))) changed++; } else added++;
         byKey.set(k, r); }
-      // carried lines inside the new export's window that the export does not contain: kept, but reported
-      const missing = from ? (C.rows || []).filter((r) => { const d = pd(r); return d && d >= from && !newKeys.has(key(r)); }) : [];
+      // the overlap: carried lines entered between the export's first entry day and the last cut-off must all be in the export
+      const hasCarry = !!(carried && carried[kind] && cutDay !== null);
+      const overlap = hasCarry && eFrom !== null && eFrom <= cutDay;
+      const missing = overlap ? (C.rows || []).filter((r) => { const d = ed(r); return d !== null && d >= eFrom && d <= cutDay && !newKeys.has(key(r)); }) : [];
       out[kind] = [CANON[kind]].concat([...byKey.values()]);
-      out.stats[kind] = { carried: (C.rows || []).length, exported: N.rows.length, added, replaced, changed, missing: missing.length, missingRows: missing, from,
-        to: dates.length ? dates.reduce((a, b) => (b > a ? b : a)) : null, window: !!(carried && carried[kind]) };
+      out.stats[kind] = { carried: (C.rows || []).length, exported: N.rows.length, added, replaced, changed, missing: missing.length, missingRows: missing,
+        from: minOf(dates), to: maxOf(dates), entryFrom: eFrom === null ? null : new Date(eFrom * DAY), entryTo: eTo === null ? null : new Date(eTo * DAY),
+        window: hasCarry, overlap, noOverlap: hasCarry && N.rows.length > 0 && !overlap,
+        overlapLines: overlap ? N.rows.filter((r) => { const d = ed(r); return d !== null && d <= cutDay; }).length : 0 };
     }
     const E0 = parseCJI3(newSrc.cji || [[]]);
     if (!E0.error) out.exportCheck = { printed: E0.printedTotal, detail: sum(E0.lines, (l) => l.amt), lines: E0.lines.length, skipped: E0.skipped };
@@ -563,14 +578,17 @@
     const cs = A.carryStats;
     if (cs && cs.cji && cs.cji.window) for (const kind of ['cji', 'mb']) { const t = cs[kind]; if (!t) continue;
       const name = kind === 'cji' ? 'CJI3 lines' : 'MB51 movements';
-      push({ id: 'carry-' + kind, level: t.missing ? 'warn' : 'good', title: `${kind === 'cji' ? 'CJI3' : 'MB51'} export window merged with the last report`, count: t.missing,
-        detail: `${t.carried.toLocaleString('en-US')} ${name} carried from the last report + ${t.exported.toLocaleString('en-US')} in this export (posting dates ${dtext(t.from)} → ${dtext(t.to)}): `
-          + `${t.added.toLocaleString('en-US')} new, ${t.replaced.toLocaleString('en-US')} already known${t.changed ? ` (${t.changed} changed in SAP – the export's version is used)` : ''}.`
-          + (t.missing ? ` ${t.missing} carried ${name} posted inside this window are NOT in the export – kept as they were. Check that the export used the same selection (project / WBS / plant).` : ''),
-        cols: kind === 'cji' ? ['Document', 'Row', 'Year', 'Posting date', 'Material', 'Amount'] : ['Material doc', 'Item', 'Year', 'Posting date', 'Material', 'Qty'],
+      const eName = kind === 'cji' ? 'Created on' : 'Entry Date', lastCut = cutText(A.history.length ? A.history[A.history.length - 1].cutoff : null);
+      push({ id: 'carry-' + kind, level: (t.missing || t.noOverlap) ? 'bad' : 'good', title: `${kind === 'cji' ? 'CJI3' : 'MB51'} export is complete (overlap with the last report checks out)`, count: t.missing,
+        detail: t.noOverlap ? `The export's first ${eName} is ${dtext(t.entryFrom)}, after the last cut-off ${lastCut}: nothing overlaps the last report, so lines entered in between could be missing. Export again, filtering ${eName} from ${cutText(nextFilterFrom(A.history.length ? A.history[A.history.length - 1].cutoff : null))} or earlier.`
+          : `${t.carried.toLocaleString('en-US')} ${name} carried from the last report + ${t.exported.toLocaleString('en-US')} in this export (${eName} ${dtext(t.entryFrom)} → ${dtext(t.entryTo)}): `
+          + `${t.added.toLocaleString('en-US')} new, ${t.replaced.toLocaleString('en-US')} already known${t.changed ? ` (${t.changed} changed in SAP – the export's version is used)` : ''}. `
+          + (t.missing ? `${t.missing} ${name} of the last report entered between ${dtext(t.entryFrom)} and ${lastCut} are NOT in this export: the selection differs (project / WBS / plant / layout). Export again with the same selection.`
+            : `All ${t.overlapLines.toLocaleString('en-US')} ${name} entered in the overlap up to ${lastCut} came back, so the selection matches and nothing entered since was skipped.`),
+        cols: kind === 'cji' ? ['Document', 'Row', 'Year', 'Posting date', 'Created on', 'Material', 'Amount'] : ['Material doc', 'Item', 'Year', 'Posting date', 'Entry Date', 'Material', 'Qty'],
         rows: t.missingRows.slice(0, 300).map((r) => { const ks = Object.keys(LAYOUT[kind].cols), g = (x) => r[ks.indexOf(x)];
-          return kind === 'cji' ? [str(g('docNo')), code(g('postRow')), code(g('fy')), dtext(toDate(g('pdate'))), code(g('material')), num(g('amt'))]
-            : [code(g('doc')), code(g('item')), code(g('year')), dtext(toDate(g('pdate'))), code(g('material')), num(g('qty'))]; }) }); }
+          return kind === 'cji' ? [str(g('docNo')), code(g('postRow')), code(g('fy')), dtext(toDate(g('pdate'))), dtext(toDate(g('created'))), code(g('material')), num(g('amt'))]
+            : [code(g('doc')), code(g('item')), code(g('year')), dtext(toDate(g('pdate'))), dtext(toDate(g('edate'))), code(g('material')), num(g('qty'))]; }) }); }
     // 2. other document types
     if (A.nonWA.length) {
       const by = {}; for (const l of A.nonWA) add(by, l.docType || '(blank)', l.amt);
@@ -900,6 +918,10 @@
       ['Issued to orders – outside project cost', A.k.toOrders], ['Ordered value (purchase POs)', A.k.orderedVal], ['Still to be delivered (value)', A.k.openPO],
       ['Materials with cost', A.k.materials], ['Material groups with cost', A.k.groups], ['Purchase orders', A.k.pos], ['Vendors', A.k.vendors]];
     wsDash.getCell('A4').value = 'Headline'; wsDash.getCell('A4').font = st.FB;
+    if (isFinite(A.cutoff)) { const nf = cutText(nextFilterFrom(A.cutoff));
+      const c = wsDash.getCell('D1'); c.value = `NEXT MONTH'S EXPORT: CJI3 and MB51 with posting date from project start (to: empty), then filter Created on (CJI3) / Entry Date (MB51) from ${nf}. ME2N: no filter.`;
+      c.font = { ...st.FB, color: { argb: 'FF9A6200' } };
+      const c2 = wsDash.getCell('D2'); c2.value = `The filter starts ${OVERLAP_DAYS} days before this report's cut-off (${cutText(A.cutoff)}): the overlap lets the tool prove next month's export complete.`; c2.font = st.T2; }
     kp.forEach(([l, v], i) => { const c = wsDash.getCell(5 + i, 1); c.value = l; c.font = /^ {2}/.test(l) ? st.F : st.FB;
       const x = wsDash.getCell(5 + i, 2); x.value = v; x.numFmt = NF.amt; x.font = st.FB; });
     wsDash.getColumn(1).width = 40; wsDash.getColumn(2).width = 16;
@@ -976,7 +998,7 @@
 
     // ---------------- machinery for next month
     [['plant', A.PLANT], ['project', A.PROJECT], ['dataDate', dtext(A.dataDate)], ['loadNo', A.loadNo], ['reportMonth', mtext(A.reportMonth)],
-      ['cutoff', isFinite(A.cutoff) ? cutText(A.cutoff) : ''], ['openingBefore', A.openingBefore ? mtext(A.openingBefore) : ''], ['tool', 'Material cost report Rev02'], ['saved', new Date().toISOString()]]
+      ['cutoff', isFinite(A.cutoff) ? cutText(A.cutoff) : ''], ['nextFilterFrom', isFinite(A.cutoff) ? cutText(nextFilterFrom(A.cutoff)) : ''], ['openingBefore', A.openingBefore ? mtext(A.openingBefore) : ''], ['tool', 'Material cost report Rev02'], ['saved', new Date().toISOString()]]
       .forEach((r) => wsMeta.addRow(r));
     const wsMonths = wb.addWorksheet('_Months', { state: 'hidden' });
     wsMonths.addRow(['Bucket', 'Amount']); for (const [b, v] of Object.entries(A.byBucket)) wsMonths.addRow([bucketText(isNaN(+b) ? b : +b), round2(v)]);
@@ -1145,7 +1167,7 @@
     for (let j = 1; j <= 4 + nB; j++) { const c = ws.getCell(tn, j); c.font = st.FB; c.fill = FILL.TOT; }
   }
   const ymdDate = (d) => { const o = ymd(d); return new Date(Date.UTC(o.y, o.m - 1, o.d)); };
-  const api = { mergeSources, toCanon, CANON, suggestCutoff, cutText, openColumns, periodInfo, tsText, tsParse, nextMonth, bucketLabel, orderSheetPr, analyse, summarize, readPrevious, buildWorkbook, detectKind, parseME2N, parseMB51, parseCJI3, classify, suggestFor, normPkg,
+  const api = { nextFilterFrom, OVERLAP_DAYS, mergeSources, toCanon, CANON, suggestCutoff, cutText, openColumns, periodInfo, tsText, tsParse, nextMonth, bucketLabel, orderSheetPr, analyse, summarize, readPrevious, buildWorkbook, detectKind, parseME2N, parseMB51, parseCJI3, classify, suggestFor, normPkg,
     CLASSES, CLASS, MVT, COST_CLASS, PACKAGES, MNLS, LAYOUT, mlabel, mtext, dtext, monthKey, esc, fmt, str, num, code };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.MaterialEngine = api;
 })(typeof window !== 'undefined' ? window : globalThis);

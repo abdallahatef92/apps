@@ -206,7 +206,7 @@ eq(B.changes.newPO.map((l) => l.key), ['5000000009/10'], 'new PO line found');
 // ================================================================ window exports merged with the carried lines
 {
   const cut = (d) => Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10), 23, 59, 59);
-  const run = (src, prev, M, c) => { const m = E.mergeSources(src, prev ? prev.carried : null);
+  const run = (src, prev, M, c) => { const m = E.mergeSources(src, prev ? prev.carried : null, prev ? prev.meta.cutoff : null);
     return E.analyse({ me: m.me, cji: m.cji, mb: m.mb }, { reportMonth: M, cutoff: cut(c), prev, history: prev ? prev.loads : [], exportCheck: m.exportCheck, carryStats: m.stats }); };
   const back = async (A) => { const w = XLSX.read(await E.buildWorkbook(A, { ExcelJS, JSZip }), { cellDates: true }); const a = {};
     for (const n of w.SheetNames) a[n] = XLSX.utils.sheet_to_json(w.Sheets[n], { header: 1, raw: true, defval: '' }); return E.readPrevious(a); };
@@ -214,20 +214,30 @@ eq(B.changes.newPO.map((l) => l.key), ['5000000009/10'], 'new PO line found');
   eq([J1.exportCheck.lines, J1.exportCheck.printed], [CJ.slice(1).filter((r) => r[17]).length, all], 'printed-total check reads the export itself, not the merged lines');
   const P1 = await back(J1);
   eq([P1.carried.cji.length - 1, P1.carried.mb.length - 1], [CJ.slice(1).filter((r) => r[17]).length, MB.length - 1], 'every CJI3 line and movement carried');
-  // February window: posting date from 01-Jan (the last reported month); the A02 amount was corrected in SAP
-  const inWin = (r, i) => i === 0 || (r[27] instanceof Date && r[27] >= D('2026-01-01'));
-  const CJw = CJ.filter(inWin).map((r) => r.slice()); CJw.find((r) => r[17] === 'A02')[9] = 1300001;
-  const MBw = MB.filter((r, i) => i === 0 || r[9] >= D('2026-01-01'));
-  const F1 = run({ me: ME, mb: MBw, cji: CJw }, P1, 202602, '2026-03-05');
-  const F2 = run({ me: ME, mb: MB, cji: CJw.concat([]) }, P1, 202602, '2026-03-05');
+  eq(P1.meta.nextFilterFrom, '2026-01-27', 'the report says where next month\'s Created on filter starts (7 days before its cut-off)');
+  // February export: all posting dates, filtered on entry from 27-Jan (fixture entry = posting date); A02 corrected in SAP
+  const entered = (r, i, col) => i === 0 || (r[col] instanceof Date && r[col] >= D('2026-01-27'));
+  const CJf = CJ.filter((r, i) => r[17] || i === 0).filter((r, i) => entered(r, i, 27)).map((r) => r.slice()); CJf.find((r) => r[17] === 'A02')[9] = 1300001;
+  // an old back-dated line: posted 15-Dec-25, entered 20-Feb-26 – far outside any posting-date window
+  { const r = CJ[1].slice(); r[17] = 'A99'; r[27] = D('2025-12-15'); r[30] = D('2026-02-20'); r[9] = 5000; r[55] = '4900009998'; r[34] = '2025'; CJf.push(r); }
+  const MBf = MB.filter((r, i) => entered(r, i, 16));
+  const F1 = run({ me: ME, mb: MBf, cji: CJf }, P1, 202602, '2026-03-05');
+  eq([F1.carryStats.cji.overlap, F1.carryStats.cji.missing, F1.carryStats.mb.missing], [true, 0, 0], 'overlap with the last report checks out');
+  eq(F1.checks.find((c) => c.id === 'carry-cji').level, 'good', 'completeness check green');
   eq(F1.carryStats.cji.changed, 1, 'a line changed in SAP is noticed'); eq(F1.costAll.find((l) => l.docNo === 'A02').amt, 1300001, "the export's version wins");
-  eq(F1.costAll.length, J1.costAll.length, 'overlap counted once');
-  eq(Math.abs(F1.k.cost - F2.k.cost) < 0.01, true, 'window + carried = full');
-  // a window that drops a carried line inside its range: kept, and reported
-  const CJm = CJw.filter((r) => r[17] !== 'A03');
-  const F3 = run({ me: ME, mb: MBw, cji: CJm }, P1, 202602, '2026-03-05');
-  eq([F3.carryStats.cji.missing, F3.costAll.some((l) => l.docNo === 'A03')], [1, true], 'missing carried line kept and reported');
-  eq(F3.checks.find((c) => c.id === 'carry-cji').level, 'warn', 'carry check warns');
+  const a99 = F1.costAll.find((l) => l.docNo === 'A99');
+  eq([a99.bucket, a99.late, a99.status], [202602, true, 'Late posting'], 'old back-dated line caught, counted in the current month');
+  eq(F1.costAll.length, J1.costAll.length + 1, 'overlap counted once, the new line added');
+  // a carried line entered in the overlap is missing → the selection differs → red
+  const F3 = run({ me: ME, mb: MBf, cji: CJf.filter((r) => r[17] !== 'A01') }, P1, 202602, '2026-03-05');
+  // (A01 is the only CJI3 line in the overlap, so without it the export no longer overlaps at all – red either way)
+  eq([F3.carryStats.cji.missing + (F3.carryStats.cji.noOverlap ? 1 : 0), F3.costAll.some((l) => l.docNo === 'A01'), F3.checks.find((c) => c.id === 'carry-cji').level], [1, true, 'bad'], 'missing overlap line kept, flagged red');
+  const F3b = run({ me: ME, mb: MBf.filter((r) => r[7] !== '4900000001'), cji: CJf }, P1, 202602, '2026-03-05');
+  eq([F3b.carryStats.mb.missing, F3b.checks.find((c) => c.id === 'carry-mb').level], [1, 'bad'], 'a movement missing from the MB51 overlap is named');
+  // filter started after the cut-off → no overlap → red
+  const late = (r, i) => i === 0 || (r[27] instanceof Date && r[27] >= D('2026-02-05'));
+  const F4 = run({ me: ME, mb: MB.filter((r, i) => i === 0 || r[16] >= D('2026-02-05')), cji: CJf.filter(late) }, P1, 202602, '2026-03-05');
+  eq([F4.carryStats.cji.noOverlap, F4.checks.find((c) => c.id === 'carry-cji').level], [true, 'bad'], 'export starting after the cut-off is flagged');
 }
 
 // ================================================================ real extracts (optional)

@@ -135,7 +135,7 @@ async function build() {
 }
 // this month's exports merged with every line the last report carried (window exports need only reach back one month)
 function merged() {
-  if (!state.merged) { const prev = prevFits() ? state.prev : null; state.merged = E.mergeSources(state.files, prev && prev.carried ? prev.carried : null); }
+  if (!state.merged) { const prev = prevFits() ? state.prev : null; state.merged = E.mergeSources(state.files, prev && prev.carried ? prev.carried : null, prev ? prev.meta.cutoff : null); }
   return state.merged;
 }
 const prevFits = () => state.prev && (!state.prev.project || state.prev.project === state.plant);
@@ -464,7 +464,8 @@ function setupPeriod() {
   const ob = $('p-open').value;
   $('p-open').innerHTML = '<option value="0">No roll-up</option>' + [...info.months].sort((a, b) => a - b).slice(1).map((m) => `<option value="${m}">Months before ${E.mlabel(m)}</option>`).join('');
   $('p-open').value = ob && [...$('p-open').options].some((o) => o.value === ob) ? ob : String(prev && prev.meta.openingBefore ? prev.meta.openingBefore : 0);
-  $('p-last').innerHTML = prev && pm ? `Last report: <b>${E.mlabel(pm)}</b>, cut-off <b>${esc(E.cutText(pc0))}</b>. Lines entered after it and posted in ${E.mlabel(pm)} or earlier are counted in this report as late postings.`
+  $('p-last').innerHTML = prev && pm ? `Last report: <b>${E.mlabel(pm)}</b>, cut-off <b>${esc(E.cutText(pc0))}</b>. Lines entered after it and posted in ${E.mlabel(pm)} or earlier are counted in this report as late postings. `
+    + `Exports should be filtered on Created on / Entry Date from <b>${esc(E.cutText(E.nextFilterFrom(pc0)))}</b> (or not filtered).`
     : 'First report: every line entered up to the cut-off sits in its posting month. The exports must start at the project start.';
   $('p-last').innerHTML += windowText();
   if (!info.hasTs) message('msgs', 'warn', 'This CJI3 export has no "Created on" column, so the cut-off can only use posting dates. Add Created on and Time of Entry to the CJI3 layout.');
@@ -478,16 +479,17 @@ $('p-sugg').addEventListener('click', applySuggestion);
 $('p-eom').addEventListener('click', () => { const m = +$('p-month').value; setCutoff(Date.UTC(Math.floor(m / 100), m % 100, 1) - 1000); });
 function windowText() {
   const st = merged().stats; if (!st.cji) return '';
-  const w = (t, name) => `${name}: posting dates ${E.dtext(t.from)} → ${E.dtext(t.to)} (${t.exported.toLocaleString('en-US')} lines)` + (t.window ? ` + ${t.carried.toLocaleString('en-US')} carried from the last report` : '');
-  return `<br><span class="muted">${w(st.cji, 'CJI3')} · ${w(st.mb, 'MB51')}</span>`;
+  const w = (t, name, e) => `${name}: ${t.exported.toLocaleString('en-US')} lines, ${e} ${E.dtext(t.entryFrom)} → ${E.dtext(t.entryTo)}` + (t.window ? ` + ${t.carried.toLocaleString('en-US')} carried` : '');
+  return `<br><span class="muted">${w(st.cji, 'CJI3', 'Created on')} · ${w(st.mb, 'MB51', 'Entry Date')}</span>`;
 }
-// a window export must reach back into the last reported month, so late postings into it are caught
+// the export must overlap the last report (entered on or before its cut-off) and every carried line in the overlap must come back
 function windowProblem() {
   const prev = prevFits() ? state.prev : null, st = merged().stats;
-  if (!prev || !prev.carried || !prev.meta.reportMonth) return null;
-  const need = prev.meta.reportMonth, first = `01-${E.mlabel(need)}`;
-  for (const [k, name] of [['cji', 'CJI3'], ['mb', 'MB51']]) { const t = st[k]; if (!t || !t.from) continue;
-    if (E.monthKey(t.from) > need) return `The ${name} export starts on ${E.dtext(t.from)}. Export it again with posting date from ${first} (the last reported month), so late postings into ${E.mlabel(need)} are caught.`; }
+  if (!prev || !prev.carried || !prev.meta.cutoff) return null;
+  const from = E.cutText(E.nextFilterFrom(prev.meta.cutoff));
+  for (const [k, name, e] of [['cji', 'CJI3', 'Created on'], ['mb', 'MB51', 'Entry Date']]) { const t = st[k]; if (!t) continue;
+    if (t.noOverlap) return `The ${name} export starts at ${e} ${E.dtext(t.entryFrom)}, after the last cut-off (${E.cutText(prev.meta.cutoff)}). Export ${name} again with ${e} from ${from}.`;
+    if (t.missing) return `${t.missing} ${name} lines of the last report (entered ${E.dtext(t.entryFrom)} – ${E.cutText(prev.meta.cutoff)}) are not in this export, so its selection differs. Export again with the same project / WBS / plant selection and layout (see Checks for the lines).`; }
   return null;
 }
 function periodProblem() {

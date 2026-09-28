@@ -64,26 +64,29 @@ The period box shows these counts before you build.
 
 **Opening roll-up.** *Roll into Opening* sums all months before a chosen month into the Opening block.
 
-## Monthly exports: a window, not the whole history
+## Monthly exports: only what was entered since the last report
 
-The report carries every CJI3 line and MB51 movement it has seen, in two hidden sheets (`_CJI3`, `_MB51`) that use SAP's own column names. So after the first report, SAP only has to export a **posting-date window**.
+The report carries every CJI3 line and MB51 movement it has seen, in two hidden sheets (`_CJI3`, `_MB51`) that use SAP's own column names. So after the first report, SAP only has to export what was **entered** since. That includes back-dated lines of any age, because the filter is on the entry date, not the posting date.
 
-| Export | Posting date from | Posting date to |
+| Export | Selection screen | Filter in the result list, before exporting |
 |---|---|---|
-| **CJI3** and **MB51**, first report | project start | open |
-| **CJI3** and **MB51**, every month after | **the 1st of the last reported month** (e.g. 01-Aug for the September report) | open |
-| **ME2N** | no date filter | – |
+| **CJI3**, first report | posting date from project start, to empty | none |
+| **CJI3**, every month after | posting date from project start, to empty | **Created on ≥ the date printed on last month's Dashboard** |
+| **MB51**, first report | posting date from project start, to empty | none |
+| **MB51**, every month after | posting date from project start, to empty | **Entry Date ≥ the same date** |
+| **ME2N** | no date filter | none |
 
-**How the merge works.**
-- The tool merges the window with the carried lines on SAP's line key: CO document + posting row + year, and material document + item + year for MB51.
-- A line in both is counted once, and the export's version wins if SAP changed it.
-- A carried line whose posting date falls inside the window but is missing from the export is kept, and reported in Checks. That usually means a different selection (WBS / plant) was used.
+**The filter date.** It is printed on the Dashboard ("NEXT MONTH'S EXPORT …") and in the tool once the last report is loaded. It is **7 days before the last cut-off**.
 
-**Guards.**
-- An export that starts after the last reported month blocks the build, with the date to export from.
-- The printed-total check runs on the export itself.
+**How the tool proves an export complete.** That week of overlap needs no typed number:
+- Every carried line entered between the export's first entry date and the last cut-off must be in the new export. All present means the selection is the same and nothing entered since was skipped.
+- If any are missing, the selection differs. The build is blocked and the lines are listed in Checks.
+- If the export has no overlap at all (the filter started after the cut-off), the build is blocked and the tool gives the date to filter from.
+- An unfiltered, full export always passes.
 
-**Tested on DIST.** September built from the one-month window (1,261 CJI3 lines) plus the August report is identical to September built from the full export (5,315 lines). That covers every month, every Material Monthly row and every stock balance.
+**Merging.** Carried and new lines are merged on SAP's line key: CO document + posting row + year, and material document + item + year for MB51. A line in both counts once, and the export's version wins.
+
+**Tested on DIST.** September built from a Created-on-filtered export (788 CJI3 lines instead of 5,316) plus the August report equals September from the full export, every row and every month. A test line posted 10-Mar and entered 20-Sep is counted in September as a late posting, and March is unchanged.
 
 ## Material Monthly
 
