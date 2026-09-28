@@ -159,6 +159,20 @@ eq(B.changes.newPO.map((l) => l.key), ['5000000009/10'], 'new PO line found');
   const C1 = E.analyse({ me: ME, mb: MB, cji: CJ }, { reportMonth: 202602, cutoff: cut('2026-02-25', '12:00:00') });
   eq(C1.k.pending, 777 + 66000, 'after the cut-off or after the report month → pending'); eq(C1.pending.map((l) => l.docNo).sort(), ['A06', 'A10'], 'A06 (late entry) and A10 (March) pending');
   eq(C1.pending.find((l) => l.docNo === 'A10').why, 'posted in Mar-26, after the report month', 'reason given');
+  eq([C1.costAll.find((l) => l.docNo === 'A01').status, C1.pending.find((l) => l.docNo === 'A06').status, C1.pending.find((l) => l.docNo === 'A10').status],
+    ['In report', 'Pending – entered after cut-off', 'Pending – next month, already entered'], 'each CJI3 line is marked (A10 was entered 10 Feb, posted March)');
+  // suggested cut-off: Created on of lines posted in the month, up to 10 days past month end
+  const CJs = CJ.map((r) => r.slice()); CJs.find((r) => r[17] === 'A05')[30] = D('2026-03-02');   // a Feb line entered 2 Mar
+  const info = E.periodInfo({ cji: CJs, mb: MB });
+  eq(E.cutText(E.suggestCutoff(info, 202602).cutoff), '2026-03-02', 'suggestion = the day posting into Feb stopped');
+  eq(E.cutText(E.suggestCutoff(info, 202601).cutoff), '2026-01-31', 'nothing late for Jan → month end');
+  eq(E.suggestCutoff(info, 202603).early, true, 'file ends inside the month → early export flagged');
+  // an afternoon entry keeps its own day in the workbook (no rounding into the next day)
+  const MB3 = MB.map((r) => r.slice()); MB3.find((r) => r[7] === '4900000005')[17] = '23:30:00';
+  const C6 = E.analyse({ me: ME, mb: MB3, cji: CJ }, { reportMonth: 202602, cutoff: cut('2026-02-20') });
+  const w6 = XLSX.read(await E.buildWorkbook(C6, { ExcelJS, JSZip }), { cellDates: false }); const cd6 = XLSX.utils.sheet_to_json(w6.Sheets['Cost Detail'], { header: 1, raw: false, defval: '' });
+  const h6 = cd6[3], a05 = cd6.find((r) => r[h6.indexOf('CO document')] === 'A05');
+  eq([a05[h6.indexOf('Created on')], a05[h6.indexOf('Cut-off status')]], ['2026-02-20', 'In report'], 'entered 20 Feb 23:30 shows 20 Feb and counts for a 20 Feb cut-off');
   eq(C1.k.cost, cost - 777, 'cost to the cut-off');
   eq(C1.mats.get('11000001').qty.OTHER || 0, 0, 'movement after the cut-off is out of the quantity chain');
   eq(C1.months, [202601, 202602], 'report months');

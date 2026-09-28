@@ -54,7 +54,7 @@ async function takeFiles(list) {
       const P = E.readPrevious(aoa);
       if (!P) { message('msgs', 'warn', `${esc(f.name)} looks like a report but has no coding or history in it.`); continue; }
       state.prev = P; state.prevName = f.name;
-      setSlot('prev', f.name, P.meta.reportMonth ? `${E.mlabel(P.meta.reportMonth)} report · cut-off ${E.tsText(P.meta.cutoff) || 'none'} · ${P.coding.size} coded materials` : `Load ${P.meta.loadNo || '?'} · ${P.coding.size} coded materials (no cut-off recorded)`);
+      setSlot('prev', f.name, P.meta.reportMonth ? `${E.mlabel(P.meta.reportMonth)} report · cut-off ${E.cutText(P.meta.cutoff) || 'none'} · ${P.coding.size} coded materials` : `Load ${P.meta.loadNo || '?'} · ${P.coding.size} coded materials (no cut-off recorded)`);
       continue;
     }
     if (names.includes('Packages') && (names.includes('Service Mapping') || names.includes('MNL'))) {   // the subcontract work package master
@@ -192,7 +192,7 @@ function renderCharts() {
 // ------------------------------------------------------------------ overview
 function renderOverview() {
   const A = state.A, k = A.k, tie = A.checks.find((c) => c.id === 'total');
-  $('ov-eyebrow').textContent = `${A.PLANT}${A.PROJECT ? ' · ' + A.PROJECT : ''} · report ${E.mlabel(A.reportMonth)} · cut-off ${E.tsText(A.cutoff)} · load ${A.loadNo}`;
+  $('ov-eyebrow').textContent = `${A.PLANT}${A.PROJECT ? ' · ' + A.PROJECT : ''} · report ${E.mlabel(A.reportMonth)} · cut-off ${E.cutText(A.cutoff)} · load ${A.loadNo}`;
   $('ov-title').textContent = `Material cost to the cut-off: ${n0(k.cost)} EGP`;
   const kpi = (l, v, s, lead) => `<div class="kpi${lead ? ' lead' : ''}"><div class="l">${esc(l)}</div><div class="v">${v}</div><div class="s">${s || ''}</div></div>`;
   $('kpis').innerHTML = [
@@ -253,6 +253,7 @@ function renderMatDetail(m) {
   const A = state.A, r = A.mats.get(m), host = $('mat-detail'); if (!r) { host.hidden = true; return; }
   host.hidden = false;
   const lines = A.cost.filter((l) => l.material === m), movs = A.mb.rows.filter((x) => x.material === m);
+  const cl = A.costAll.filter((l) => l.material === m).sort((a, b) => (b.entry || 0) - (a.entry || 0));
   const byW = {}; for (const l of lines) byW[l.wbs] = (byW[l.wbs] || 0) + l.amt;
   const chainRows = E.CLASSES.filter((c) => Math.abs(r.qty[c.code] || 0) > 1e-9 || Math.abs(r.val[c.code] || 0) > 1e-9);
   host.innerHTML = `<div class="hd"><div><div class="eyebrow">${esc(r.material)} · ${esc(r.group || 'no group')} · ${esc(r.unit)}</div><h2 class="ar" style="text-align:left">${esc(r.desc)}</h2></div><button id="md-close" aria-label="Close">✕</button></div>
@@ -268,6 +269,8 @@ function renderMatDetail(m) {
         <div><h3>Cost by WBS</h3><div class="tblwrap"><table><thead><tr><th>WBS</th><th class="r">Cost</th></tr></thead><tbody>${Object.entries(byW).sort((a, b) => b[1] - a[1]).map(([w, v]) => `<tr>${td(esc(w), 'num')}${tdn(v)}</tr>`).join('') || '<tr><td colspan="2" class="muted">No cost</td></tr>'}</tbody></table></div></div>
       </div>
       <h3 style="margin-top:14px">PO lines (${r.po.length})</h3><div class="tblwrap" style="max-height:260px">${poTable(r.po)}</div>
+      <h3 style="margin-top:14px">CJI3 cost lines (${cl.length})</h3><div class="tblwrap" style="max-height:300px"><table><thead><tr><th>Posting date</th><th>Created on</th><th>Cut-off status</th><th>Counted in</th><th>WBS</th><th class="r">Qty</th><th class="r">Amount</th><th>CO document</th></tr></thead><tbody>${
+        cl.map((l) => `<tr>${td(E.dtext(l.date), 'num')}${td(E.cutText(l.entry), 'num')}${td(`<span class="chip ${STATUS_CHIP[l.status] || ''}">${esc(l.status)}</span>`)}${td(l.bucket === 'PENDING' ? '<span class="muted">next report</span>' : esc(E.bucketLabel(l.bucket)))}${td(esc(l.wbs), 'num')}${tdn(l.mov ? l.mqty : l.qty, nq)}${tdn(l.amt)}${td(esc(l.docNo), 'num')}</tr>`).join('')}</tbody></table></div>
       <h3 style="margin-top:14px">Movements (${movs.length})</h3><div class="tblwrap" style="max-height:300px"><table><thead><tr><th>Date</th><th>Mvt</th><th>Class</th><th class="r">Qty</th><th class="r">MB51 value</th><th class="r">CJI3 cost</th><th>WBS / order</th><th>PO</th><th>Material doc</th></tr></thead><tbody>${
         movs.slice().sort((a, b) => (b.date || 0) - (a.date || 0)).slice(0, 300).map((x) => `<tr>${td(E.dtext(x.date), 'num')}${td(esc(x.mvt))}${td(esc(E.CLASS[x.cls].short))}${tdn(x.qty, nq)}${tdn(x.amt)}${tdn(x.costLine ? x.costLine.amt : null)}${td(esc(x.wbs || x.order), 'num')}${td(esc(x.po), 'num')}${td(esc(x.doc + '/' + x.item), 'num')}</tr>`).join('')}</tbody></table></div></div>`;
   $('md-close').addEventListener('click', () => { host.hidden = true; state.sel.mat = null; renderMaterials(); });
@@ -275,6 +278,7 @@ function renderMatDetail(m) {
     options: baseOpts({ plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => `Cost ${n0(c.raw)} · qty ${nq(r.qtyByMonth[A.months[c.dataIndex]] || 0) || '0'} ${r.unit}` } } },
       scales: { x: { grid: { display: false } }, y: { grid: { color: cssVar('--chart-grid') }, ticks: { callback: (v) => mEGP(v) } } } }) });
 }
+const STATUS_CHIP = { 'In report': 'new', 'Late posting': 'chg', 'Pending – entered after cut-off': 'rem', 'Pending – next month, already entered': '', 'Pending – next month': '' };
 function poTable(pos) {
   return `<table><thead><tr><th>PO / item</th><th>Date</th><th>Kind</th><th>Supplier</th><th class="r">Qty</th><th class="r">Unit price</th><th class="r">Value</th><th class="r">Open qty</th><th>Del.</th></tr></thead><tbody>${
     pos.slice().sort((a, b) => (b.date || 0) - (a.date || 0)).map((l) => `<tr>${td(esc(l.key), 'num')}${td(E.dtext(l.date), 'num')}${td(l.kind === 'STO' ? '<span class="chip">STO</span>' : 'PUR')}${td(`<span class="ar">${esc(l.vendor)}</span>`)}${tdn(l.qty, nq)}${tdn(l.unitPrice || null, n2)}${tdn(l.value)}${tdn(l.openQty, nq)}${td(l.del ? `<span class="chip rem">${esc(l.del)}</span>` : '')}</tr>`).join('') || '<tr><td colspan="9" class="muted">No PO lines in ME2N</td></tr>'}</tbody></table>`;
@@ -317,7 +321,7 @@ function renderPriceDetail(m) {
 function renderChanges() {
   const A = state.A, C = A.changes, loads = E.summarize(A).loads;
   $('tb-loads').innerHTML = '<thead><tr><th>Load</th><th>Run on</th><th>Report</th><th>Cut-off</th><th class="r">Material cost</th><th class="r">Project consumption</th><th class="r">To subcontractors</th><th class="r">Open PO value</th><th class="r">Materials</th><th>Files</th></tr></thead><tbody>' +
-    loads.map((l, i) => `<tr${i === loads.length - 1 ? ' class="tot"' : ''}><td class="num">${l.no}</td>${td(E.dtext(l.run), 'num')}${td(l.reportMonth ? E.mlabel(l.reportMonth) : '')}${td(l.cutoff && isFinite(l.cutoff) ? E.tsText(l.cutoff) : '', 'num')}${tdn(l.cost)}${tdn(l.project)}${tdn(l.subcon)}${tdn(l.openPO)}<td class="r num">${l.materials || ''}</td>${td(`<span class="muted">${esc(l.files || '')}</span>`)}</tr>`).join('') + '</tbody>';
+    loads.map((l, i) => `<tr${i === loads.length - 1 ? ' class="tot"' : ''}><td class="num">${l.no}</td>${td(E.dtext(l.run), 'num')}${td(l.reportMonth ? E.mlabel(l.reportMonth) : '')}${td(l.cutoff && isFinite(l.cutoff) ? E.cutText(l.cutoff) : '', 'num')}${tdn(l.cost)}${tdn(l.project)}${tdn(l.subcon)}${tdn(l.openPO)}<td class="r num">${l.materials || ''}</td>${td(`<span class="muted">${esc(l.files || '')}</span>`)}</tr>`).join('') + '</tbody>';
   if (!C.has) {
     $('chg-kpis').innerHTML = ''; $('chg-note').textContent = '';
     $('tb-chg').innerHTML = '<tbody><tr><td class="muted">No previous report loaded. Download this report, and load it next month alongside the new exports – this tab will then list every material whose cost, consumption, stock or open PO moved.</td></tr></tbody>';
@@ -407,7 +411,7 @@ function renderChecks() {
 }
 function renderControl() {
   const A = state.A, t = A.checks.find((c) => c.id === 'total'), u = A.checks.find((c) => c.id === 'unmatched');
-  $('control').innerHTML = `<b>CONTROL</b><span>cut-off ${E.tsText(A.cutoff)}</span><span>reported ${n0(A.k.cost)} + pending ${n0(A.k.pending)} = CJI3 WA ${n0(A.k.costAll)}</span><span>printed total ${A.k.printedTotal === null ? '–' : n0(A.k.printedTotal)}</span>` +
+  $('control').innerHTML = `<b>CONTROL</b><span>cut-off ${E.cutText(A.cutoff)}</span><span>reported ${n0(A.k.cost)} + pending ${n0(A.k.pending)} = CJI3 WA ${n0(A.k.costAll)}</span><span>printed total ${A.k.printedTotal === null ? '–' : n0(A.k.printedTotal)}</span>` +
     `<span class="${t.level === 'good' ? 'ok' : 'bad'}">${t.level === 'good' ? '✓ ties' : '✗ does not tie'}</span>` +
     `<span class="${u.level === 'good' ? 'ok' : 'bad'}">${u.level === 'good' ? '✓ every line has its movement' : `✗ ${u.count} lines without movement`}</span>` +
     `<span>${A.k.movements.toLocaleString('en-US')} movements · ${A.k.poLines.toLocaleString('en-US')} PO lines · ${A.k.wbs} WBS</span>`;
@@ -430,13 +434,16 @@ $('btn-download').addEventListener('click', async () => {
 // The cut-off is a moment in time: whatever SAP stamped as entered after it is Pending and belongs to the next report.
 // Every report stores its report month and cut-off, so months already reported never change.
 const two = (n) => String(n).padStart(2, '0');
-function cutoffValue() {
-  const d = $('p-date').value; if (!d) return null;
-  const t = ($('p-time').value || '23:59:59').split(':').map(Number);
-  return Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10), t[0] || 0, t[1] || 0, t[2] || 0);
+// the cut-off is a whole day: everything Created on that date or before counts
+function cutoffValue() { const d = $('p-date').value; return d ? Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10), 23, 59, 59) : null; }
+function setCutoff(ms) { const x = new Date(ms); $('p-date').value = `${x.getUTCFullYear()}-${two(x.getUTCMonth() + 1)}-${two(x.getUTCDate())}`; periodChanged(); }
+function suggestion() { const prev = state.prev; return E.suggestCutoff(state.period, +$('p-month').value, prev && prev.meta.reportMonth < +$('p-month').value ? prev.meta.cutoff : null); }
+function applySuggestion() {
+  const sg = suggestion(); if (!sg) return;
+  $('p-sugg').textContent = `Use suggested (${E.cutText(sg.cutoff)})`;
+  $('p-why').innerHTML = (sg.early ? '⚠ ' : 'Suggested: ') + esc(sg.why) + (sg.stragglers ? ` ${sg.stragglers} straggler line${sg.stragglers > 1 ? 's' : ''} entered more than 10 days late will count as late postings next month.` : '');
+  setCutoff(sg.cutoff);
 }
-function setCutoff(ms) { const x = new Date(ms); $('p-date').value = `${x.getUTCFullYear()}-${two(x.getUTCMonth() + 1)}-${two(x.getUTCDate())}`;
-  $('p-time').value = `${two(x.getUTCHours())}:${two(x.getUTCMinutes())}:${two(x.getUTCSeconds())}`; periodChanged(); }
 function setupPeriod() {
   const info = E.periodInfo(state.files); if (!info) return;
   state.period = info; $('period').hidden = false;
@@ -448,23 +455,23 @@ function setupPeriod() {
   const ob = $('p-open').value;
   $('p-open').innerHTML = '<option value="0">No roll-up</option>' + [...info.months].sort((a, b) => a - b).slice(1).map((m) => `<option value="${m}">Months before ${E.mlabel(m)}</option>`).join('');
   $('p-open').value = ob && [...$('p-open').options].some((o) => o.value === ob) ? ob : String(prev && prev.meta.openingBefore ? prev.meta.openingBefore : 0);
-  $('p-latest').textContent = `Latest entry in the files (${E.tsText(info.maxEntry)})`;
-  $('p-last').innerHTML = prev && pm ? `Last report: <b>${E.mlabel(pm)}</b>, cut-off <b>${esc(E.tsText(pc0))}</b>. Lines entered after it and posted in ${E.mlabel(pm)} or earlier are counted in this report as late postings.`
+  $('p-last').innerHTML = prev && pm ? `Last report: <b>${E.mlabel(pm)}</b>, cut-off <b>${esc(E.cutText(pc0))}</b>. Lines entered after it and posted in ${E.mlabel(pm)} or earlier are counted in this report as late postings.`
     : 'First report: every line entered up to the cut-off sits in its posting month.';
   if (!info.hasTs) message('msgs', 'warn', 'This CJI3 export has no "Created on" column, so the cut-off can only use posting dates. Add Created on and Time of Entry to the CJI3 layout.');
-  periodChanged();
+  applySuggestion();
 }
 let pvTimer = null;
 function periodChanged() { updateBuild(); clearTimeout(pvTimer); pvTimer = setTimeout(previewPeriod, 250); }
-for (const id of ['p-month', 'p-date', 'p-time', 'p-open']) $(id).addEventListener('input', periodChanged);
+for (const id of ['p-date', 'p-open']) $(id).addEventListener('input', periodChanged);
+$('p-month').addEventListener('input', applySuggestion);                 // a new month gets its own suggested cut-off
+$('p-sugg').addEventListener('click', applySuggestion);
 $('p-eom').addEventListener('click', () => { const m = +$('p-month').value; setCutoff(Date.UTC(Math.floor(m / 100), m % 100, 1) - 1000); });
-$('p-latest').addEventListener('click', () => { if (state.period && state.period.maxEntry) setCutoff(state.period.maxEntry); });
 function periodProblem() {
   const c = cutoffValue(), m = +$('p-month').value, prev = prevFits() || (state.prev && !state.plant) ? state.prev : null;
   if (c === null) return 'Choose the cut-off date (and time) to build the report.';
   if (m && c < Date.UTC(Math.floor(m / 100), (m % 100) - 1, 1)) return `The cut-off is before ${E.mlabel(m)} starts – pick a later cut-off or an earlier report month.`;
   if (prev && prev.meta.reportMonth && m > prev.meta.reportMonth && prev.meta.cutoff && c <= prev.meta.cutoff)
-    return `The cut-off must be later than the last report's (${E.tsText(prev.meta.cutoff)}).`;
+    return `The cut-off must be later than the last report's (${E.cutText(prev.meta.cutoff)}).`;
   return null;
 }
 function updateBuild() {
@@ -480,8 +487,12 @@ function previewPeriod() {
   const A = analyse(); if (A.errors) return;
   const m = +$('p-month').value, prev = prevFits() ? state.prev : null;
   const rerun = prev && prev.meta.reportMonth && m <= prev.meta.reportMonth;
-  host.innerHTML = `<div class="msg good">Up to the cut-off: <b>${n0(A.k.cost)}</b> EGP in ${A.k.costLines.toLocaleString('en-US')} lines` +
-    `<br>Pending for the next report: <b>${n0(A.k.pending)}</b> (${A.k.pendingLines.toLocaleString('en-US')} lines)` +
-    (A.history.length ? `<br>Late postings counted in ${E.mlabel(m)}: <b>${n0(A.k.late)}</b> (${A.k.lateLines} lines)` : '') + '</div>' +
+  const bx = (k) => A.boxes[k] || { n: 0, amt: 0 }, row = (lab, k, cls) => `<tr class="${cls || ''}"><td>${lab}</td><td class="r num">${bx(k).n.toLocaleString('en-US')}</td><td class="r num">${n0(bx(k).amt)}</td></tr>`;
+  host.innerHTML = `<table class="boxes"><thead><tr><th>CJI3 lines at this cut-off</th><th class="r">Lines</th><th class="r">EGP</th></tr></thead><tbody>` +
+    row(`In the report – posted ≤ ${E.mlabel(m)}, entered ≤ cut-off`, 'In report') +
+    (A.history.length ? row(`Late postings counted in ${E.mlabel(m)}`, 'Late posting') : '') +
+    row(`Pending – posted ≤ ${E.mlabel(m)} but entered after the cut-off`, 'Pending – entered after cut-off', bx('Pending – entered after cut-off').n ? 'warnrow' : '') +
+    row('Pending – next month, already entered', 'Pending – next month, already entered') +
+    row('Pending – next month', 'Pending – next month') + '</tbody></table>' +
     (rerun ? `<div class="msg warn">${E.mlabel(m)} was already reported (load ${prev.meta.loadNo}). Building it again replaces that report; earlier months stay as they were.</div>` : '');
 }

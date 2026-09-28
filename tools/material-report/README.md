@@ -39,20 +39,30 @@ From these the page builds the Excel report: Dashboard, **Material Monthly**, Pa
 
 ## Report period and cut-off
 
-After the three files load, the page asks for the **report month** and a **cut-off date and time**. Build stays disabled until both are set.
+**Posting Date decides the month; Created on decides the report.** In the CJI3 file, Document Date, Value Date, Period and Fiscal Year all repeat the Posting Date and add nothing. *Created on* is the day SAP recorded the line, and it cannot be backdated.
 
-**Which timestamp counts.** The cut-off is compared with the moment SAP *entered* each line: CJI3 "Created on" + "Time of Entry", or MB51 "Entry Date" + "Time of Entry". SAP stamps these when the document is saved, and they cannot be backdated the way a posting date can.
-- A cost line takes the stamp of its MB51 movement. The two are one save, at most a second apart, so quantity and cost always fall on the same side of the cut-off.
-- On the DIST extract, 781 lines (14.6M) were entered in a later month than they were posted. This is why the posting date alone isn't enough.
+After the three files load, the page asks for the **report month** and a **cut-off date**. It is a whole day: any line Created on that date or before counts. Build stays disabled until both are set.
 
-**How a line is placed.**
-- A line belongs to the first report whose cut-off it was entered before and whose report month has reached its posting month.
-- Within that report it goes to its posting month if that month was still open. If an earlier report had already closed that month, it goes to the report month and is flagged as a **late posting**.
-- A line entered after the current cut-off, or posted after the report month, is **Pending**. It is shown but not counted, and belongs to the next report.
+**Suggested cut-off.** The tool suggests the day posting into the report month stopped. That is the latest Created on date among lines posted in that month or earlier, looking at most 10 days past the month end.
+- On the DIST history this gives 1 Mar, 5 Apr, 5 May, 7 Jun, 5 Jul, 1 Aug and 1 Sep.
+- Stragglers entered later than that become late postings next month.
+- If the file doesn't reach the next month yet (an early export), it suggests the file's last Created on date and warns that postings may still come.
+- You can always override the date.
 
-**Closed months stay closed.** Each report stores its report month and cut-off in *Load history*. Next month's report reads them back, so every month already reported comes out exactly as it was, and a Checks item proves it. Re-building a month that was already reported replaces that report and leaves earlier months alone.
+**The four boxes.** Every CJI3 line is marked on *Cost Detail* (column **Cut-off status**) and in the material detail on the page:
 
-**Opening roll-up.** *Roll into Opening* sums all months before a chosen month into the Opening block, so the sheet does not grow forever.
+| | Created on ≤ cut-off | Created on > cut-off |
+|---|---|---|
+| **Posted in the report month or earlier** | In report (or *Late posting* into a closed month) | Pending – entered after cut-off |
+| **Posted after the report month** | Pending – next month, already entered | Pending – next month |
+
+The period box shows these counts before you build.
+
+**Closed months stay closed.** Each report stores its report month and cut-off in *Load history*. Next month's report reads them back, so every month already reported comes out exactly as it was, and a Checks item proves it. A line posted into a closed month is counted in the first open month and marked *Late posting*. Re-building a month that was already reported replaces that report and leaves earlier months alone.
+
+**Timestamps.** A cost line takes the entry stamp of its MB51 movement. The two are one save, so quantity and cost fall on the same side of the cut-off.
+
+**Opening roll-up.** *Roll into Opening* sums all months before a chosen month into the Opening block.
 
 ## Material Monthly
 
