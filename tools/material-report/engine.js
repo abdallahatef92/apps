@@ -305,40 +305,35 @@
     const PLANT = plants.length === 1 ? plants[0] : (plants.sort().join('+') || '');
     const PROJECT = [...new Set(costAll.map((l) => l.project).filter(Boolean))].join(', ');
 
-    // ---- report period: report month + cut-off (a moment in time), and the cut-offs of the reports before this one
+    // ---- report period. The cut date is a POSTING date: posting date decides the month, posted on or before the cut date
+    // → in the report, after it → Pending. Created on never moves a line; it only flags two kinds of line for a look:
+    // entered after the cut date, and added to a month the last report already showed (a line that report did not have).
     const postMonths = [...new Set(costAll.map((l) => l.month).filter(Boolean))].sort((a, b) => a - b);
     const maxEntry = costAll.reduce((a, l) => (l.entry !== null && l.entry > a ? l.entry : a), -Infinity);
-    const reportMonth = opts.reportMonth || postMonths[postMonths.length - 1] || 0;
-    const cutoff = (opts.cutoff !== undefined && opts.cutoff !== null) ? opts.cutoff : Infinity;
+    const cutoff = (opts.cutoff !== undefined && opts.cutoff !== null) ? opts.cutoff : (opts.reportMonth ? endOfMonth(opts.reportMonth) : Infinity);
+    const reportMonth = opts.reportMonth || (isFinite(cutoff) ? monthOfTs(cutoff) : postMonths[postMonths.length - 1]) || 0;
     const openingBefore = opts.openingBefore || 0;
-    if (!CJ.hasTs) warnings.push('CJI3 has no "Created on" column – the cut-off falls back to the posting date, so back-dated postings cannot be caught.');
-    // reports already issued, oldest first; a re-run of this month (or an earlier one) is not history
-    const history = (opts.history || []).filter((h) => h.reportMonth && h.cutoff && h.reportMonth < reportMonth && h.cutoff < cutoff)
-      .sort((a, b) => a.reportMonth - b.reportMonth);
-    const periods = history.concat([{ reportMonth, cutoff, current: true }]);
-    // A line belongs to the first report whose cut-off it was entered before and whose month it has reached. In that report
-    // it sits in its posting month if that month was still open, else in the report month (a late posting). Months already
-    // reported never change: a back-dated line entered after their cut-off lands in the first report that sees it.
-    const place = (entry, month) => {
-      const t = entry === null ? endOfMonth(month) : entry;
-      let closed = 0;
-      for (const p of periods) {
-        if (t <= p.cutoff && month <= p.reportMonth) return { bucket: month > closed ? month : p.reportMonth, late: !(month > closed), in: p.reportMonth, now: !!p.current };
-        closed = p.reportMonth;
-      }
-      return { bucket: 'PENDING', late: false, in: null, now: false };
-    };
+    if (!CJ.hasTs) warnings.push('CJI3 has no "Created on" column – lines entered after the cut date cannot be flagged.');
+    const dayNum = (d) => { const o = ymd(d); return Date.UTC(o.y, o.m - 1, o.d) / DAY; };
+    const cutDayN = isFinite(cutoff) ? Math.floor(cutoff / DAY) : Infinity;
+    const prevR = opts.prev && opts.prev.meta && opts.prev.meta.reportMonth && opts.prev.meta.reportMonth < reportMonth ? opts.prev : null;
+    const lastRM = prevR ? prevR.meta.reportMonth : 0;
+    const prevKeys = new Set();
+    if (prevR && prevR.carried && prevR.carried.cji) { const C = toCanon('cji', prevR.carried.cji), key = canonKey('cji'); for (const r of C.rows || []) prevKeys.add(key(r)); }
+    const history = prevR ? [{ reportMonth: lastRM, cutoff: prevR.meta.cutoff }] : [];
     for (const l of costAll) {
-      const x = place(l.entry, l.month); l.bucket = x.bucket; l.late = x.late; l.reportedIn = x.in;
+      const inCut = !l.date || dayNum(l.date) <= cutDayN;
+      l.bucket = inCut ? l.month : 'PENDING';
       if (typeof l.bucket === 'number' && openingBefore && l.bucket < openingBefore) l.bucket = 'OPENING';
-      // the four boxes: posting month (in / after the report month) × Created on (up to / after the cut-off)
-      const inMonth = l.month <= reportMonth, known = (l.entry === null ? endOfMonth(l.month) : l.entry) <= cutoff;
-      l.status = l.bucket !== 'PENDING' ? (l.late ? 'Late posting' : 'In report')
-        : (inMonth ? 'Pending – entered after cut-off' : (known ? 'Pending – next month, already entered' : 'Pending – next month'));
-      l.why = l.bucket === 'PENDING' ? (l.month > reportMonth ? `posted in ${mlabel(l.month)}, after the report month` : `entered ${cutText(l.entry)}, after the cut-off – counted in the next report`)
-        : (l.late ? `posted ${dtext(l.date)} but entered ${cutText(l.entry)}, after ${mlabel(l.month)} was reported – counted in ${mlabel(l.reportedIn)}` : '');
+      l.enteredAfter = inCut && l.entry !== null && isFinite(cutDayN) && Math.floor(l.entry / DAY) > cutDayN;
+      l.added = inCut && prevKeys.size > 0 && l.month <= lastRM && !prevKeys.has(l.key);
+      l.late = l.added;
+      l.status = !inCut ? 'Pending – posted after cut date' : l.added ? 'Added to a reported month' : l.enteredAfter ? 'Entered after cut date' : 'In report';
+      l.why = !inCut ? `posted ${dtext(l.date)}, after the cut date – next report`
+        : l.added ? `posted ${dtext(l.date)}, entered ${cutText(l.entry)}: new in ${mlabel(l.month)}, which the ${mlabel(lastRM)} report already showed`
+        : l.enteredAfter ? `posted ${dtext(l.date)} but entered ${cutText(l.entry)}, after the cut date` : '';
     }
-    for (const m of MB.rows) { const x = place(m.ts !== null ? m.ts : (m.date ? stamp(m.date, null) : null), m.month); m.pending = x.bucket === 'PENDING'; }
+    for (const m of MB.rows) m.pending = !!m.date && dayNum(m.date) > cutDayN;
     const cost = costAll.filter((l) => l.bucket !== 'PENDING'), pending = costAll.filter((l) => l.bucket === 'PENDING');
     const movIn = MB.rows.filter((m) => !m.pending);
     const dataDate = isFinite(cutoff) ? dayOf(cutoff) : (opts.dataDate || [...costAll.map((l) => l.date)].filter(Boolean).reduce((a, b) => (b > a ? b : a), null));
@@ -429,11 +424,11 @@
     const T = sum(cost, (l) => l.amt);
     const byClassCost = {}; for (const l of cost) add(byClassCost, l.costClass, l.amt);
     const val = (cls) => sum(movIn.filter((m) => m.cls === cls), (m) => m.amt);
-    const lateL = cost.filter((l) => l.late);
+    const lateL = cost.filter((l) => l.added), afterL = cost.filter((l) => l.enteredAfter);
     const boxes = {}; for (const l of costAll) { const b = boxes[l.status] || (boxes[l.status] = { n: 0, amt: 0 }); b.n++; b.amt += l.amt; }
     const k = {
       cost: T, costLines: cost.length, costAll: sum(costAll, (l) => l.amt), printedTotal: CJ.printedTotal, skippedCji: CJ.skipped,
-      pending: sum(pending, (l) => l.amt), pendingLines: pending.length, late: sum(lateL, (l) => l.amt), lateLines: lateL.length,
+      pending: sum(pending, (l) => l.amt), pendingLines: pending.length, late: sum(lateL, (l) => l.amt), lateLines: lateL.length, enteredAfter: sum(afterL, (l) => l.amt), enteredAfterLines: afterL.length,
       pendingMov: MB.rows.length - movIn.length, maxEntry: isFinite(maxEntry) ? maxEntry : null,
       project: byClassCost[COST_CLASS.ISS_P] || 0, subcon: byClassCost[COST_CLASS.ISS_S] || 0, scrap: byClassCost[COST_CLASS.SCRAP] || 0,
       unmatched: sum(cost.filter((l) => !l.mov), (l) => l.amt), opening: sum(cost.filter((l) => l.bucket === 'OPENING'), (l) => l.amt),
@@ -535,7 +530,6 @@
   // lastCutoff: that report's cut-off
   function mergeSources(newSrc, carried, lastCutoff) {
     const out = { me: newSrc.me, stats: {}, errors: [] };
-    const cutDay = lastCutoff && isFinite(lastCutoff) ? Math.floor(lastCutoff / DAY) : null;
     for (const kind of ['cji', 'mb']) {
       const N = toCanon(kind, newSrc[kind] || [[]]); if (N.error) { out.errors.push(`${LAYOUT[kind].title}: missing column${N.error.length > 1 ? 's' : ''} ${N.error.map((x) => '"' + x + '"').join(', ')}`); continue; }
       const C = carried && carried[kind] ? toCanon(kind, carried[kind]) : { rows: [] };
@@ -544,6 +538,9 @@
       const dates = N.rows.map(pd).filter(Boolean), eDays = N.rows.map(ed).filter((x) => x !== null);
       const eFrom = minOf(eDays), eTo = maxOf(eDays);
       const byKey = new Map(); for (const r of C.rows || []) byKey.set(key(r), r);
+      // the overlap ends at the newest entry day in the carried lines: the day the last report's export was taken
+      const cEnd = (C.rows || []).reduce((a, r) => { const d = ed(r); return d !== null && d > a ? d : a; }, -Infinity);
+      const cutDay = isFinite(cEnd) ? cEnd : null;
       const newKeys = new Set(); let replaced = 0, changed = 0, added = 0;
       for (const r of N.rows) { const k = key(r); newKeys.add(k);
         if (byKey.has(k)) { replaced++; if (JSON.stringify(byKey.get(k).map(str)) !== JSON.stringify(r.map(str))) changed++; } else added++;
@@ -555,7 +552,7 @@
       out[kind] = [CANON[kind]].concat([...byKey.values()]);
       out.stats[kind] = { carried: (C.rows || []).length, exported: N.rows.length, added, replaced, changed, missing: missing.length, missingRows: missing,
         from: minOf(dates), to: maxOf(dates), entryFrom: eFrom === null ? null : new Date(eFrom * DAY), entryTo: eTo === null ? null : new Date(eTo * DAY),
-        window: hasCarry, overlap, noOverlap: hasCarry && N.rows.length > 0 && !overlap,
+        window: hasCarry, overlap, noOverlap: hasCarry && N.rows.length > 0 && !overlap, lastEntry: cutDay === null ? null : new Date(cutDay * DAY),
         overlapLines: overlap ? N.rows.filter((r) => { const d = ed(r); return d !== null && d <= cutDay; }).length : 0 };
     }
     const E0 = parseCJI3(newSrc.cji || [[]]);
@@ -578,9 +575,9 @@
     const cs = A.carryStats;
     if (cs && cs.cji && cs.cji.window) for (const kind of ['cji', 'mb']) { const t = cs[kind]; if (!t) continue;
       const name = kind === 'cji' ? 'CJI3 lines' : 'MB51 movements';
-      const eName = kind === 'cji' ? 'Created on' : 'Entry Date', lastCut = cutText(A.history.length ? A.history[A.history.length - 1].cutoff : null);
+      const eName = kind === 'cji' ? 'Created on' : 'Entry Date', lastCut = dtext(t.lastEntry);
       push({ id: 'carry-' + kind, level: (t.missing || t.noOverlap) ? 'bad' : 'good', title: `${kind === 'cji' ? 'CJI3' : 'MB51'} export is complete (overlap with the last report checks out)`, count: t.missing,
-        detail: t.noOverlap ? `The export's first ${eName} is ${dtext(t.entryFrom)}, after the last cut-off ${lastCut}: nothing overlaps the last report, so lines entered in between could be missing. Export again, filtering ${eName} from ${cutText(nextFilterFrom(A.history.length ? A.history[A.history.length - 1].cutoff : null))} or earlier.`
+        detail: t.noOverlap ? `The export's first ${eName} is ${dtext(t.entryFrom)}, after the last report's newest line (${eName} ${lastCut}): nothing overlaps the last report, so lines entered in between could be missing. Export again, filtering ${eName} from ${cutText(nextFilterFrom(t.lastEntry ? t.lastEntry.getTime() : null))} or earlier.`
           : `${t.carried.toLocaleString('en-US')} ${name} carried from the last report + ${t.exported.toLocaleString('en-US')} in this export (${eName} ${dtext(t.entryFrom)} → ${dtext(t.entryTo)}): `
           + `${t.added.toLocaleString('en-US')} new, ${t.replaced.toLocaleString('en-US')} already known${t.changed ? ` (${t.changed} changed in SAP – the export's version is used)` : ''}. `
           + (t.missing ? `${t.missing} ${name} of the last report entered between ${dtext(t.entryFrom)} and ${lastCut} are NOT in this export: the selection differs (project / WBS / plant / layout). Export again with the same selection.`
@@ -649,30 +646,42 @@
     push({ id: 'mvt', level: ot.length ? 'warn' : 'good', title: 'Every movement type is in the classification rules', count: sum(ot, (t) => t.n),
       detail: ot.length ? `Movement types ${ot.map((t) => t.mvt).join(', ')} are not classified; they count toward the stock balance under "Other".` : `${A.mvtTypes.length} movement type variants, all classified.`,
       cols: ['Movement', 'Text', 'Lines', 'Qty', 'Value'], rows: ot.map((t) => [t.mvt, t.text, t.n, t.qty, t.amt]) });
-    // 11. the cut-off: what waits for the next report, and what arrived late for a month already reported
-    push({ id: 'cutoff', level: 'info', title: `Cut-off ${isFinite(A.cutoff) ? cutText(A.cutoff) : '(none – everything counted)'} for ${mlabel(A.reportMonth)}`,
+    // 11. the cut date: what waits for the next report, and what was entered after it (flagged, still counted)
+    const after = A.cost.filter((l) => l.enteredAfter && !l.added);
+    push({ id: 'cutoff', level: 'info', title: `Cut date ${isFinite(A.cutoff) ? cutText(A.cutoff) : '(none – everything counted)'}: posting dates up to it are in ${mlabel(A.reportMonth)}`,
       count: A.pending.length, amount: A.k.pending,
-      detail: `${A.pending.length.toLocaleString('en-US')} cost lines (${fmt(A.k.pending)}) were entered after the cut-off or posted after ${mlabel(A.reportMonth)}: they are Pending here and count in the next report. `
+      detail: `${A.pending.length.toLocaleString('en-US')} cost lines (${fmt(A.k.pending)}) are posted after the cut date: Pending here, counted in the next report. `
         + `${A.k.pendingMov.toLocaleString('en-US')} MB51 movements are outside the quantity chain for the same reason. Latest Created on date in the files: ${cutText(A.k.maxEntry)}.`,
-      cols: ['Posting date', 'Created on', 'Status', 'Material', 'Description', 'WBS', 'Amount'],
-      rows: A.pending.slice().sort((a, b) => a.entry - b.entry).slice(0, 500).map((l) => [dtext(l.date), cutText(l.entry), l.status, l.material, l.matDesc, l.wbs, l.amt]) });
-    const late = A.cost.filter((l) => l.late);
-    if (A.history.length) push({ id: 'late', level: late.length ? 'warn' : 'good', title: 'Late postings into months already reported', count: late.length, amount: A.k.late,
-      detail: late.length ? `${late.length} lines (${fmt(A.k.late)}) were posted in a month that an earlier report had already closed. Closed months stay as reported; these lines are counted in the month of the report that first saw them.`
-        : 'No back-dated postings reached a closed month.',
-      cols: ['Posting date', 'Created on', 'Material', 'Description', 'Counted in', 'Amount'],
-      rows: late.slice(0, 500).map((l) => [dtext(l.date), cutText(l.entry), l.material, l.matDesc, mlabel(l.bucket), l.amt]) });
-    // 12. closed months must not move: every month an earlier report showed should come out the same
+      cols: ['Posting date', 'Created on', 'Material', 'Description', 'WBS', 'Amount'],
+      rows: A.pending.slice().sort((a, b) => a.date - b.date).slice(0, 500).map((l) => [dtext(l.date), cutText(l.entry), l.material, l.matDesc, l.wbs, l.amt]) });
+    push({ id: 'after', level: after.length ? 'info' : 'good', title: 'Lines entered after the cut date (counted, highlighted)', count: after.length, amount: sum(after, (l) => l.amt),
+      detail: after.length ? `${after.length} lines (${fmt(sum(after, (l) => l.amt))}) are posted on or before the cut date but were entered in SAP after it. They are counted in their posting month and highlighted on Cost Detail.`
+        : 'Every line in the report was entered by the cut date.',
+      cols: ['Posting date', 'Created on', 'Material', 'Description', 'WBS', 'Amount'],
+      rows: after.slice(0, 500).map((l) => [dtext(l.date), cutText(l.entry), l.material, l.matDesc, l.wbs, l.amt]) });
+    // 12. months the last report showed: lines added to them, and whether that explains every change
+    const late = A.cost.filter((l) => l.added);
+    if (A.history.length) push({ id: 'late', level: late.length ? 'warn' : 'good', title: 'Lines added to months already reported', count: late.length, amount: A.k.late,
+      detail: late.length ? `${late.length} lines (${fmt(A.k.late)}) are posted in months the ${mlabel(A.history[0].reportMonth)} report already showed, but were not in it (entered later, or back-dated). They are counted in their posting month, so those months change – copy the whole Material Monthly block again.`
+        : 'No new lines in months the last report already showed.',
+      cols: ['Posting date', 'Created on', 'Material', 'Description', 'Month changed', 'Amount'],
+      rows: late.slice(0, 500).map((l) => [dtext(l.date), cutText(l.entry), l.material, l.matDesc, bucketLabel(l.bucket), l.amt]) });
     const snapM = A.prev && A.prev.months;
     if (snapM && snapM.size && A.history.length) {
-      const lastRM = A.history[A.history.length - 1].reportMonth, diffs = [];
+      const lastRM = A.history[0].reportMonth, diffs = [];
+      const addedBy = {}; for (const l of late) add(addedBy, l.bucket, l.amt);
+      let unexplained = 0;
       for (const [b, v] of snapM) { if (b === 'PENDING' || (b === 'OPENING' && (A.prev.meta.openingBefore || 0) !== (A.openingBefore || 0))) continue; const mk = /^\d{4}-\d{2}$/.test(b) ? +b.replace('-', '') : b;
         if (typeof mk === 'number' && mk > lastRM) continue;
         const now = typeof mk === 'number' && A.openingBefore && mk < A.openingBefore ? null : (A.byBucket[mk] || 0);
-        if (now !== null && Math.abs(now - v) > 1) diffs.push([bucketLabel(mk), v, now, now - v]); }
-      push({ id: 'frozen', level: diffs.length ? 'bad' : 'good', title: 'Months already reported are unchanged', count: diffs.length,
-        detail: diffs.length ? 'These months differ from the last report. Check that the CJI3 extract covers the whole project period and that the last report was loaded.' : 'Every month the last report showed comes out the same.',
-        cols: ['Month', 'Last report', 'Now', 'Difference'], rows: diffs });
+        if (now === null || Math.abs(now - v) <= 1) continue;
+        const exp = addedBy[mk] || 0, rest = now - v - exp; if (Math.abs(rest) > 1) unexplained++;
+        diffs.push([bucketLabel(mk), v, now, now - v, exp, rest]); }
+      push({ id: 'frozen', level: unexplained ? 'bad' : (diffs.length ? 'info' : 'good'), title: 'Months already reported: every change is explained by added lines', count: diffs.length,
+        detail: !diffs.length ? 'Every month the last report showed comes out the same.'
+          : unexplained ? `${unexplained} month(s) changed by more than the lines added to them: lines the last report had are missing now. Check that the exports use the same selection and that the right last report was loaded.`
+          : 'These months changed only by the lines added to them (listed above).',
+        cols: ['Month', 'Last report', 'Now', 'Change', 'From added lines', 'Unexplained'], rows: diffs });
     }
     // 13. price variance
     const pv = A.list.filter((r) => r.priceVar !== null && Math.abs(r.priceVar) > 0.10 && Math.abs(r.cost) > 1000);
@@ -722,7 +731,7 @@
       for (const r of lh.slice(hr + 1)) { if (!num(r[i('Load')])) continue;
         P.loads.push({ no: num(r[i('Load')]), run: toDate(r[i('Run on')]), dataDate: toDate(r[i('Data date')]), files: str(r[i('Files')]), cost: num(r[i('Material cost')]),
           project: num(r[i('Project consumption')]), subcon: num(r[i('To subcontractors')]), openPO: num(r[i('Open PO value')]), materials: num(r[i('Materials with cost')]), lines: num(r[i('Cost lines')]),
-          reportMonth: /^\d{4}-\d{2}$/.test(str(r[i('Report month')])) ? +str(r[i('Report month')]).replace('-', '') : 0, cutoff: tsParse(r[i('Cut-off')]), pending: num(r[i('Pending')]) }); } }
+          reportMonth: /^\d{4}-\d{2}$/.test(str(r[i('Report month')])) ? +str(r[i('Report month')]).replace('-', '') : 0, cutoff: tsParse(r[i('Cut date')] || r[i('Cut-off')]), pending: num(r[i('Pending')]) }); } }
     const mo = aoaBySheet['_Months'];
     if (mo) { P.months = new Map(); for (const r of mo.slice(1)) if (str(r[0])) P.months.set(str(r[0]), num(r[1])); }
     const sn = aoaBySheet['_Snap'];
@@ -777,7 +786,7 @@
   }
   function titleBand(ws, A, title, sub) {
     ws.getCell('A1').value = title; ws.getCell('A1').font = st.T1;
-    ws.getCell('A2').value = sub || `${A.PLANT}${A.PROJECT ? ' · ' + A.PROJECT : ''} · report ${mlabel(A.reportMonth)} · cut-off ${isFinite(A.cutoff) ? cutText(A.cutoff) : 'none'} · load ${A.loadNo}`; ws.getCell('A2').font = st.T2;
+    ws.getCell('A2').value = sub || `${A.PLANT}${A.PROJECT ? ' · ' + A.PROJECT : ''} · report ${mlabel(A.reportMonth)} · cut date ${isFinite(A.cutoff) ? cutText(A.cutoff) : 'none'} · load ${A.loadNo}`; ws.getCell('A2').font = st.T2;
   }
 
   async function buildWorkbook(A, libs) {
@@ -828,15 +837,15 @@
     const costCols = [{ h: 'Posting date', w: 11, nf: NF.date }, { h: 'Month', w: 9, text: true }, { h: 'Material', w: 11, text: true }, { h: 'Description', w: 36 },
       { h: 'Group', w: 10, text: true }, { h: 'Package', w: 11 }, { h: 'MNL', w: 7 }, { h: 'Cost class', w: 26 }, { h: 'WBS', w: 24 }, { h: 'WBS name', w: 22 },
       { h: 'Cost element', w: 11, text: true }, { h: 'Cost element name', w: 20 }, { h: 'Qty', w: 11, nf: NF.qty }, { h: 'Unit', w: 6 }, { h: 'Amount', w: 14, nf: NF.amt2 },
-      { h: 'Movement', w: 8 }, { h: 'Material doc', w: 12, text: true }, { h: 'Item', w: 5 }, { h: 'CO document', w: 12, text: true }, { h: 'Row', w: 5 }, { h: 'Fiscal year', w: 7 }, { h: 'Row ID', w: 7 }, { h: 'Created on', w: 11, nf: NF.date }, { h: 'Report bucket', w: 10, text: true }, { h: 'Cut-off status', w: 30 }, { h: 'Note', w: 60 }];
+      { h: 'Movement', w: 8 }, { h: 'Material doc', w: 12, text: true }, { h: 'Item', w: 5 }, { h: 'CO document', w: 12, text: true }, { h: 'Row', w: 5 }, { h: 'Fiscal year', w: 7 }, { h: 'Row ID', w: 7 }, { h: 'Created on', w: 11, nf: NF.date }, { h: 'Report bucket', w: 10, text: true }, { h: 'Status', w: 30 }, { h: 'Note', w: 60 }];
     const costSorted = A.costAll.slice().sort((a, b) => cmp(a.date ? a.date.getTime() : 0, b.date ? b.date.getTime() : 0) || cmp(a.key, b.key));
     const CD = 4;
-    titleBand(wsCost, A, 'Cost detail – CJI3 goods issues (WA)', `One row per CO line item. Posting date decides the month; Created on decides the report: entered on or before the cut-off ${cutText(A.cutoff)} counts, later waits (PENDING). Cut-off status marks each line. Package and MNL are looked up from Material Coding.`);
+    titleBand(wsCost, A, 'Cost detail – CJI3 goods issues (WA)', `One row per CO line item. Posting date decides the month: posted on or before the cut date ${cutText(A.cutoff)} is in the report, later is PENDING. Status (yellow) flags lines entered after the cut date or added to a month an earlier report showed – they are counted. Package and MNL come from Material Coding.`);
     table(wsCost, CD, costCols, costSorted.map((l, i) => { const r = A.mats.get(l.material), n = CD + 1 + i;
       return [l.date ? ymdDate(l.date) : null, mtext(l.month), l.material, l.matDesc || r.desc, r.group || '(no group)',
         { formula: lk('E', `C${n}`, '"UNALLOCATED"'), result: r.package || 'UNALLOCATED' }, { formula: lk('F', `C${n}`, '""'), result: r.mnl || '' },
         l.costClass, l.wbs, l.coName, l.ce, l.ceName, l.mov ? l.mqty : (l.qty || null), l.uom || r.unit, l.amt, l.mov ? l.mov.mvt : '', l.refDoc, l.refItem, l.docNo, l.postRow, l.fy, A.rowIds.get(l.rowKey).id, l.entry === null ? null : dayOf(l.entry), bucketText(l.bucket), l.status, l.why || null]; }), { xSplit: 3 });
-    { const SF = { 'In report': FILL.GOOD, 'Late posting': FILL.WARN, 'Pending – entered after cut-off': FILL.BAD, 'Pending – next month, already entered': FILL.SUB, 'Pending – next month': FILL.SUB };
+    { const SF = { 'In report': FILL.GOOD, 'Entered after cut date': FILL.WARN, 'Added to a reported month': FILL.WARN, 'Pending – posted after cut date': FILL.SUB };
       costSorted.forEach((l, i) => { const c = wsCost.getCell(CD + 1 + i, 25); c.fill = SF[l.status]; }); }
     const cdEnd = CD + Math.max(1, A.costAll.length);
     const CDR = (col) => `'Cost Detail'!$${col}$${CD + 1}:$${col}$${cdEnd}`;
@@ -905,11 +914,11 @@
 
     // ---------------- Dashboard
     titleBand(wsDash, A, 'Material cost report');
-    const kp = [[`Material cost to the cut-off (${cutText(A.cutoff)})`, { formula: `SUMIFS(${CDR('O')},${CDR('X')},"<>PENDING")`, result: A.k.cost }],
+    const kp = [[`Material cost up to the cut date (${cutText(A.cutoff)})`, { formula: `SUMIFS(${CDR('O')},${CDR('X')},"<>PENDING")`, result: A.k.cost }],
       ['  Project consumption', { formula: `SUMIFS(${CDR('O')},${CDR('H')},"${COST_CLASS.ISS_P}",${CDR('X')},"<>PENDING")`, result: A.k.project }],
       ['  Issued to subcontractors (recoverable)', { formula: `SUMIFS(${CDR('O')},${CDR('H')},"${COST_CLASS.ISS_S}",${CDR('X')},"<>PENDING")`, result: A.k.subcon }],
       ['  Scrap / damages', { formula: `SUMIFS(${CDR('O')},${CDR('H')},"${COST_CLASS.SCRAP}",${CDR('X')},"<>PENDING")`, result: A.k.scrap }],
-      ['Pending – entered after the cut-off (next report)', { formula: `SUMIFS(${CDR('O')},${CDR('X')},"PENDING")`, result: A.k.pending }],
+      ['Pending – posted after the cut date (next report)', { formula: `SUMIFS(${CDR('O')},${CDR('X')},"PENDING")`, result: A.k.pending }],
       ['Late postings counted in this report', A.k.late],
       ['  With no MB51 movement', A.k.unmatched],
       ['Material Monthly total (must equal the cost)', { formula: MM_TOTAL, result: A.k.cost }],
@@ -918,10 +927,10 @@
       ['Issued to orders – outside project cost', A.k.toOrders], ['Ordered value (purchase POs)', A.k.orderedVal], ['Still to be delivered (value)', A.k.openPO],
       ['Materials with cost', A.k.materials], ['Material groups with cost', A.k.groups], ['Purchase orders', A.k.pos], ['Vendors', A.k.vendors]];
     wsDash.getCell('A4').value = 'Headline'; wsDash.getCell('A4').font = st.FB;
-    if (isFinite(A.cutoff)) { const nf = cutText(nextFilterFrom(A.cutoff));
+    if (A.k.maxEntry) { const nf = cutText(nextFilterFrom(A.k.maxEntry));
       const c = wsDash.getCell('D1'); c.value = `NEXT MONTH'S EXPORT: CJI3 and MB51 with posting date from project start (to: empty), then filter Created on (CJI3) / Entry Date (MB51) from ${nf}. ME2N: no filter.`;
       c.font = { ...st.FB, color: { argb: 'FF9A6200' } };
-      const c2 = wsDash.getCell('D2'); c2.value = `The filter starts ${OVERLAP_DAYS} days before this report's cut-off (${cutText(A.cutoff)}): the overlap lets the tool prove next month's export complete.`; c2.font = st.T2; }
+      const c2 = wsDash.getCell('D2'); c2.value = `The filter starts ${OVERLAP_DAYS} days before the newest Created on date in this report (${cutText(A.k.maxEntry)}): the overlap lets the tool prove next month's export complete.`; c2.font = st.T2; }
     kp.forEach(([l, v], i) => { const c = wsDash.getCell(5 + i, 1); c.value = l; c.font = /^ {2}/.test(l) ? st.F : st.FB;
       const x = wsDash.getCell(5 + i, 2); x.value = v; x.numFmt = NF.amt; x.font = st.FB; });
     wsDash.getColumn(1).width = 40; wsDash.getColumn(2).width = 16;
@@ -989,16 +998,16 @@
     // ---------------- Load history
     const loads = (A.prev && A.prev.loads ? A.prev.loads : []).concat([loadRow(A)]);
     titleBand(wsHist, A, 'Load history');
-    table(wsHist, 4, [{ h: 'Load', w: 6 }, { h: 'Run on', w: 11, nf: NF.date }, { h: 'Report month', w: 9, text: true }, { h: 'Cut-off', w: 18, text: true }, { h: 'Data date', w: 11, nf: NF.date },
+    table(wsHist, 4, [{ h: 'Load', w: 6 }, { h: 'Run on', w: 11, nf: NF.date }, { h: 'Report month', w: 9, text: true }, { h: 'Cut date', w: 12, text: true }, { h: 'Data date', w: 11, nf: NF.date },
       { h: 'Material cost', w: 15, nf: NF.amt }, { h: 'Pending', w: 13, nf: NF.amt }, { h: 'Project consumption', w: 15, nf: NF.amt }, { h: 'To subcontractors', w: 14, nf: NF.amt },
       { h: 'Open PO value', w: 14, nf: NF.amt }, { h: 'Materials with cost', w: 10 }, { h: 'Cost lines', w: 9 }, { h: 'Files', w: 60 }],
     loads.map((l) => [l.no, l.run ? ymdDate(l.run) : null, l.reportMonth ? mtext(l.reportMonth) : null, l.cutoff && isFinite(l.cutoff) ? cutText(l.cutoff) : null,
       l.dataDate ? ymdDate(l.dataDate) : null, l.cost, l.pending || null, l.project, l.subcon, l.openPO, l.materials, l.lines, l.files]));
-    wsHist.getCell(3, 1).value = 'Each load keeps its report month and cut-off: the next report uses them to keep closed months exactly as they were reported.'; wsHist.getCell(3, 1).font = st.T2;
+    wsHist.getCell(3, 1).value = 'Each load keeps its report month and cut date (a posting date). Posting date decides the month; lines entered after the cut date are counted and highlighted.'; wsHist.getCell(3, 1).font = st.T2;
 
     // ---------------- machinery for next month
     [['plant', A.PLANT], ['project', A.PROJECT], ['dataDate', dtext(A.dataDate)], ['loadNo', A.loadNo], ['reportMonth', mtext(A.reportMonth)],
-      ['cutoff', isFinite(A.cutoff) ? cutText(A.cutoff) : ''], ['nextFilterFrom', isFinite(A.cutoff) ? cutText(nextFilterFrom(A.cutoff)) : ''], ['openingBefore', A.openingBefore ? mtext(A.openingBefore) : ''], ['tool', 'Material cost report Rev02'], ['saved', new Date().toISOString()]]
+      ['cutoff', isFinite(A.cutoff) ? cutText(A.cutoff) : ''], ['nextFilterFrom', A.k.maxEntry ? cutText(nextFilterFrom(A.k.maxEntry)) : ''], ['lastEntry', A.k.maxEntry ? cutText(A.k.maxEntry) : ''], ['openingBefore', A.openingBefore ? mtext(A.openingBefore) : ''], ['tool', 'Material cost report Rev02'], ['saved', new Date().toISOString()]]
       .forEach((r) => wsMeta.addRow(r));
     const wsMonths = wb.addWorksheet('_Months', { state: 'hidden' });
     wsMonths.addRow(['Bucket', 'Amount']); for (const [b, v] of Object.entries(A.byBucket)) wsMonths.addRow([bucketText(isNaN(+b) ? b : +b), round2(v)]);
@@ -1137,9 +1146,9 @@
       const x = ws.getCell(1, c); x.value = { formula: `SUBTOTAL(9,${L(c)}${R1}:${L(c)}${RN})`, result: res }; x.numFmt = AMTF; }
     const tie = `SUM(${L(T0 + 3)}${R1}:${L(T0 + 3)}${RN})-SUMIFS(${CDR('O')},${CDR('X')},"<>PENDING")`;
     const c2 = ws.getCell(2, 6);
-    c2.value = { formula: `IF(ABS(${tie})<1,"✔ Total = CJI3 cost to the cut-off ${cutText(A.cutoff)}","✗ Total differs from Cost Detail by "&TEXT(${tie},"#,##0"))`, result: `✔ Total = CJI3 cost to the cut-off ${cutText(A.cutoff)}` };
+    c2.value = { formula: `IF(ABS(${tie})<1,"✔ Total = CJI3 cost posted up to ${cutText(A.cutoff)}","✗ Total differs from Cost Detail by "&TEXT(${tie},"#,##0"))`, result: `✔ Total = CJI3 cost posted up to ${cutText(A.cutoff)}` };
     c2.font = { ...st.FB, size: 9.5, color: { argb: 'FF1B7F4B' } }; c2.alignment = { horizontal: 'right' };
-    const c2b = ws.getCell(2, B0); c2b.value = `Report ${mlabel(A.reportMonth)} · Pending = entered after the cut-off, counted next month, not in Total`;
+    const c2b = ws.getCell(2, B0); c2b.value = `Report ${mlabel(A.reportMonth)} · Pending = posted after the cut date, counted next month, not in Total`;
     c2b.font = { ...st.F, size: 9, italic: true, color: { argb: 'FF5A6678' } };
     ws.properties.outlineLevelCol = 1;
     ws.views = [{ state: 'frozen', xSplit: nI, ySplit: HR, showGridLines: false, zoomScale: 90 }];

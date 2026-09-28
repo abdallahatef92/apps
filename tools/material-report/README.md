@@ -37,30 +37,17 @@ From these the page builds the Excel report: Dashboard, **Material Monthly**, Pa
   - Suggestions count only once you accept them.
   - Codes are kept in the browser and written into the report's *Material Coding* sheet. Loading that report next month brings them back, together with load history and a *Changes* comparison.
 
-## Report period and cut-off
+## Report period and cut date
 
-**Posting Date decides the month; Created on decides the report.** In the CJI3 file, Document Date, Value Date, Period and Fiscal Year all repeat the Posting Date and add nothing. *Created on* is the day SAP recorded the line, and it cannot be backdated.
+The rule has two parts:
+- **The cut date is a posting date.** Lines posted on or before it are in the report, each in its posting month. Lines posted after it are **Pending** and counted in the next report.
+- **Created on never moves a line.** It only highlights two kinds of line, on *Cost Detail* (Status column) and in the period box:
+  - **Entered after cut date:** posted on or before the cut date, but entered in SAP after it. For example, 67 August lines were entered on 1 Sep.
+  - **Added to a reported month:** posted in a month the last report already showed, but not among that report's lines, because it was entered later or backdated. The month changes by that amount. The check *Months already reported* confirms every change is explained by such lines, and turns red if a line the last report had is missing.
 
-After the three files load, the page asks for the **report month** and a **cut-off date**. It is a whole day: any line Created on that date or before counts. Build stays disabled until both are set.
+**In the tool.** After the files load, the period box shows the report month and the cut date, which defaults to the month end and can be changed. It then shows three numbers: in the report (with the highlighted part), and Pending.
 
-**Suggested cut-off.** The tool suggests the day posting into the report month stopped. That is the latest Created on date among lines posted in that month or earlier, looking at most 10 days past the month end.
-- On the DIST history this gives 1 Mar, 5 Apr, 5 May, 7 Jun, 5 Jul, 1 Aug and 1 Sep.
-- Stragglers entered later than that become late postings next month.
-- If the file doesn't reach the next month yet (an early export), it suggests the file's last Created on date and warns that postings may still come.
-- You can always override the date.
-
-**The four boxes.** Every CJI3 line is marked on *Cost Detail* (column **Cut-off status**) and in the material detail on the page:
-
-| | Created on ≤ cut-off | Created on > cut-off |
-|---|---|---|
-| **Posted in the report month or earlier** | In report (or *Late posting* into a closed month) | Pending – entered after cut-off |
-| **Posted after the report month** | Pending – next month, already entered | Pending – next month |
-
-The period box shows these counts before you build.
-
-**Closed months stay closed.** Each report stores its report month and cut-off in *Load history*. Next month's report reads them back, so every month already reported comes out exactly as it was, and a Checks item proves it. A line posted into a closed month is counted in the first open month and marked *Late posting*. Re-building a month that was already reported replaces that report and leaves earlier months alone.
-
-**Timestamps.** A cost line takes the entry stamp of its MB51 movement. The two are one save, so quantity and cost fall on the same side of the cut-off.
+**Why the whole Material Monthly block is re-pasted.** Months can change when lines are added to them. Re-pasting the whole block each month keeps the cost report right.
 
 **Opening roll-up.** *Roll into Opening* sums all months before a chosen month into the Opening block.
 
@@ -76,17 +63,17 @@ The report carries every CJI3 line and MB51 movement it has seen, in two hidden 
 | **MB51**, every month after | posting date from project start, to empty | **Entry Date ≥ the same date** |
 | **ME2N** | no date filter | none |
 
-**The filter date.** It is printed on the Dashboard ("NEXT MONTH'S EXPORT …") and in the tool once the last report is loaded. It is **7 days before the last cut-off**.
+**The filter date.** It is printed on the Dashboard ("NEXT MONTH'S EXPORT …"). It is **7 days before the newest Created on date in that report**, which is the day its export was taken.
 
 **How the tool proves an export complete.** That week of overlap needs no typed number:
 - Every carried line entered between the export's first entry date and the last cut-off must be in the new export. All present means the selection is the same and nothing entered since was skipped.
 - If any are missing, the selection differs. The build is blocked and the lines are listed in Checks.
-- If the export has no overlap at all (the filter started after the cut-off), the build is blocked and the tool gives the date to filter from.
+- If the export has no overlap at all (the filter started after the last report's newest line), the build is blocked and the tool gives the date to filter from.
 - An unfiltered, full export always passes.
 
 **Merging.** Carried and new lines are merged on SAP's line key: CO document + posting row + year, and material document + item + year for MB51. A line in both counts once, and the export's version wins.
 
-**Tested on DIST.** September built from a Created-on-filtered export (788 CJI3 lines instead of 5,316) plus the August report equals September from the full export, every row and every month. A test line posted 10-Mar and entered 20-Sep is counted in September as a late posting, and March is unchanged.
+**Tested on DIST.** September built from a Created-on-filtered export (788 CJI3 lines instead of 5,316) plus the August report equals September from the full export, every row and every month. A test line posted 10-Mar and entered 20-Sep is counted in March and highlighted as *Added to a reported month*.
 
 ## Material Monthly
 

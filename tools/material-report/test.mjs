@@ -151,53 +151,53 @@ eq(B.changes.rows.map((x) => [x.type, x.r.material]), [['Cost moved', '13000040'
 eq(B.changes.rows[0].now.cost - B.changes.rows[0].prev.cost, 66000, 'Δ cost');
 eq(B.changes.newPO.map((l) => l.key), ['5000000009/10'], 'new PO line found');
 
-// ================================================================ cut-off
+// ================================================================ cut date (a posting date) + Created on flags
 // MB51 entry stamps are the posting date at 10:00 (see mv); CJI3 lines take their movement's stamp.
 {
-  const cut = (d, t) => Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10), ...(t || '23:59:59').split(':').map(Number));
-  // 1. Feb report, cut-off 25 Feb noon: A06 (no movement → its posting day, 28 Feb) and the 26 Feb movement wait
-  const C1 = E.analyse({ me: ME, mb: MB, cji: CJ }, { reportMonth: 202602, cutoff: cut('2026-02-25', '12:00:00') });
-  eq(C1.k.pending, 777 + 66000, 'after the cut-off or after the report month → pending'); eq(C1.pending.map((l) => l.docNo).sort(), ['A06', 'A10'], 'A06 (late entry) and A10 (March) pending');
-  eq(C1.pending.find((l) => l.docNo === 'A10').why, 'posted in Mar-26, after the report month', 'reason given');
-  eq([C1.costAll.find((l) => l.docNo === 'A01').status, C1.pending.find((l) => l.docNo === 'A06').status, C1.pending.find((l) => l.docNo === 'A10').status],
-    ['In report', 'Pending – entered after cut-off', 'Pending – next month, already entered'], 'each CJI3 line is marked (A10 was entered 10 Feb, posted March)');
-  // suggested cut-off: Created on of lines posted in the month, up to 10 days past month end
-  const CJs = CJ.map((r) => r.slice()); CJs.find((r) => r[17] === 'A05')[30] = D('2026-03-02');   // a Feb line entered 2 Mar
-  const info = E.periodInfo({ cji: CJs, mb: MB });
-  eq(E.cutText(E.suggestCutoff(info, 202602).cutoff), '2026-03-02', 'suggestion = the day posting into Feb stopped');
-  eq(E.cutText(E.suggestCutoff(info, 202601).cutoff), '2026-01-31', 'nothing late for Jan → month end');
-  eq(E.suggestCutoff(info, 202603).early, true, 'file ends inside the month → early export flagged');
+  const cut = (d) => Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10), 23, 59, 59);
+  const back = async (A) => { const w = XLSX.read(await E.buildWorkbook(A, { ExcelJS, JSZip }), { cellDates: true }); const a = {};
+    for (const n of w.SheetNames) a[n] = XLSX.utils.sheet_to_json(w.Sheets[n], { header: 1, raw: true, defval: '' }); return { P: E.readPrevious(a), a }; };
+  // 1. Feb report, cut date 25 Feb: posted after it → pending (A06 28-Feb, A10 3-Mar); the rest by posting month
+  const C1 = E.analyse({ me: ME, mb: MB, cji: CJ }, { reportMonth: 202602, cutoff: cut('2026-02-25') });
+  eq(C1.k.pending, 777 + 66000, 'posted after the cut date → pending'); eq(C1.pending.map((l) => l.docNo).sort(), ['A06', 'A10'], 'A06 and A10 pending');
+  eq(C1.pending.find((l) => l.docNo === 'A10').why, 'posted 2026-03-03, after the cut date – next report', 'reason given');
+  eq([C1.costAll.find((l) => l.docNo === 'A01').status, C1.pending.find((l) => l.docNo === 'A06').status], ['In report', 'Pending – posted after cut date'], 'each CJI3 line is marked');
+  eq(C1.k.cost, cost - 777, 'cost up to the cut date');
+  eq(C1.mats.get('11000001').qty.OTHER || 0, 0, 'movement posted after the cut date is out of the quantity chain');
+  eq(C1.months, [202601, 202602], 'report months');
+  // default cut date = last day of the report month
+  eq(E.cutText(E.analyse({ me: ME, mb: MB, cji: CJ }, { reportMonth: 202602 }).cutoff), '2026-02-28', 'cut date defaults to the month end');
+  // 2. entered after the cut date: posted 20-Feb, entered 26-Feb → counted in Feb, highlighted
+  const MB2 = MB.map((r) => r.slice()); MB2.find((r) => r[7] === '4900000005')[16] = D('2026-02-26');
+  const C2 = E.analyse({ me: ME, mb: MB2, cji: CJ }, { reportMonth: 202602, cutoff: cut('2026-02-25') });
+  const a05 = C2.cost.find((l) => l.docNo === 'A05');
+  eq([a05.bucket, a05.status], [202602, 'Entered after cut date'], 'entered after the cut date: counted in its posting month, flagged');
+  eq(C2.checks.find((c) => c.id === 'after').count, 1, 'listed in Checks');
   // an afternoon entry keeps its own day in the workbook (no rounding into the next day)
   const MB3 = MB.map((r) => r.slice()); MB3.find((r) => r[7] === '4900000005')[17] = '23:30:00';
   const C6 = E.analyse({ me: ME, mb: MB3, cji: CJ }, { reportMonth: 202602, cutoff: cut('2026-02-20') });
   const w6 = XLSX.read(await E.buildWorkbook(C6, { ExcelJS, JSZip }), { cellDates: false }); const cd6 = XLSX.utils.sheet_to_json(w6.Sheets['Cost Detail'], { header: 1, raw: false, defval: '' });
-  const h6 = cd6[3], a05 = cd6.find((r) => r[h6.indexOf('CO document')] === 'A05');
-  eq([a05[h6.indexOf('Created on')], a05[h6.indexOf('Cut-off status')]], ['2026-02-20', 'In report'], 'entered 20 Feb 23:30 shows 20 Feb and counts for a 20 Feb cut-off');
-  eq(C1.k.cost, cost - 777, 'cost to the cut-off');
-  eq(C1.mats.get('11000001').qty.OTHER || 0, 0, 'movement after the cut-off is out of the quantity chain');
-  eq(C1.months, [202601, 202602], 'report months');
-  // 2. history: Jan reported with cut-off 3 Feb. A01 (posted 28 Jan) entered 10 Feb → too late for Jan → counted in Feb, flagged late
-  const MB2 = MB.map((r) => r.slice()); const row = MB2.find((r) => r[7] === '4900000001'); row[16] = D('2026-02-10');
-  const C2 = E.analyse({ me: ME, mb: MB2, cji: CJ }, { reportMonth: 202602, cutoff: cut('2026-03-05'), history: [{ reportMonth: 202601, cutoff: cut('2026-02-03') }] });
-  const a01 = C2.cost.find((l) => l.docNo === 'A01');
-  eq([a01.bucket, a01.late], [202602, true], 'back-dated line lands in the first open month');
-  eq(C2.byBucket[202601] || 0, 0, 'closed January stays empty'); eq(C2.k.lateLines, 1, 'one late posting');
-  eq(C2.checks.find((c) => c.id === 'late').count, 1, 'late check lists it');
-  // same line entered before the Jan cut-off is simply January
-  const C3 = E.analyse({ me: ME, mb: MB, cji: CJ }, { reportMonth: 202602, cutoff: cut('2026-03-05'), history: [{ reportMonth: 202601, cutoff: cut('2026-02-03') }] });
-  eq(C3.cost.find((l) => l.docNo === 'A01').bucket, 202601, 'on-time line keeps its posting month');
-  // 3. Opening roll-up: everything before Feb in Opening
-  const C4 = E.analyse({ me: ME, mb: MB, cji: CJ }, { reportMonth: 202602, cutoff: cut('2026-03-05'), openingBefore: 202602 });
+  const h6 = cd6[3], r05 = cd6.find((r) => r[h6.indexOf('CO document')] === 'A05');
+  eq([r05[h6.indexOf('Created on')], r05[h6.indexOf('Status')]], ['2026-02-20', 'In report'], 'entered 20 Feb 23:30 shows 20 Feb, not flagged for a 20 Feb cut date');
+  // 3. a line new in a month the last report showed: February reported without A03 (posted 12-Feb), March's files have it
+  const J = E.analyse({ me: ME, mb: MB, cji: CJ.filter((r) => r[17] !== 'A03') }, { reportMonth: 202602 });
+  const { P: PJ } = await back(J);
+  const F = E.analyse({ me: ME, mb: MB, cji: CJ }, { reportMonth: 202603, prev: PJ });
+  const a03 = F.cost.find((l) => l.docNo === 'A03');
+  eq([a03.bucket, a03.status], [202602, 'Added to a reported month'], 'counted in its posting month (February), highlighted');
+  eq([F.k.lateLines, F.checks.find((c) => c.id === 'late').count], [1, 1], 'listed as added to a reported month');
+  const fz = F.checks.find((c) => c.id === 'frozen');
+  eq([fz.level, fz.rows.length, fz.rows[0][5]], ['info', 1, 0], 'February changed, fully explained by the added line');
+  // a line the last report had is gone → unexplained change → red
+  const G = E.analyse({ me: ME, mb: MB, cji: CJ.filter((r) => r[17] !== 'A02') }, { reportMonth: 202603, prev: PJ });
+  eq(G.checks.find((c) => c.id === 'frozen').level, 'bad', 'a missing line of a reported month is red');
+  // 4. Opening roll-up: everything before Feb in Opening
+  const C4 = E.analyse({ me: ME, mb: MB, cji: CJ }, { reportMonth: 202602, openingBefore: 202602 });
   eq(C4.byBucket.OPENING, 1800000, 'January rolled into Opening'); eq(C4.months, [202602], 'months start after Opening');
-  // 4. workbook: cut-off stored, read back as history, closed months unchanged next month
-  const b4 = await E.buildWorkbook(C3, { ExcelJS, JSZip }); const w4 = XLSX.read(b4, { cellDates: true }); const a4 = {};
-  for (const n of w4.SheetNames) a4[n] = XLSX.utils.sheet_to_json(w4.Sheets[n], { header: 1, raw: true, defval: '' });
-  const P4 = E.readPrevious(a4);
-  eq([P4.loads[0].reportMonth, P4.loads[0].cutoff], [202602, cut('2026-03-05')], 'report month and cut-off carried');
+  // 5. workbook: report month + cut date stored; Material Monthly layout
+  const { P: P4, a: a4 } = await back(C1);
+  eq([P4.loads[0].reportMonth, E.cutText(P4.loads[0].cutoff)], [202602, '2026-02-25'], 'report month and cut date carried');
   eq(P4.months.get('2026-01'), 1800000, 'month totals carried');
-  const C5 = E.analyse({ me: ME, mb: MB, cji: CJ }, { reportMonth: 202603, cutoff: cut('2026-04-03'), prev: P4, history: P4.loads });
-  eq(C5.checks.find((c) => c.id === 'frozen').level, 'good', 'closed months unchanged');
-  eq(C5.cost.find((l) => l.docNo === 'A10').bucket, 202603, 'March line counted in March');
   const mm = a4['Material Monthly'], hdr = mm[2];
   eq([hdr[11], hdr[14], hdr[hdr.indexOf('Total Price') - 1]], ['Opening Qty', 'Jan-26 Qty', 'Feb-26 Amount'], 'Material Monthly: Opening at L, first month at O, Total right after the last month');
   eq(hdr.includes('Pending Amount') && hdr.indexOf('Pending Amount') > hdr.indexOf('Total Amount'), true, 'Pending after Total');
@@ -214,30 +214,31 @@ eq(B.changes.newPO.map((l) => l.key), ['5000000009/10'], 'new PO line found');
   eq([J1.exportCheck.lines, J1.exportCheck.printed], [CJ.slice(1).filter((r) => r[17]).length, all], 'printed-total check reads the export itself, not the merged lines');
   const P1 = await back(J1);
   eq([P1.carried.cji.length - 1, P1.carried.mb.length - 1], [CJ.slice(1).filter((r) => r[17]).length, MB.length - 1], 'every CJI3 line and movement carried');
-  eq(P1.meta.nextFilterFrom, '2026-01-27', 'the report says where next month\'s Created on filter starts (7 days before its cut-off)');
+  eq(P1.meta.nextFilterFrom, '2026-02-21', 'the report says where next month\'s Created on filter starts (7 days before its newest line, 28 Feb)');
   // February export: all posting dates, filtered on entry from 27-Jan (fixture entry = posting date); A02 corrected in SAP
   const entered = (r, i, col) => i === 0 || (r[col] instanceof Date && r[col] >= D('2026-01-27'));
   const CJf = CJ.filter((r, i) => r[17] || i === 0).filter((r, i) => entered(r, i, 27)).map((r) => r.slice()); CJf.find((r) => r[17] === 'A02')[9] = 1300001;
   // an old back-dated line: posted 15-Dec-25, entered 20-Feb-26 – far outside any posting-date window
   { const r = CJ[1].slice(); r[17] = 'A99'; r[27] = D('2025-12-15'); r[30] = D('2026-02-20'); r[9] = 5000; r[55] = '4900009998'; r[34] = '2025'; CJf.push(r); }
   const MBf = MB.filter((r, i) => entered(r, i, 16));
-  const F1 = run({ me: ME, mb: MBf, cji: CJf }, P1, 202602, '2026-03-05');
+  const F1 = run({ me: ME, mb: MBf, cji: CJf }, P1, 202602, '2026-03-05');   // (cut date after the month: report month decides)
   eq([F1.carryStats.cji.overlap, F1.carryStats.cji.missing, F1.carryStats.mb.missing], [true, 0, 0], 'overlap with the last report checks out');
   eq(F1.checks.find((c) => c.id === 'carry-cji').level, 'good', 'completeness check green');
   eq(F1.carryStats.cji.changed, 1, 'a line changed in SAP is noticed'); eq(F1.costAll.find((l) => l.docNo === 'A02').amt, 1300001, "the export's version wins");
   const a99 = F1.costAll.find((l) => l.docNo === 'A99');
-  eq([a99.bucket, a99.late, a99.status], [202602, true, 'Late posting'], 'old back-dated line caught, counted in the current month');
+  eq([a99.bucket, a99.status], [202512, 'Added to a reported month'], 'old back-dated line caught, counted in its posting month, highlighted');
   eq(F1.costAll.length, J1.costAll.length + 1, 'overlap counted once, the new line added');
   // a carried line entered in the overlap is missing → the selection differs → red
-  const F3 = run({ me: ME, mb: MBf, cji: CJf.filter((r) => r[17] !== 'A01') }, P1, 202602, '2026-03-05');
-  // (A01 is the only CJI3 line in the overlap, so without it the export no longer overlaps at all – red either way)
-  eq([F3.carryStats.cji.missing + (F3.carryStats.cji.noOverlap ? 1 : 0), F3.costAll.some((l) => l.docNo === 'A01'), F3.checks.find((c) => c.id === 'carry-cji').level], [1, true, 'bad'], 'missing overlap line kept, flagged red');
+  const F3 = run({ me: ME, mb: MBf, cji: CJf.filter((r) => r[17] !== 'A03') }, P1, 202602, '2026-03-05');
+  // A03 (posted/entered 12-Feb) sits inside the overlap (the export's first entry 28-Jan → the last report's newest, 3-Mar)
+  eq([F3.carryStats.cji.missing, F3.costAll.some((l) => l.docNo === 'A03'), F3.checks.find((c) => c.id === 'carry-cji').level], [1, true, 'bad'], 'missing overlap line kept, flagged red');
   const F3b = run({ me: ME, mb: MBf.filter((r) => r[7] !== '4900000001'), cji: CJf }, P1, 202602, '2026-03-05');
   eq([F3b.carryStats.mb.missing, F3b.checks.find((c) => c.id === 'carry-mb').level], [1, 'bad'], 'a movement missing from the MB51 overlap is named');
   // filter started after the cut-off → no overlap → red
-  const late = (r, i) => i === 0 || (r[27] instanceof Date && r[27] >= D('2026-02-05'));
-  const F4 = run({ me: ME, mb: MB.filter((r, i) => i === 0 || r[16] >= D('2026-02-05')), cji: CJf.filter(late) }, P1, 202602, '2026-03-05');
-  eq([F4.carryStats.cji.noOverlap, F4.checks.find((c) => c.id === 'carry-cji').level], [true, 'bad'], 'export starting after the cut-off is flagged');
+  // filter started after the last report's newest line (3 Mar) → no overlap → red
+  const CJl = [CJ[0]]; { const r = CJ[1].slice(); r[17] = 'A98'; r[27] = D('2026-03-10'); r[30] = D('2026-03-10'); r[55] = '4900009997'; CJl.push(r); }
+  const F4 = run({ me: ME, mb: [MB[0]], cji: CJl }, P1, 202603, '2026-03-31');
+  eq([F4.carryStats.cji.noOverlap, F4.checks.find((c) => c.id === 'carry-cji').level], [true, 'bad'], 'export starting after the last report\'s newest line is flagged');
 }
 
 // ================================================================ real extracts (optional)
