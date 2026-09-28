@@ -1070,8 +1070,9 @@
   function materialMonthly(ws, A, CDR, lk, mode) {
     const L = colL, cat = A.packages, Q = mode === 'quarter', sheet = Q ? 'Material Quarterly' : 'Material Monthly';
     const quarters = [...new Set(A.months.map(quarterOf))];
-    const blocks = Q ? quarters.map((q, i) => ({ key: q, label: q, fill: i % 2 ? '1F3E6B' : '0F2A52', months: A.months.filter((m) => quarterOf(m) === q) }))
-      : [{ key: 'OPENING', label: 'Opening', fill: '7A5C1E' }].concat(A.months.map((m, i) => ({ key: m, label: mlabel(m), fill: i % 2 ? '1F3E6B' : '0F2A52' })));
+    const blocks = Q ? quarters.map((q, i) => ({ key: q, label: q, year: +q.slice(0, 4), short: q.slice(5), fill: i % 2 ? '1F3E6B' : '0F2A52', months: A.months.filter((m) => quarterOf(m) === q) }))
+      : [{ key: 'OPENING', label: 'Opening', year: null, short: 'Opening', fill: '7A5C1E' }]
+        .concat(A.months.map((m, i) => ({ key: m, label: mlabel(m), year: Math.floor(m / 100), short: MON[(m % 100) - 1], fill: i % 2 ? '1F3E6B' : '0F2A52' })));
     const critCol = Q ? 'AA' : 'X';
     const nI = MM_ID.length, B0 = nI + 1;                       // first time block starts in column L
     const T0 = B0 + 3 * blocks.length, P0 = T0 + 4, RF = P0 + 3;
@@ -1081,17 +1082,26 @@
     const rows = A.monthlyRows.slice().sort((a, b) => { const ra = A.mats.get(a.material), rb = A.mats.get(b.material);
       return pkOrder(ra.package) - pkOrder(rb.package) || cmp(ra.group || '~', rb.group || '~') || cmp(a.material, b.material)
         || (LINE_ORDER[a.lineType] ?? 9) - (LINE_ORDER[b.lineType] ?? 9) || cmp(a.lineType, b.lineType); });
-    const R1 = 4, RN = R1 + Math.max(1, rows.length) - 1, HR = 3;
+    // rows: 1 TOTAL · 2 check · 3 year · 4 quarter or month · 5 column names · 6… data
+    const HY = 3, HP = 4, HR = 5, R1 = 6, RN = R1 + Math.max(1, rows.length) - 1;
     const AMTF = '#,##0;[Red]-#,##0;"–"', QTYF = '#,##0.00;[Red]-#,##0.00;"–"', PRF = '#,##0.00;[Red]-#,##0.00;""';
     const H = { ...st.H, size: 9.5 };
     // header: one row, one cell per column
-    const head = (c, v, f) => { const x = ws.getCell(HR, c); x.value = v; x.font = H; x.fill = solid('FF' + f); x.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }; };
-    MM_ID.forEach((h, j) => head(1 + j, h, '0F2A52'));
-    blocks.forEach((b, i) => ['Qty', 'Rate', 'Amount'].forEach((t, o) => head(B0 + 3 * i + o, `${b.label} ${t}`, b.fill)));
-    ['Total Price', 'Total Qty', 'Total Avg rate', 'Total Amount'].forEach((t, o) => head(T0 + o, t, 'A07A2C'));
-    ['Pending Qty', 'Pending Rate', 'Pending Amount'].forEach((t, o) => head(P0 + o, t, '8E3B37'));
-    REF.forEach((h, j) => head(RF + j, h, '6B7280'));
-    ws.getRow(HR).height = 30;
+    const head = (r, c, v, f, across) => { const x = ws.getCell(r, c); x.value = v; x.font = H; x.fill = solid('FF' + f);
+      x.alignment = across ? { horizontal: 'centerContinuous', vertical: 'middle' } : { horizontal: 'center', vertical: 'middle', wrapText: true }; };
+    // a label centred over its columns without merging: the label in the first cell, "centre across selection" on all of them
+    const across = (r, c0, n, v, f) => { for (let c = c0; c < c0 + n; c++) head(r, c, c === c0 ? v : null, f, true); };
+    MM_ID.forEach((h, j) => { head(HY, 1 + j, null, '0F2A52'); head(HP, 1 + j, null, '0F2A52'); head(HR, 1 + j, h, '0F2A52'); });
+    for (let i = 0; i < blocks.length;) { let j = i; while (j + 1 < blocks.length && blocks[j + 1].year === blocks[i].year) j++;   // one year label per run
+      across(HY, B0 + 3 * i, 3 * (j - i + 1), blocks[i].year ? String(blocks[i].year) : null, blocks[i].year ? (blocks[i].year % 2 ? '2B4C7E' : '14305A') : '7A5C1E'); i = j + 1; }
+    blocks.forEach((b, i) => { across(HP, B0 + 3 * i, 3, b.short, b.fill); ['Qty', 'Rate', 'Amount'].forEach((t, o) => head(HR, B0 + 3 * i + o, t, b.fill)); });
+    across(HY, T0, 4, null, 'A07A2C'); across(HP, T0, 4, 'Total', 'A07A2C'); ['Price', 'Qty', 'Avg rate', 'Amount'].forEach((t, o) => head(HR, T0 + o, t, 'A07A2C'));
+    across(HY, P0, 3, null, '8E3B37'); across(HP, P0, 3, 'Pending', '8E3B37'); ['Qty', 'Rate', 'Amount'].forEach((t, o) => head(HR, P0 + o, t, '8E3B37'));
+    REF.forEach((h, j) => { head(HY, RF + j, null, '6B7280'); head(HP, RF + j, null, '6B7280'); head(HR, RF + j, h, '6B7280'); });
+    ws.getRow(HY).height = 16; ws.getRow(HP).height = 16; ws.getRow(HR).height = 18;
+    // column-wide formats set below also restyle these cells; remember the header look and put it back at the end
+    const headLook = []; for (let r = HY; r <= HR; r++) for (let c = 1; c <= LASTC; c++) { const x = ws.getCell(r, c);
+      headLook.push([r, c, { ...x.font }, { ...x.alignment }, x.fill]); }
     const bt = (b) => `"${Q ? b : bucketText(b)}"`;
     const DF = solid('FFF3F6FB'), WF = solid('FFFFFFFF'), NEWF = solid('FFE2EFDA'), SUBF = solid('FFFDF3E1'), SCRF = solid('FFFDE8E6');
     let band = 0, prevGroup = null;
@@ -1143,7 +1153,7 @@
     ws.getColumn(T0 + 3).font = { ...st.FB, size: 9.5 };
     REF.forEach((h, j) => { const col = ws.getColumn(RF + j); col.width = [9, 11, 9, 11, 11][j]; col.outlineLevel = 1; col.hidden = true; });
     ws.getColumn(RF + 1).numFmt = PRF; ws.getColumn(RF + 2).numFmt = NF.pct; ws.getColumn(RF + 3).numFmt = QTYF; ws.getColumn(RF + 4).numFmt = QTYF;
-    for (let i = HR; i <= RN; i++) { ws.getCell(i, B0).border = { left: { style: 'medium', color: { argb: 'FFC8A45C' } } };
+    for (let i = HP; i <= RN; i++) { ws.getCell(i, B0).border = { left: { style: 'medium', color: { argb: 'FFC8A45C' } } };
       for (let bi = 1; bi < blocks.length; bi++) ws.getCell(i, B0 + 3 * bi).border = { left: { style: 'thin', color: { argb: 'FF8EA9DB' } } };
       ws.getCell(i, T0).border = { left: { style: 'medium', color: { argb: 'FFC8A45C' } } }; ws.getCell(i, P0).border = { left: { style: 'medium', color: { argb: 'FF8E3B37' } } }; }
     // TOTAL row (follows the filter) and the tie-out check, above the header so a filter never hides them
@@ -1161,10 +1171,11 @@
     c2.font = { ...st.FB, size: 9.5, color: { argb: 'FF1B7F4B' } }; c2.alignment = { horizontal: 'right' };
     const c2b = ws.getCell(2, B0); c2b.value = `Report ${mlabel(A.reportMonth)} · Pending = posted after the cut date, counted next month, not in Total`;
     c2b.font = { ...st.F, size: 9, italic: true, color: { argb: 'FF5A6678' } };
+    for (const [r, c, font, alignment, fill] of headLook) { const x = ws.getCell(r, c); x.font = font; x.alignment = alignment; x.fill = fill; x.numFmt = 'General'; }
     ws.properties.outlineLevelCol = 1;
-    ws.views = [{ state: 'frozen', xSplit: nI, ySplit: HR, showGridLines: false, zoomScale: 90 }];
+    ws.views = [{ state: 'frozen', xSplit: nI, ySplit: HR, showGridLines: false, zoomScale: 90 }];   // year, period and column names stay in view
     ws.autoFilter = { from: { row: HR, column: 1 }, to: { row: RN, column: LASTC } };
-    ws.pageSetup = { paperSize: 8, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, printTitlesRow: `${HR}:${HR}`,
+    ws.pageSetup = { paperSize: 8, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, printTitlesRow: `${HY}:${HR}`,
       margins: { left: 0.25, right: 0.25, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 } };
     if (Q) { const c3 = ws.getCell(2, 2); c3.value = 'Calendar quarters (Q1 = Jan–Mar). Same rows as Material Monthly; the current quarter holds the months reported so far.'; c3.font = { ...st.F, size: 9, italic: true, color: { argb: 'FF5A6678' } }; }
     return { total: `SUM('${sheet}'!${L(T0 + 3)}${R1}:${L(T0 + 3)}${RN})`, R1, RN, blocks, amt: (bi) => L(B0 + 3 * bi + 2), totalAmt: L(T0 + 3), pendingAmt: L(P0 + 2) };

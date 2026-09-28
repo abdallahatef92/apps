@@ -135,7 +135,7 @@ for (const r of mc.slice(h + 1)) if (r[0] === '13000040') { r[4] = 'DIV 0302'; r
 const P = E.readPrevious(aoa);
 eq(P.coding.get('13000040'), { package: 'DIV 0302', mnl: 'MAT', cec: '' }, 'coding read back from the report');
 eq(P.loads.length, 1, 'history carried'); eq(P.rows.size, 4, 'row IDs carried');
-{ const mmS = aoa['Material Monthly']; const ids = mmS.slice(3).map((r) => r[mmS[2].indexOf('Row ID')]).filter((x) => typeof x === 'number');
+{ const mmS = aoa['Material Monthly']; const ids = mmS.slice(5).map((r) => r[mmS[4].indexOf('Row ID')]).filter((x) => typeof x === 'number');
   eq(ids.length, 4, 'four data rows on Material Monthly'); } eq(P.snap.size, A.list.length, 'snapshot carried');
 // month 2: one more issue of rebar, one new PO line
 MB.push(MB[3].slice()); Object.assign(MB[MB.length - 1], { 7: '4900000010', 9: D('2026-03-03'), 12: -2, 13: -66000 });
@@ -198,11 +198,14 @@ eq(B.changes.newPO.map((l) => l.key), ['5000000009/10'], 'new PO line found');
   const { P: P4, a: a4 } = await back(C1);
   eq([P4.loads[0].reportMonth, E.cutText(P4.loads[0].cutoff)], [202602, '2026-02-25'], 'report month and cut date carried');
   eq(P4.months.get('2026-01'), 1800000, 'month totals carried');
-  const mm = a4['Material Monthly'], hdr = mm[2];
-  eq([hdr[11], hdr[14], hdr[hdr.indexOf('Total Price') - 1]], ['Opening Qty', 'Jan-26 Qty', 'Feb-26 Amount'], 'Material Monthly: Opening at L, first month at O, Total right after the last month');
-  eq(hdr.includes('Pending Amount') && hdr.indexOf('Pending Amount') > hdr.indexOf('Total Amount'), true, 'Pending after Total');
-  const mq = a4['Material Quarterly'], hq = mq[2];
-  eq([hq[11], hq[14], hq[hq.indexOf('Total Price') - 1]], ['2026 Q1 Qty', 'Total Price', '2026 Q1 Amount'], 'Material Quarterly: Jan + Feb in one Q1 block, then Total');
+  const mm = a4['Material Monthly'], hdr = mm[4], mon = mm[3], yr = mm[2];
+  eq([mon[11], hdr[11], mon[14], yr[14], hdr[14], hdr[16]], ['Opening', 'Qty', 'Jan', '2026', 'Qty', 'Amount'], 'Material Monthly: year row, month row, then Qty / Rate / Amount; Opening at L, first month at O');
+  const ti = mon.indexOf('Total'), pi = mon.indexOf('Pending');
+  eq([mon[ti - 3], hdr.slice(ti, ti + 4), pi > ti], ['Feb', ['Price', 'Qty', 'Avg rate', 'Amount'], true], 'Total right after the last month, Pending after Total');
+  const mq = a4['Material Quarterly'];
+  eq([mq[2][11], mq[3][11], mq[4].slice(11, 14), mq[3][14]], ['2026', 'Q1', ['Qty', 'Rate', 'Amount'], 'Total'], 'Material Quarterly: year, quarter, then Qty / Rate / Amount (Jan + Feb in Q1)');
+  { const wq = new ExcelJS.Workbook(); await wq.xlsx.load(await E.buildWorkbook(C1, { ExcelJS, JSZip })); const x = wq.getWorksheet('Material Quarterly').getCell(5, 12);
+    eq([x.font.bold, x.font.color && x.font.color.argb], [true, 'FFFFFFFF'], 'header text stays white bold after the column formats'); }
   eq(E.quarterOf(202611), '2026 Q4', 'November is Q4');
 }
 
