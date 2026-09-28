@@ -49,8 +49,6 @@ The rule has two parts:
 
 **Why the whole Material Monthly block is re-pasted.** Months can change when lines are added to them. Re-pasting the whole block each month keeps the cost report right.
 
-**Opening roll-up.** *Roll into Opening* sums all months before a chosen month into the Opening block.
-
 ## Monthly exports: only what was entered since the last report
 
 The report carries every CJI3 line and MB51 movement it has seen, in two hidden sheets (`_CJI3`, `_MB51`) that use SAP's own column names. So after the first report, SAP only has to export what was **entered** since. That includes back-dated lines of any age, because the filter is on the entry date, not the posting date.
@@ -98,6 +96,8 @@ Rows are sorted CSI → group → material → line type on every build. Each ke
 - CSI, MNL and Cost element are live lookups from *Material Coding*. Re-coding changes the row where it stands; nothing needs regrouping.
 - Qty and Amount are SUMIFS on *Cost Detail* by Row ID and **Report bucket**.
 - The TOTAL row (follows the filter) and a tie-out check against CJI3 cost posted up to the cut date sit above the header.
+
+**Material Quarterly** has the same rows and identity columns as Material Monthly, with one Qty / Rate / Amount block per **calendar quarter** (Q1 = Jan–Mar), then Total and Pending. A 3-year project has 12 quarter blocks (36 columns) instead of 36 month blocks (108 columns). The current quarter holds the months reported so far. Figures are SUMIFS on Cost Detail's *Report quarter* column, and the Dashboard checks that its total equals the cost.
 
 **Package Monthly** sums Material Monthly by CSI and month, so it is right whatever the row order.
 

@@ -143,7 +143,7 @@ function analyse() {
   const prev = prevFits() ? state.prev : null;
   const M = merged();
   return E.analyse({ me: M.me, cji: M.cji, mb: M.mb }, { coding: state.coding, prev, history: prev ? prev.loads : [], exportCheck: M.exportCheck, carryStats: M.stats,
-    reportMonth: +$('p-month').value || undefined, cutoff: cutoffValue(), openingBefore: +$('p-open').value || 0,
+    reportMonth: +$('p-month').value || undefined, cutoff: cutoffValue(),
     packages: state.master ? state.master.packages : undefined, mnl: state.master ? state.master.mnl : undefined,
     files: { me: state.names.me, mb: state.names.mb, cji: state.names.cji } });
 }
@@ -454,9 +454,6 @@ function setupPeriod() {
   const list = [...months].sort((a, b) => b - a), keep = +$('p-month').value;
   $('p-month').innerHTML = list.map((m) => `<option value="${m}">${E.mlabel(m)}</option>`).join('');
   $('p-month').value = String(list.includes(keep) ? keep : (pm && list.includes(E.nextMonth(pm)) ? E.nextMonth(pm) : list[0]));
-  const ob = $('p-open').value;
-  $('p-open').innerHTML = '<option value="0">No roll-up</option>' + [...info.months].sort((a, b) => a - b).slice(1).map((m) => `<option value="${m}">Months before ${E.mlabel(m)}</option>`).join('');
-  $('p-open').value = ob && [...$('p-open').options].some((o) => o.value === ob) ? ob : String(prev && prev.meta.openingBefore ? prev.meta.openingBefore : 0);
   $('p-last').innerHTML = (prev && pm ? `Last report: <b>${E.mlabel(pm)}</b>. ` : 'First report: export CJI3 and MB51 from the project start. ') + windowText();
   if (!info.hasTs) message('msgs', 'warn', 'This CJI3 export has no "Created on" column, so lines entered after the cut date cannot be highlighted. Add Created on to the CJI3 layout.');
   monthChanged();
@@ -464,7 +461,7 @@ function setupPeriod() {
 function monthChanged() { setCutoff(monthEnd(+$('p-month').value)); }   // cut date = last day of the report month (can be changed)
 let pvTimer = null;
 function periodChanged() { updateBuild(); clearTimeout(pvTimer); pvTimer = setTimeout(previewPeriod, 250); }
-for (const id of ['p-date', 'p-open']) $(id).addEventListener('input', periodChanged);
+$('p-date').addEventListener('input', periodChanged);
 $('p-month').addEventListener('input', monthChanged);
 function windowText() {
   const st = merged().stats; if (!st.cji) return '';

@@ -201,6 +201,9 @@ eq(B.changes.newPO.map((l) => l.key), ['5000000009/10'], 'new PO line found');
   const mm = a4['Material Monthly'], hdr = mm[2];
   eq([hdr[11], hdr[14], hdr[hdr.indexOf('Total Price') - 1]], ['Opening Qty', 'Jan-26 Qty', 'Feb-26 Amount'], 'Material Monthly: Opening at L, first month at O, Total right after the last month');
   eq(hdr.includes('Pending Amount') && hdr.indexOf('Pending Amount') > hdr.indexOf('Total Amount'), true, 'Pending after Total');
+  const mq = a4['Material Quarterly'], hq = mq[2];
+  eq([hq[11], hq[14], hq[hq.indexOf('Total Price') - 1]], ['2026 Q1 Qty', 'Total Price', '2026 Q1 Amount'], 'Material Quarterly: Jan + Feb in one Q1 block, then Total');
+  eq(E.quarterOf(202611), '2026 Q4', 'November is Q4');
 }
 
 // ================================================================ window exports merged with the carried lines

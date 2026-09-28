@@ -797,6 +797,7 @@
     // ---------------- sheet order: reports first, then files, then the hidden machinery
     const wsDash = wb.addWorksheet('Dashboard', { properties: { tabColor: { argb: 'FF1F4E9A' } } });
     const wsMM = wb.addWorksheet('Material Monthly', { properties: { tabColor: { argb: 'FF1F4E9A' } } });
+    const wsMQ = wb.addWorksheet('Material Quarterly', { properties: { tabColor: { argb: 'FF1F4E9A' } } });
     const wsPM = wb.addWorksheet('Package Monthly', { properties: { tabColor: { argb: 'FF1F4E9A' } } });
     const wsMat = wb.addWorksheet('Materials', { properties: { tabColor: { argb: 'FF1F4E9A' } } });
     const wsPrice = wb.addWorksheet('Price', { properties: { tabColor: { argb: 'FF1F4E9A' } } });
@@ -837,14 +838,14 @@
     const costCols = [{ h: 'Posting date', w: 11, nf: NF.date }, { h: 'Month', w: 9, text: true }, { h: 'Material', w: 11, text: true }, { h: 'Description', w: 36 },
       { h: 'Group', w: 10, text: true }, { h: 'Package', w: 11 }, { h: 'MNL', w: 7 }, { h: 'Cost class', w: 26 }, { h: 'WBS', w: 24 }, { h: 'WBS name', w: 22 },
       { h: 'Cost element', w: 11, text: true }, { h: 'Cost element name', w: 20 }, { h: 'Qty', w: 11, nf: NF.qty }, { h: 'Unit', w: 6 }, { h: 'Amount', w: 14, nf: NF.amt2 },
-      { h: 'Movement', w: 8 }, { h: 'Material doc', w: 12, text: true }, { h: 'Item', w: 5 }, { h: 'CO document', w: 12, text: true }, { h: 'Row', w: 5 }, { h: 'Fiscal year', w: 7 }, { h: 'Row ID', w: 7 }, { h: 'Created on', w: 11, nf: NF.date }, { h: 'Report bucket', w: 10, text: true }, { h: 'Status', w: 30 }, { h: 'Note', w: 60 }];
+      { h: 'Movement', w: 8 }, { h: 'Material doc', w: 12, text: true }, { h: 'Item', w: 5 }, { h: 'CO document', w: 12, text: true }, { h: 'Row', w: 5 }, { h: 'Fiscal year', w: 7 }, { h: 'Row ID', w: 7 }, { h: 'Created on', w: 11, nf: NF.date }, { h: 'Report bucket', w: 10, text: true }, { h: 'Status', w: 30 }, { h: 'Note', w: 60 }, { h: 'Report quarter', w: 10, text: true }];
     const costSorted = A.costAll.slice().sort((a, b) => cmp(a.date ? a.date.getTime() : 0, b.date ? b.date.getTime() : 0) || cmp(a.key, b.key));
     const CD = 4;
     titleBand(wsCost, A, 'Cost detail – CJI3 goods issues (WA)', `One row per CO line item. Posting date decides the month: posted on or before the cut date ${cutText(A.cutoff)} is in the report, later is PENDING. Status (yellow) flags lines entered after the cut date or added to a month an earlier report showed – they are counted. Package and MNL come from Material Coding.`);
     table(wsCost, CD, costCols, costSorted.map((l, i) => { const r = A.mats.get(l.material), n = CD + 1 + i;
       return [l.date ? ymdDate(l.date) : null, mtext(l.month), l.material, l.matDesc || r.desc, r.group || '(no group)',
         { formula: lk('E', `C${n}`, '"UNALLOCATED"'), result: r.package || 'UNALLOCATED' }, { formula: lk('F', `C${n}`, '""'), result: r.mnl || '' },
-        l.costClass, l.wbs, l.coName, l.ce, l.ceName, l.mov ? l.mqty : (l.qty || null), l.uom || r.unit, l.amt, l.mov ? l.mov.mvt : '', l.refDoc, l.refItem, l.docNo, l.postRow, l.fy, A.rowIds.get(l.rowKey).id, l.entry === null ? null : dayOf(l.entry), bucketText(l.bucket), l.status, l.why || null]; }), { xSplit: 3 });
+        l.costClass, l.wbs, l.coName, l.ce, l.ceName, l.mov ? l.mqty : (l.qty || null), l.uom || r.unit, l.amt, l.mov ? l.mov.mvt : '', l.refDoc, l.refItem, l.docNo, l.postRow, l.fy, A.rowIds.get(l.rowKey).id, l.entry === null ? null : dayOf(l.entry), bucketText(l.bucket), l.status, l.why || null, quarterOf(l.bucket)]; }), { xSplit: 3 });
     { const SF = { 'In report': FILL.GOOD, 'Entered after cut date': FILL.WARN, 'Added to a reported month': FILL.WARN, 'Pending – posted after cut date': FILL.SUB };
       costSorted.forEach((l, i) => { const c = wsCost.getCell(CD + 1 + i, 25); c.fill = SF[l.status]; }); }
     const cdEnd = CD + Math.max(1, A.costAll.length);
@@ -853,7 +854,8 @@
     wsCost.getCell(cdTot, 1).value = 'Total (follows the filter)'; wsCost.getCell(cdTot, 15).value = { formula: `SUBTOTAL(9,O${CD + 1}:O${cdEnd})`, result: A.k.costAll };
     for (const j of [1, 15]) { wsCost.getCell(cdTot, j).font = st.FB; wsCost.getCell(cdTot, j).fill = FILL.TOT; } wsCost.getCell(cdTot, 15).numFmt = NF.amt2;
 
-    const MMX = materialMonthly(wsMM, A, CDR, lk), MM_TOTAL = MMX.total;
+    const MMX = materialMonthly(wsMM, A, CDR, lk, 'month'), MM_TOTAL = MMX.total;
+    const MQX = materialMonthly(wsMQ, A, CDR, lk, 'quarter');
     packageMonthly(wsPM, A, MMX);
 
     // ---------------- Movements (MB51 with its class)
@@ -922,6 +924,7 @@
       ['Late postings counted in this report', A.k.late],
       ['  With no MB51 movement', A.k.unmatched],
       ['Material Monthly total (must equal the cost)', { formula: MM_TOTAL, result: A.k.cost }],
+      ['Material Quarterly total (must equal the cost)', { formula: MQX.total, result: A.k.cost }],
       [`Cost in ${mlabel(A.reportMonth)}`, { formula: `SUMIFS(${CDR('O')},${CDR('X')},"${mtext(A.reportMonth)}")`, result: A.k.thisMonth }],
       ['Received from vendors (MB51 value)', A.k.receivedVendor], ['Owner supplied (MB51 value)', A.k.ownerSupplied],
       ['Issued to orders – outside project cost', A.k.toOrders], ['Ordered value (purchase POs)', A.k.orderedVal], ['Still to be delivered (value)', A.k.openPO],
@@ -1060,10 +1063,16 @@
   // CSI / MNL / Cost element are live lookups from Material Coding; Qty and Amount are SUMIFS on Cost Detail by Row ID and
   // Report bucket, so re-coding changes a row where it stands and closed months stay exactly as reported.
   const MM_ID = ['Row ID', 'CSI', 'MNL', 'Cost element', 'Material', 'Description', 'Material group', 'Last vendor code', 'Last vendor name', 'Line type', 'Unit'];
-  function materialMonthly(ws, A, CDR, lk) {
-    const L = colL, cat = A.packages;
-    const blocks = [{ key: 'OPENING', label: 'Opening', fill: '7A5C1E' }]
-      .concat(A.months.map((m, i) => ({ key: m, label: mlabel(m), fill: i % 2 ? '1F3E6B' : '0F2A52' })));
+  // quarter = calendar quarter of a report month, "2026 Q1"
+  const quarterOf = (b) => typeof b === 'number' ? `${Math.floor(b / 100)} Q${Math.ceil((b % 100) / 3)}` : b;
+  // mode 'month' → Material Monthly (Opening + one block per month, criteria on Report bucket)
+  // mode 'quarter' → Material Quarterly (one block per calendar quarter, criteria on Report quarter)
+  function materialMonthly(ws, A, CDR, lk, mode) {
+    const L = colL, cat = A.packages, Q = mode === 'quarter', sheet = Q ? 'Material Quarterly' : 'Material Monthly';
+    const quarters = [...new Set(A.months.map(quarterOf))];
+    const blocks = Q ? quarters.map((q, i) => ({ key: q, label: q, fill: i % 2 ? '1F3E6B' : '0F2A52', months: A.months.filter((m) => quarterOf(m) === q) }))
+      : [{ key: 'OPENING', label: 'Opening', fill: '7A5C1E' }].concat(A.months.map((m, i) => ({ key: m, label: mlabel(m), fill: i % 2 ? '1F3E6B' : '0F2A52' })));
+    const critCol = Q ? 'AA' : 'X';
     const nI = MM_ID.length, B0 = nI + 1;                       // first time block starts in column L
     const T0 = B0 + 3 * blocks.length, P0 = T0 + 4, RF = P0 + 3;
     const REF = ['First seen (load)', 'Last PO price', 'Issue vs PO', 'Stock balance', 'Open on PO'];
@@ -1083,7 +1092,7 @@
     ['Pending Qty', 'Pending Rate', 'Pending Amount'].forEach((t, o) => head(P0 + o, t, '8E3B37'));
     REF.forEach((h, j) => head(RF + j, h, '6B7280'));
     ws.getRow(HR).height = 30;
-    const bt = (b) => `"${bucketText(b)}"`;
+    const bt = (b) => `"${Q ? b : bucketText(b)}"`;
     const DF = solid('FFF3F6FB'), WF = solid('FFFFFFFF'), NEWF = solid('FFE2EFDA'), SUBF = solid('FFFDF3E1'), SCRF = solid('FFFDE8E6');
     let band = 0, prevGroup = null;
     rows.forEach((o, n) => {
@@ -1095,18 +1104,19 @@
       v[2] = { formula: lk('F', `$E${i}`, '""'), result: r.mnl || '' };
       v[3] = { formula: lk('G', `$E${i}`, '""'), result: r.cec || '' };
       v[4] = o.material; v[5] = r.desc; v[6] = r.group || '(no group)'; v[7] = r.lastVendorCode || null; v[8] = r.lastVendorName || null; v[9] = o.lineType; v[10] = r.unit;
-      const q = (b) => o.qtyByMonth[b] || 0, a = (b) => o.byMonth[b] || 0;
-      const trio = (c, b) => {                                  // Qty / Rate / Amount of one bucket
-        v[c - 1] = { formula: `SUMIFS(${CDR('M')},${CDR('V')},$A${i},${CDR('X')},${bt(b)})`, result: q(b) };
+      const blk = (b) => Q && b !== 'PENDING' ? (blocks.find((x) => x.key === b) || { months: [] }).months : [b];
+      const q = (b) => sum(blk(b), (m) => o.qtyByMonth[m] || 0), a = (b) => sum(blk(b), (m) => o.byMonth[m] || 0);
+      const trio = (c, b, col) => {                             // Qty / Rate / Amount of one bucket
+        v[c - 1] = { formula: `SUMIFS(${CDR('M')},${CDR('V')},$A${i},${CDR(col)},${bt(b)})`, result: q(b) };
         v[c] = { formula: `IF(${L(c)}${i}=0,"",${L(c + 2)}${i}/${L(c)}${i})`, result: q(b) ? a(b) / q(b) : '' };
-        v[c + 1] = { formula: `SUMIFS(${CDR('O')},${CDR('V')},$A${i},${CDR('X')},${bt(b)})`, result: a(b) };
+        v[c + 1] = { formula: `SUMIFS(${CDR('O')},${CDR('V')},$A${i},${CDR(col)},${bt(b)})`, result: a(b) };
       };
-      blocks.forEach((b, bi) => trio(B0 + 3 * bi, b.key));
+      blocks.forEach((b, bi) => trio(B0 + 3 * bi, b.key, critCol));
       v[T0 - 1] = r.price ? round2(r.price.wavg) : null;
       v[T0] = { formula: blocks.map((_, bi) => L(B0 + 3 * bi) + i).join('+'), result: o.qty };
       v[T0 + 2] = { formula: blocks.map((_, bi) => L(B0 + 3 * bi + 2) + i).join('+'), result: o.amt };
       v[T0 + 1] = { formula: `IF(${L(T0 + 1)}${i}=0,"",${L(T0 + 3)}${i}/${L(T0 + 1)}${i})`, result: o.qty ? o.amt / o.qty : '' };
-      trio(P0, 'PENDING');
+      trio(P0, 'PENDING', 'X');
       const ref = [o.first, r.price ? round2(r.price.last.unitPrice) : null,
         { formula: `IF(OR(${L(T0)}${i}="",${L(T0 + 2)}${i}=""),"",${L(T0 + 2)}${i}/${L(T0)}${i}-1)`, result: r.price && o.qty ? (o.amt / o.qty) / r.price.wavg - 1 : '' },
         r.balance, r.openQty];
@@ -1142,7 +1152,8 @@
       x.border = { top: { style: 'medium', color: { argb: 'FFC8A45C' } }, bottom: { style: 'thin', color: { argb: 'FFC8A45C' } } }; }
     ws.getCell(1, 6).value = { formula: `"TOTAL · "&SUBTOTAL(3,$E$${R1}:$E$${RN})&" of ${rows.length} rows shown"`, result: `TOTAL · ${rows.length} of ${rows.length} rows shown` };
     ws.getCell(1, 6).alignment = { horizontal: 'right' };
-    for (const c of amtCols) { const res = c === T0 + 3 ? A.k.cost : c === P0 + 2 ? A.k.pending : (A.byBucket[blocks[(c - B0 - 2) / 3].key] || 0);
+    for (const c of amtCols) { const bk = c === T0 + 3 || c === P0 + 2 ? null : blocks[(c - B0 - 2) / 3];
+      const res = c === T0 + 3 ? A.k.cost : c === P0 + 2 ? A.k.pending : (Q ? sum(bk.months, (m) => A.byBucket[m] || 0) : (A.byBucket[bk.key] || 0));
       const x = ws.getCell(1, c); x.value = { formula: `SUBTOTAL(9,${L(c)}${R1}:${L(c)}${RN})`, result: res }; x.numFmt = AMTF; }
     const tie = `SUM(${L(T0 + 3)}${R1}:${L(T0 + 3)}${RN})-SUMIFS(${CDR('O')},${CDR('X')},"<>PENDING")`;
     const c2 = ws.getCell(2, 6);
@@ -1155,7 +1166,8 @@
     ws.autoFilter = { from: { row: HR, column: 1 }, to: { row: RN, column: LASTC } };
     ws.pageSetup = { paperSize: 8, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, printTitlesRow: `${HR}:${HR}`,
       margins: { left: 0.25, right: 0.25, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 } };
-    return { total: `SUM('Material Monthly'!${L(T0 + 3)}${R1}:${L(T0 + 3)}${RN})`, R1, RN, blocks, amt: (bi) => L(B0 + 3 * bi + 2), totalAmt: L(T0 + 3), pendingAmt: L(P0 + 2) };
+    if (Q) { const c3 = ws.getCell(2, 2); c3.value = 'Calendar quarters (Q1 = Jan–Mar). Same rows as Material Monthly; the current quarter holds the months reported so far.'; c3.font = { ...st.F, size: 9, italic: true, color: { argb: 'FF5A6678' } }; }
+    return { total: `SUM('${sheet}'!${L(T0 + 3)}${R1}:${L(T0 + 3)}${RN})`, R1, RN, blocks, amt: (bi) => L(B0 + 3 * bi + 2), totalAmt: L(T0 + 3), pendingAmt: L(P0 + 2) };
   }
   // Package Monthly: CSI × report month, summed from Material Monthly's CSI column – right whatever order the rows are in
   function packageMonthly(ws, A, X) {
@@ -1176,7 +1188,7 @@
     for (let j = 1; j <= 4 + nB; j++) { const c = ws.getCell(tn, j); c.font = st.FB; c.fill = FILL.TOT; }
   }
   const ymdDate = (d) => { const o = ymd(d); return new Date(Date.UTC(o.y, o.m - 1, o.d)); };
-  const api = { nextFilterFrom, OVERLAP_DAYS, mergeSources, toCanon, CANON, suggestCutoff, cutText, openColumns, periodInfo, tsText, tsParse, nextMonth, bucketLabel, orderSheetPr, analyse, summarize, readPrevious, buildWorkbook, detectKind, parseME2N, parseMB51, parseCJI3, classify, suggestFor, normPkg,
+  const api = { quarterOf, nextFilterFrom, OVERLAP_DAYS, mergeSources, toCanon, CANON, suggestCutoff, cutText, openColumns, periodInfo, tsText, tsParse, nextMonth, bucketLabel, orderSheetPr, analyse, summarize, readPrevious, buildWorkbook, detectKind, parseME2N, parseMB51, parseCJI3, classify, suggestFor, normPkg,
     CLASSES, CLASS, MVT, COST_CLASS, PACKAGES, MNLS, LAYOUT, mlabel, mtext, dtext, monthKey, esc, fmt, str, num, code };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.MaterialEngine = api;
 })(typeof window !== 'undefined' ? window : globalThis);
