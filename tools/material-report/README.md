@@ -101,6 +101,8 @@ Rows are sorted CSI → group → material → line type on every build. Each ke
 
 **Package Monthly** sums Material Monthly by CSI and month, so it is right whatever the row order.
 
+**Monthly activity** (bottom of the Dashboard, linked from D4) counts each month's transactions as a reference for the project's size: CJI3 lines and material cost by posting month, MB51 movements and materials moved, lines *entered* each month (Created on / Entry Date – the size of that month's filtered export), and WA lines entered in a later month than they were posted. The report month and the months after it (Pending) are marked; the average covers the months up to the report month.
+
 ## Build and test
 
 ```bash

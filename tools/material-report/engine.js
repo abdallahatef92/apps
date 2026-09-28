@@ -767,7 +767,7 @@
   };
   const solid = (argb) => ({ type: 'pattern', pattern: 'solid', fgColor: { argb } });
   const FILL = { HF: solid('FF1F4E9A'), YF: solid('FFFFF2CC'), TOT: solid('FFE6EEFA'), SUB: solid('FFF3F5F8'), GOOD: solid('FFE3F3EA'), WARN: solid('FFFCF1DC'), BAD: solid('FFFDE8E6') };
-  const NF = { amt: '#,##0;[Red]-#,##0;"–"', amt2: '#,##0.00;[Red]-#,##0.00;"–"', qty: '#,##0.###;[Red]-#,##0.###;"–"', pct: '0.0%;[Red]-0.0%;"–"', date: 'yyyy-mm-dd' };
+  const NF = { amt: '#,##0;[Red]-#,##0;"–"', amt2: '#,##0.00;[Red]-#,##0.00;"–"', qty: '#,##0.###;[Red]-#,##0.###;"–"', pct: '0.0%;[Red]-0.0%;"–"', date: 'yyyy-mm-dd', int: '#,##0;[Red]-#,##0;"–"' };
   const colL = (n) => { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; };
 
   function table(ws, top, cols, rows, o) {
@@ -961,6 +961,29 @@
       .concat([A.byPackage.find((o) => o.key === 'UNALLOCATED') || { key: 'UNALLOCATED', total: 0, byMonth: {} }]);
     nx = matrix(nx, 'Cost by package and month (live from Material Coding)', pkRows, 'F');
     nx = matrix(nx, 'Cost by material group and month', A.byGroup, 'E');
+    // monthly activity – reference for the project's size (values: counts of the lines in this report)
+    { const act = activity(A), hr = nx + 1;
+      wsDash.getCell(nx, 1).value = 'Monthly activity – transactions per month (posted = by posting date; entered = by Created on / Entry Date: the size of that month\'s export)';
+      wsDash.getCell(nx, 1).font = st.FB;
+      const heads = ['Month', 'CJI3 lines posted', 'of which material (WA)', 'Material cost posted', 'MB51 movements posted', 'Materials moved', 'CJI3 lines entered', 'MB51 movements entered', 'WA lines entered in a later month', 'Note'];
+      const nfs = [null, NF.int, NF.int, NF.amt, NF.int, NF.int, NF.int, NF.int, NF.int, null];
+      heads.forEach((h, j) => { const c = wsDash.getCell(hr, j + 1); c.value = h; c.font = st.H; c.fill = FILL.HF; c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }; });
+      wsDash.getRow(hr).height = 30;
+      const keys = ['cjiPosted', 'waPosted', 'cost', 'mbPosted', 'mats', 'cjiEntered', 'mbEntered', 'backdated'];
+      act.forEach((o, i) => { const n = hr + 1 + i; wsDash.getCell(n, 1).value = mlabel(o.month); wsDash.getCell(n, 1).font = st.F;
+        keys.forEach((k, j) => { const c = wsDash.getCell(n, 2 + j); c.value = k === 'cost' ? round2(o[k]) : o[k]; c.numFmt = nfs[1 + j]; c.font = st.F; });
+        const c = wsDash.getCell(n, 10); c.value = o.note || null; c.font = { ...st.F, italic: true, color: { argb: 'FF5A6678' } }; });
+      const tn = hr + 1 + act.length, an = tn + 1, full = act.filter((o) => !o.note || o.note === 'Report month');
+      wsDash.getCell(tn, 1).value = 'Total'; wsDash.getCell(an, 1).value = `Average per month (${full.length} months up to the report month)`;
+      keys.forEach((k, j) => { const col = colL(2 + j);
+        const t = wsDash.getCell(tn, 2 + j); t.value = { formula: `SUM(${col}${hr + 1}:${col}${tn - 1})`, result: round2(sum(act, (o) => o[k])) };
+        const a = wsDash.getCell(an, 2 + j); a.value = k === 'mats' ? null : full.length ? Math.round(sum(full, (o) => o[k]) / full.length) : null;
+        for (const c of [t, a]) c.numFmt = nfs[1 + j]; });
+      wsDash.getCell(tn, 6).value = null;                        // distinct materials do not add up across months
+      for (const r of [tn, an]) for (let j = 1; j <= 10; j++) { const c = wsDash.getCell(r, j); c.font = st.FB; c.fill = FILL.TOT; }
+      const go = wsDash.getCell('D4'); go.value = { text: `↓ Monthly activity – transactions per month (row ${nx})`, hyperlink: `#'Dashboard'!A${nx}` };
+      go.font = { ...st.F, underline: true, color: { argb: 'FF1F4E9A' } };
+      nx = an + 2; }
     wsDash.views = [{ state: 'frozen', ySplit: 3 }];
 
     // ---------------- Changes
@@ -1060,6 +1083,20 @@
   }
   // ================================================================== MATERIAL MONTHLY
   // The main sheet, and the block people copy (Paste Special › Values) into their cost report every month.
+  // Monthly activity: how many transactions each month brings – a reference for the project's size and for how big next
+  // month's filtered export will be. Posted = by posting date; entered = by Created on (CJI3) / Entry Date (MB51).
+  function activity(A) {
+    const tsMonth = (t) => monthKey(dayOf(t));
+    const M = new Map(), at = (m) => { if (!m) return null; let o = M.get(m);
+      if (!o) { o = { month: m, cjiPosted: 0, waPosted: 0, cost: 0, mbPosted: 0, mats: new Set(), cjiEntered: 0, mbEntered: 0, backdated: 0 }; M.set(m, o); } return o; };
+    for (const l of A.cji.lines) { const o = at(l.month); if (o) o.cjiPosted++; const e = l.ts !== null ? at(tsMonth(l.ts)) : null; if (e) e.cjiEntered++; }
+    for (const l of A.costAll) { const o = at(l.month); if (!o) continue; o.waPosted++; o.cost += l.amt;
+      if (l.entry !== null && tsMonth(l.entry) > l.month) o.backdated++; }
+    for (const m of A.mb.rows) { const o = at(m.month); if (o) { o.mbPosted++; o.mats.add(m.material); } const e = m.ts !== null ? at(tsMonth(m.ts)) : null; if (e) e.mbEntered++; }
+    return [...M.values()].sort((a, b) => a.month - b.month).map((o) => ({ ...o, mats: o.mats.size,
+      note: A.reportMonth && o.month > A.reportMonth ? 'After the report month (Pending)' : o.month === A.reportMonth ? 'Report month' : '' }));
+  }
+
   // One flat table – one header row, no merged cells, no header or blank rows between data – so sorting, filtering and
   // copying never break it. Column layout shared with Service Monthly (Rev08):
   //   Identity (11) | Opening (3) | month 1 … month n (3 each) | Total (4) | Pending (3, not in Total) | reference (hidden)
@@ -1209,7 +1246,7 @@
     for (let j = 1; j <= 4 + nB; j++) { const c = ws.getCell(tn, j); c.font = st.FB; c.fill = FILL.TOT; }
   }
   const ymdDate = (d) => { const o = ymd(d); return new Date(Date.UTC(o.y, o.m - 1, o.d)); };
-  const api = { quarterOf, nextFilterFrom, OVERLAP_DAYS, mergeSources, toCanon, CANON, suggestCutoff, cutText, openColumns, periodInfo, tsText, tsParse, nextMonth, bucketLabel, orderSheetPr, analyse, summarize, readPrevious, buildWorkbook, detectKind, parseME2N, parseMB51, parseCJI3, classify, suggestFor, normPkg,
+  const api = { activity, quarterOf, nextFilterFrom, OVERLAP_DAYS, mergeSources, toCanon, CANON, suggestCutoff, cutText, openColumns, periodInfo, tsText, tsParse, nextMonth, bucketLabel, orderSheetPr, analyse, summarize, readPrevious, buildWorkbook, detectKind, parseME2N, parseMB51, parseCJI3, classify, suggestFor, normPkg,
     CLASSES, CLASS, MVT, COST_CLASS, PACKAGES, MNLS, LAYOUT, mlabel, mtext, dtext, monthKey, esc, fmt, str, num, code };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.MaterialEngine = api;
 })(typeof window !== 'undefined' ? window : globalThis);

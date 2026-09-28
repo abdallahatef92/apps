@@ -207,6 +207,12 @@ eq(B.changes.newPO.map((l) => l.key), ['5000000009/10'], 'new PO line found');
   { const wq = new ExcelJS.Workbook(); await wq.xlsx.load(await E.buildWorkbook(C1, { ExcelJS, JSZip })); const x = wq.getWorksheet('Material Quarterly').getCell(5, 12);
     eq([x.font.bold, x.font.color && x.font.color.argb], [true, 'FFFFFFFF'], 'header text stays white bold after the column formats'); }
   eq(E.quarterOf(202611), '2026 Q4', 'November is Q4');
+  // monthly activity: counts per posting month and per entry month, same totals as the report
+  { const act = E.activity(C1), by = Object.fromEntries(act.map((o) => [o.month, o]));
+    eq(act.reduce((t, o) => t + o.waPosted, 0), C1.costAll.length, 'activity: every WA line counted once by posting month');
+    eq(Math.round(act.reduce((t, o) => t + o.cost, 0)), Math.round(C1.k.cost + C1.k.pending), 'activity: cost by posting month adds to cost + pending');
+    eq(act.reduce((t, o) => t + o.mbPosted, 0), C1.mb.rows.length, 'activity: every MB51 movement counted once');
+    eq([by[202602].note, by[202603] && by[202603].note], ['Report month', 'After the report month (Pending)'], 'activity: report month and later months marked'); }
 }
 
 // ================================================================ window exports merged with the carried lines
