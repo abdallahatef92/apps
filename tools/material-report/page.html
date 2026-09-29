@@ -43,8 +43,8 @@
         <div class="period" id="period" hidden>
           <div class="hd2"><span class="eyebrow">Step 2 · Report period</span></div>
           <label class="pf">Report month <select id="p-month"></select></label>
-          <label class="pf">Cut date <span class="muted">(posting date up to and including)</span>
-            <input type="date" id="p-date" aria-label="Cut date"></label>
+          <div class="pf">Cut date <span class="muted">(last day of the report month)</span>
+            <span class="cutday" id="p-cut"></span></div>
           <div class="muted small">Posted on or before the cut date → in the report. Posted after → Pending (next report). Lines entered in SAP after the cut date are counted and highlighted.</div>
           <div class="muted small" id="p-last"></div>
           <div id="p-preview"></div>

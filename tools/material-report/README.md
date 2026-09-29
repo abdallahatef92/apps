@@ -45,7 +45,7 @@ The rule has two parts:
   - **Entered after cut date:** posted on or before the cut date, but entered in SAP after it. For example, 67 August lines were entered on 1 Sep.
   - **Added to a reported month:** posted in a month the last report already showed, but not among that report's lines, because it was entered later or backdated. The month changes by that amount. The check *Months already reported* confirms every change is explained by such lines, and turns red if a line the last report had is missing.
 
-**In the tool.** After the files load, the period box shows the report month and the cut date, which defaults to the month end and can be changed. It then shows three numbers: in the report (with the highlighted part), and Pending.
+**In the tool.** After the files load, you choose only the **report month**. The cut date is always the last day of that month (August → 31 Aug) and is shown, not typed. The box then shows three numbers: in the report (with the highlighted part), and Pending.
 
 **Why the whole Material Monthly block is re-pasted.** Months can change when lines are added to them. Re-pasting the whole block each month keeps the cost report right.
 

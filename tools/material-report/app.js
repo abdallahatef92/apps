@@ -440,10 +440,9 @@ $('btn-download').addEventListener('click', async () => {
 // ------------------------------------------------------------------ report period (step 2)
 // Simple rule: the cut date is a POSTING date. Posted on or before it → in the report, in its posting month.
 // Posted after it → Pending (next report). Created on never moves a line; lines entered after the cut date are highlighted.
-const two = (n) => String(n).padStart(2, '0');
-function cutoffValue() { const d = $('p-date').value; return d ? Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10), 23, 59, 59) : null; }
-function setCutoff(ms) { const x = new Date(ms); $('p-date').value = `${x.getUTCFullYear()}-${two(x.getUTCMonth() + 1)}-${two(x.getUTCDate())}`; periodChanged(); }
+// The user picks only the report month; the cut date is always its last day (e.g. August → 31 Aug).
 const monthEnd = (m) => Date.UTC(Math.floor(m / 100), m % 100, 1) - 1000;
+function cutoffValue() { const m = +$('p-month').value; return m ? monthEnd(m) : null; }
 function setupPeriod() {
   if (!state.plant) state.plant = guessPlant();
   const M = merged(); if (M.errors.length) { M.errors.forEach((e) => message('msgs', 'bad', esc(e))); return; }
@@ -458,10 +457,9 @@ function setupPeriod() {
   if (!info.hasTs) message('msgs', 'warn', 'This CJI3 export has no "Created on" column, so lines entered after the cut date cannot be highlighted. Add Created on to the CJI3 layout.');
   monthChanged();
 }
-function monthChanged() { setCutoff(monthEnd(+$('p-month').value)); }   // cut date = last day of the report month (can be changed)
+function monthChanged() { const c = cutoffValue(); $('p-cut').textContent = c === null ? '' : E.cutText(c); periodChanged(); }
 let pvTimer = null;
 function periodChanged() { updateBuild(); clearTimeout(pvTimer); pvTimer = setTimeout(previewPeriod, 250); }
-$('p-date').addEventListener('input', periodChanged);
 $('p-month').addEventListener('input', monthChanged);
 function windowText() {
   const st = merged().stats; if (!st.cji) return '';
@@ -480,9 +478,7 @@ function windowProblem() {
 }
 function periodProblem() {
   const wp = windowProblem(); if (wp) return wp;
-  const c = cutoffValue(), m = +$('p-month').value;
-  if (c === null) return 'Choose the cut date.';
-  if (m && E.monthKey(new Date(c - 43200000)) !== m) return `The cut date must be in ${E.mlabel(m)}.`;
+  if (cutoffValue() === null) return 'Choose the report month.';
   return null;
 }
 function updateBuild() {
