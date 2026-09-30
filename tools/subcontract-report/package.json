@@ -1,7 +1,7 @@
 {
   "name": "subcontract-report",
   "private": true,
-  "description": "Offline Subcontract Cost Report tool: SAP ZSCPROG01 + ZSCSRV1 -> Excel report, built as one standalone HTML page",
+  "description": "Offline Subcontract Cost Report tool: SAP ZSCPRG01 + ZSCSRV1 -> Excel report, built as one standalone HTML page",
   "scripts": {
     "build": "mkdir -p dist && python3 build_standalone.py dist/Subcontract_Cost_Report.html",
     "test": "TZ=Africa/Cairo node tests/rev08.test.js && TZ=America/New_York node tests/rev08.test.js"

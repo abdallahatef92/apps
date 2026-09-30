@@ -164,7 +164,7 @@ button.primary:hover{border-color:var(--gold)}
 <div class="wrap" id="wrap">
   <header class="top">
     <div>
-      <div class="eyebrow">SAP ZSCPROG01 + ZSCSRV1 → monthly service report</div>
+      <div class="eyebrow">SAP ZSCPRG01 + ZSCSRV1 → monthly service report</div>
       <h1>Subcontract Cost Report</h1>
       <p>Drop this month's two SAP exports, plus last month's report if you have it. The page builds the Excel report and lists what changed since the last load. Your files are read in this browser and are not uploaded.</p>
     </div>
@@ -186,7 +186,7 @@ button.primary:hover{border-color:var(--gold)}
           <input type="file" id="file" accept=".xlsx,.xls" multiple hidden>
         </div>
         <div class="slots">
-          <div class="slot" id="slot-prog"><span class="tag">ZSCPROG01</span><span class="name" id="name-prog">Certificates — required</span><span class="meta" id="meta-prog">Subcontractor progress / certificate lines</span></div>
+          <div class="slot" id="slot-prog"><span class="tag">ZSCPRG01</span><span class="name" id="name-prog">Certificates — required</span><span class="meta" id="meta-prog">Subcontractor progress / certificate lines</span></div>
           <div class="slot" id="slot-serv"><span class="tag">ZSCSRV1</span><span class="name" id="name-serv">PO service lines — required</span><span class="meta" id="meta-serv">Units, material groups, contract qty</span></div>
           <div class="slot" id="slot-prev"><span class="tag">LAST REPORT</span><span class="name" id="name-prev">Last month's report — optional</span><span class="meta" id="meta-prev">Brings load history, changes and coding forward</span></div>
         </div>
@@ -207,9 +207,9 @@ button.primary:hover{border-color:var(--gold)}
       <section class="card empty" id="empty">
         <div class="hd"><h2>How the monthly loop works</h2><span class="eyebrow">Each month</span></div>
         <div class="bd">
-          <svg class="loop" viewBox="0 0 640 230" role="img" aria-label="ZSCPROG01, ZSCSRV1 and last month's report go into the tool, which produces this month's report; next month that report goes back in.">
+          <svg class="loop" viewBox="0 0 640 230" role="img" aria-label="ZSCPRG01, ZSCSRV1 and last month's report go into the tool, which produces this month's report; next month that report goes back in.">
             <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z"/></marker></defs>
-            <rect x="10" y="14" width="170" height="46" rx="7"/><text x="24" y="35" font-size="13" font-weight="600">ZSCPROG01</text><text class="sub" x="24" y="51">certificate lines</text>
+            <rect x="10" y="14" width="170" height="46" rx="7"/><text x="24" y="35" font-size="13" font-weight="600">ZSCPRG01</text><text class="sub" x="24" y="51">certificate lines</text>
             <rect x="10" y="74" width="170" height="46" rx="7"/><text x="24" y="95" font-size="13" font-weight="600">ZSCSRV1</text><text class="sub" x="24" y="111">PO service lines</text>
             <rect x="10" y="134" width="170" height="46" rx="7"/><text x="24" y="155" font-size="13" font-weight="600">Last month's report</text><text class="sub" x="24" y="171">history + coding</text>
             <rect class="core" x="240" y="64" width="150" height="66" rx="8"/><text x="256" y="92" font-size="13" font-weight="600">This page</text><text class="sub" x="256" y="110">rules + shared coding</text>
@@ -381,7 +381,7 @@ async function handleFiles(list) {
         const plants = new Set(aoa.slice(1, 200).map((r) => String(r[0]).trim()).filter((x) => x && !x.includes('(')));
         setSlot('prog', f.name, `${[...plants].join(', ') || '?'} · ${(aoa.length - 1).toLocaleString('en-US')} rows incl. SAP subtotals`); }
       else if (kind === 'serv') { state.files.serv = aoa; state.files.servName = f.name; setSlot('serv', f.name, `${(aoa.length - 1).toLocaleString('en-US')} rows`); }
-      else message('msgs', 'warn', `${f.name} is not a ZSCPROG01 or ZSCSRV1 export, or a report from this page. Check that the first sheet has SAP's column headers in row 1.`);
+      else message('msgs', 'warn', `${f.name} is not a ZSCPRG01 or ZSCSRV1 export, or a report from this page. Check that the first sheet has SAP's column headers in row 1.`);
     } catch (e) { message('msgs', 'bad', `${f.name} could not be read: ${e.message || e}`); }
   }
   setStatus('');

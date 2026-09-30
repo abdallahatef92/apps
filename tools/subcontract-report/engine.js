@@ -1,5 +1,5 @@
 /* Subcontract report engine.
- * Turns SAP ZSCPROG01 (certificates) + ZSCSRV1 (PO service lines) into the monthly
+ * Turns SAP ZSCPRG01 (certificates) + ZSCSRV1 (PO service lines) into the monthly
  * service report workbook, optionally carrying history forward from the previous
  * report. Pure logic: the page passes in ExcelJS / JSZip; Node tests do the same. */
 (function (root) {
@@ -26,7 +26,7 @@
   const cmpTuple = (a, b) => { for (let i = 0; i < a.length; i++) { const c = cmp(a[i], b[i]); if (c) return c; } return 0; };
 
   // --------------------------------------------------------- input layout
-  // ZSCPROG01 column positions (identical in every project seen). Checked by header name.
+  // ZSCPRG01 column positions (identical in every project seen). Checked by header name.
   const P = { plant: 0, pc: 1, serial: 2, date: 3, po: 4, supName: 5, supCode: 6, appr: 11, flag: 12, docno: 13,
     item: 16, pkg: 18, line: 19, price: 20, svc: 22, text: 23, tax: 24, ctype: 25, totq: 26, prevq: 28, qty: 30,
     paid: 32, vat: 33, amt: 35, es: 38, esText: 39, doctype: 40, gl: 42, wbs: 43, wbsDesc: 55 };
@@ -69,7 +69,7 @@
     const warnings = [];
     const hdr = progAOA[0];
     const badH = checkProgHeader(hdr);
-    if (badH.length) throw new Error('This ZSCPROG01 file has a different column layout: ' + badH.slice(0, 3).join('; '));
+    if (badH.length) throw new Error('This ZSCPRG01 file has a different column layout: ' + badH.slice(0, 3).join('; '));
     const rawRows = progAOA.slice(1);
     let det = rawRows.filter((r) => !blank(r[P.po]))
       .map((r) => {
@@ -83,7 +83,7 @@
         return o;
       });
     const RAWN = det.length;
-    if (!RAWN) throw new Error('No certificate lines found in the ZSCPROG01 file.');
+    if (!RAWN) throw new Error('No certificate lines found in the ZSCPRG01 file.');
     const PLANT = mostCommon(countBy(det, (r) => r.plant))[0][0];
     const MAINPC = mostCommon(countBy(det, (r) => r.pc))[0][0];
     const footer = rawRows.find((r) => str(r[0]).startsWith(PLANT + ' ('));
@@ -132,7 +132,7 @@
     }
 
     // ---- report month: the user picks a month; the cut date is its last day. The certificate Date decides the month
-    // (ZSCPROG01 has no separate posting date); a line dated after the cut date, or not approved, is Pending – not in Total.
+    // (ZSCPRG01 has no separate posting date); a line dated after the cut date, or not approved, is Pending – not in Total.
     const newestMonth = det.reduce((m, r) => Math.max(m, r.month), 0);
     const CUT = opts.cutMonth && /^\d{6}$/.test(String(opts.cutMonth)) ? +opts.cutMonth : newestMonth;
     const cutDate = new Date(Date.UTC(Math.floor(CUT / 100), CUT % 100, 0));          // day 0 of next month = last day of CUT
@@ -759,7 +759,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       'Certified qty (this report)', 'Excluded qty-only lines', 'Difference (received − certified)', 'Explained', 'Certified amount (excl VAT)', '% of contract qty received']
       .forEach((v, j) => qr.hdr(1, j + 1, v));
     qr.ws.getCell('S1').note = 'SAP Current Quantity on Detail lines matched to this PO service line (not the equivalent report qty), excluding qty-only lines. WBS-split lines are counted once.';
-    qr.ws.getCell('V1').note = '"Excluded lines" = SAP counts the quantity of qty-only lines this report excludes. Otherwise the difference is quantity received in SAP but not certified in ZSCPROG01.';
+    qr.ws.getCell('V1').note = '"Excluded lines" = SAP counts the quantity of qty-only lines this report excludes. Otherwise the difference is quantity received in SAP but not certified in ZSCPRG01.';
     const PLR = R('PO line ref'), LT = R('Line type');
     const svs = A.sv.slice().sort((a, b) => cmpTuple([str(g(a, 'Purchase Order')), num(g(a, 'PO item')), num(g(a, 'PO Service Line no.'))], [str(g(b, 'Purchase Order')), num(g(b, 'PO item')), num(g(b, 'PO Service Line no.'))]));
     const qrRows = svs.map((x, n) => { const i = n + 2; return [A.ref(x), str(g(x, 'Purchase Order')).trim(), str(g(x, 'Subcontractor')).trim(), str(g(x, 'Subcontractor Name')).trim(), str(g(x, 'Type of Works for PO')).trim(),
@@ -915,7 +915,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     [6, 16, 26, 16, 8].forEach((h, i) => rowH(i + 1, h));
     db.set(2, 2, `${A.PLANT} PROJECT · SUBCONTRACT COST`, { font: st.EYE });
     db.set(3, 2, 'Cost by Work Package & MNL', { font: st.TITLE });
-    db.set(4, 2, `SAP ZSCPROG01 + ZSCSRV1 · certificates ${fmtD(minD)} to ${fmtD(maxD)} · EGP excl. VAT · load ${A.loadNo}`, { font: st.SUB });
+    db.set(4, 2, `SAP ZSCPRG01 + ZSCSRV1 · certificates ${fmtD(minD)} to ${fmtD(maxD)} · EGP excl. VAT · load ${A.loadNo}`, { font: st.SUB });
     db.set(3, DRE, `Data date ${maxD.toISOString().slice(0, 10)}`, { font: st.SUB, align: { horizontal: 'right', vertical: 'bottom' } });
 
     // KPI tiles (rows 7–9): three over the package table, four over the right block
@@ -1107,7 +1107,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     chs.set(2, 2, A.hist && A.hist.loads.length ? `This load (${A.loadNo}) compared with load ${A.loadNo - 1}. Lines are matched by Line ID (PO | cert serial | PO item | package | line).`
       : 'First load – there is no previous report to compare with. Next month, give the web tool this workbook together with the new SAP files.', { font: st.SMALL });
     chs.set(4, 2, '1. Load history', { font: st.B });
-    const lh = ['Load', 'Run on', 'Data date', 'ZSCPROG01 file', 'Lines', 'Certified cost', 'Approved', 'Opening', 'Not approved', 'Adjustments', 'Subcontractors', 'POs'];
+    const lh = ['Load', 'Run on', 'Data date', 'ZSCPRG01 file', 'Lines', 'Certified cost', 'Approved', 'Opening', 'Not approved', 'Adjustments', 'Subcontractors', 'POs'];
     lh.forEach((h, j) => chs.hdr(5, 2 + j, h));
     loads.forEach((l, n) => { const rr = 6 + n;
       [l.no, l.run instanceof Date ? l.run : null, l.dataDate instanceof Date ? l.dataDate : null, l.file, l.lines, l.total, l.approved, l.opening, l.pending, l.adjustments, l.subs, l.pos]
@@ -1150,7 +1150,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     const fmtN = (v) => Math.round(v).toLocaleString('en-US');
     const unk = A.services.filter((s) => !s.unit).length;
     const notes = [['How this workbook is built', st.B], ['', st.F],
-      [`Source: SAP ZSCPROG01 export (${A.files.prog || 'ZSCPROG01'}), plant ${A.PLANT}, main profit centre ${MAINPC}. ${det.length} certificate lines kept; ${A.rawRowCount - A.RAWN} SAP subtotal/total rows removed.`, st.F],
+      [`Source: SAP ZSCPRG01 export (${A.files.prog || 'ZSCPRG01'}), plant ${A.PLANT}, main profit centre ${MAINPC}. ${det.length} certificate lines kept; ${A.rawRowCount - A.RAWN} SAP subtotal/total rows removed.`, st.F],
       ['Amount = "SC Work Current Cost" (excl. VAT); Qty = "Current Quantity"; month = certificate "Date".', st.F],
       ['Flag = X → initial invoice entered before go-live → OPENING block, never a month. If it is not yet approved it goes to PENDING instead, marked "Opening – not approved" on Detail.', st.F],
       [`Report month ${mlabel(A.CUT)}, cut date ${A.cutDate.toISOString().slice(0, 10)} (Coding!N2). Character 1 = X → approved. Not approved, or dated after the cut date → PENDING block (Detail → Pending reason) – shown, not in Total. ${det.filter((r) => r.late).length} lines fall in a month the last report already showed (Detail → Reported-month flag).`, st.F],

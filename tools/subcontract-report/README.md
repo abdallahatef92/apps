@@ -1,6 +1,6 @@
 # Subcontract Cost Report tool
 
-A single offline HTML page. The user drops this month's SAP **ZSCPROG01** (certificates) and **ZSCSRV1**
+A single offline HTML page. The user drops this month's SAP **ZSCPRG01** (certificates) and **ZSCSRV1**
 (PO service lines), optionally last month's report and the work package master, picks the **report month**,
 and downloads the Excel report. Nothing is uploaded; the libraries are embedded in the page.
 

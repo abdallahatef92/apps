@@ -83,8 +83,8 @@ R("""      if (wb.SheetNames.includes('_History') || wb.SheetNames.includes('_Li
         continue;
       }
       if (wb.SheetNames.includes('_History') || wb.SheetNames.includes('_Lines')) {""")
-R("else message('msgs', 'warn', `${f.name} is not a ZSCPROG01 or ZSCSRV1 export, or a report from this page.",
-  "else message('msgs', 'warn', `${f.name} is not a ZSCPROG01 or ZSCSRV1 export, a coding master, or a report from this page.")
+R("else message('msgs', 'warn', `${f.name} is not a ZSCPRG01 or ZSCSRV1 export, or a report from this page.",
+  "else message('msgs', 'warn', `${f.name} is not a ZSCPRG01 or ZSCSRV1 export, a coding master, or a report from this page.")
 R("  $('btn-clear').disabled = !(state.files.prog || state.files.serv || state.prev);",
   "  $('btn-clear').disabled = !(state.files.prog || state.files.serv || state.prev || state.master.size);")
 R("""  state.files = {}; state.prev = null; state.analysis = null;

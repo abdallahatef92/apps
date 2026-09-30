@@ -1,8 +1,8 @@
 // Rev08 checks on the TRAZ extracts: node rev08test.js   (run under several TZ values)
 const E = require('../engine.js'), X = require('xlsx'), ExcelJS = require('exceljs'), JSZip = require('jszip'), assert = require('assert');
-// real extracts are never committed: point SUBCON_PROG / SUBCON_SERV at the TRAZ ZSCPROG01 / ZSCSRV1 exports
+// real extracts are never committed: point SUBCON_PROG / SUBCON_SERV at the TRAZ ZSCPRG01 / ZSCSRV1 exports
 const PROG = process.env.SUBCON_PROG, SERV = process.env.SUBCON_SERV;
-if (!PROG || !SERV) { console.log('SKIPPED – set SUBCON_PROG and SUBCON_SERV to the TRAZ ZSCPROG01 and ZSCSRV1 exports'); process.exit(0); }
+if (!PROG || !SERV) { console.log('SKIPPED – set SUBCON_PROG and SUBCON_SERV to the TRAZ ZSCPRG01 and ZSCSRV1 exports'); process.exit(0); }
 const rd = (f) => { const w = X.readFile(f); return X.utils.sheet_to_json(w.Sheets[w.SheetNames[0]], { header: 1, raw: true, defval: '' }); };
 const prog = rd(PROG), serv = rd(SERV);
 const near = (a, b, m) => assert.ok(Math.abs(a - b) < 0.01, `${m}: ${a} vs ${b}`);
