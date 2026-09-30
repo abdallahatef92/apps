@@ -172,6 +172,7 @@
     for (const { r, t } of rows) { const k = JSON.stringify(t); if (!key.has(k)) { key.set(k, key.size + 1); keyTuples.push(t); } r.rk = key.get(k); }
     const months = [...new Set(det.filter((r) => !r.initial && r.month <= CUT).map((r) => r.month).concat([CUT]))].sort((a, b) => a - b);
     const omonths = [...new Set(det.filter((r) => typeof r.bucket === 'number').map((r) => r.month))].sort((a, b) => a - b);
+    const allMonths = [...new Set(months.concat(det.filter((r) => !r.initial && r.approved && r.month > CUT).map((r) => r.month)))].sort((a, b) => a - b);
 
     // ---- coding (shared store + previous workbook), unit from SAP otherwise
     const coding = opts.coding || new Map();       // codingKey -> {unit,csi,mnl,cec}
@@ -226,7 +227,7 @@
     for (const r of det) if (r.rk) r.rk = rowIds[r.rk - 1];
 
     return { det, RAWN, PLANT, MAINPC, gt, splitAmt, splitLines, keyConflicts, sv, g, ref, svu, SI, months, omonths, key, keyTuples, rowIds, rowFirst, rowPrevOrder, rowsCarried: prevRows.size > 0,
-      services, svcId, warnings, hist, loadNo, dataDate, newestDate, CUT, cutDate, newestMonth, prevCut, prevByMonth, changes, opts, rawRowCount: rawRows.length, files: opts.files || {} };
+      services, svcId, warnings, hist, loadNo, allMonths, dataDate, newestDate, CUT, cutDate, newestMonth, prevCut, prevByMonth, changes, opts, rawRowCount: rawRows.length, files: opts.files || {} };
   }
 
   // ================================================================== SUMMARY (on-screen dashboard)
@@ -503,8 +504,8 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       'Invoice doc.', 'Entry sheet', 'Doc type', 'PO item', 'Service', 'Service text', 'Line type', 'Unit', 'Contract type', 'Tax code', 'VAT rate', 'Gross price', 'Net rate',
       'Total qty', 'Previous qty', 'Current qty', 'Paid % (Progress %)', 'Cost (excl VAT)', 'VAT current', 'Resource', 'Trade', 'Resource name', 'Trade name',
       'G/L acct', 'WBS element (ref. only)', 'WBS description (ref. only)', 'PO line ref', 'PO line match', 'Material group', 'Material group description', 'Profit centre',
-      'Other profit centre', 'Report qty', 'Qty basis', 'Approval note', 'Line ID', 'WBS rows (split)', 'First seen (load)', 'Qty check', 'Pending reason', 'Reported-month flag'];
-    const C = {}; cols.forEach((n, j) => { C[n] = L(j + 1); dt.hdr(1, j + 1, n); });
+      'Other profit centre', 'Report qty', 'Qty basis', 'Approval note', 'Line ID', 'WBS rows (split)', 'First seen (load)', 'Qty check', 'Pending reason', 'Reported-month flag', 'Include in this report'];
+    const C = {}; cols.forEach((n, j) => { C[n] = L(j + 1); dt.hdr(1, j + 1, n); }); const INC = C['Include in this report'];
     dt.ws.getCell(C['Report qty'] + '1').note = 'Quantity used in the report. Equals SAP Current qty unless the line was not paid at qty × net rate (paid % below 100, a catch-up, a re-price): then amount ÷ net rate, so the rate stays the contract rate. Adjustment lines also get amount ÷ net rate (negative for a deduction), so the service quantity accumulates correctly. SAP qty stays in Current qty and feeds Qty Reconciliation.';
     dt.ws.getCell(C['Other profit centre'] + '1').note = `X = charged to a profit centre other than the project's main one (${MAINPC}).`;
     dt.ws.getCell('E1').note = `PENDING = not approved (Character 1 blank) or dated after the cut date ${A.cutDate.toISOString().slice(0, 10)} (Coding!N2) – see Pending reason. OPENING = approved initial invoice (Flag X). Otherwise the certificate month.`;
@@ -516,7 +517,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       const i = n + 2;
       const eq = `AND(X${i}<>0,ABS(AC${i}-AA${i}*X${i})>1)`;
       dtRows.push([r.isqo ? null : r.rk, r.sid, r.dateObj, { formula: `YEAR(C${i})*100+MONTH(C${i})` },
-        { formula: `IF(OR(F${i}<>"X",D${i}>Coding!$N$3),"PENDING",IF(G${i}="X","OPENING",D${i}))` }, r.appr || null, r.flag || null,
+        { formula: `IF(OR(F${i}<>"X",AND(D${i}>Coding!$N$3,${INC}${i}<>"Include")),"PENDING",IF(G${i}="X","OPENING",D${i}))` }, r.appr || null, r.flag || null,
         r.serial, r.po, r.supCode, r.supName, str(r.docno).trim() || null, str(r.es).trim() || null, str(r.doctype).trim(), r.item, r.svc, r.text, r.lt,
         { formula: lk('Service Coding', 'A', 'D', `B${i}`, '""', NSC) }, r.ctype, r.tax, { formula: lk('Coding', 'G', 'H', `U${i}`, '0') }, r.price, { formula: `IF(T${i}="A2",W${i}/(1+V${i}),W${i})` },
         r.totq, r.prevq, r.qty, r.paid / 100, r.amt, r.vat, r.res, r.trade,
@@ -525,9 +526,15 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
         { formula: `IF(R${i}="Normal",IF(${eq},AC${i}/X${i},AA${i}),IF(AND(R${i}="Adjustment",X${i}<>0),AC${i}/X${i},0))` },
         { formula: `IF(R${i}="Adjustment",IF(X${i}<>0,"Adjustment (amount ÷ net rate)","Adjustment – no net rate"),IF(R${i}<>"Normal","",IF(${eq},"Equivalent (amount ÷ net rate)","SAP qty")))` },
         (r.initial && !r.approved) ? 'Opening – not approved' : null, r.lid, r.split || null, r.first, r.qcheck,
-        { formula: `IF(F${i}<>"X","Not approved",IF(D${i}>Coding!$N$3,"After cut date",""))` }, r.late || null]);
+        { formula: `IF(F${i}<>"X","Not approved",IF(D${i}>Coding!$N$3,IF(${INC}${i}="Include","","After cut date"),""))` }, r.late || null,
+        r.approved && r.month > A.CUT ? 'Not included' : null]);
     });
     dt.ws.addRows(dtRows);
+    { // after-cut lines: a yellow drop-down lets the user count the line in this report, in its own month (Service Monthly adapts live)
+      const ic = cols.length; dt.hdr(1, ic, 'Include in this report', FILL.YF, st.HB);
+      dt.ws.getCell(1, ic).note = `Lines dated after the cut date (${A.cutDate.toISOString().slice(0, 10)}) are Pending. Pick "Include" to count one in this report: it leaves Pending and joins its month on Service Monthly, Package Monthly and the Dashboard at once. Service Quarterly holds values – its row 2 check shows the difference until the report is rebuilt. Not-approved lines stay Pending.`;
+      sorted.forEach((r, n) => { if (!(r.approved && r.month > A.CUT)) return; const x = dt.ws.getCell(n + 2, ic);
+        x.fill = FILL.YF; x.font = st.BLUE; x.dataValidation = { type: 'list', allowBlank: true, formulae: ['"Include,Not included"'] }; }); }
     { const qc = cols.indexOf('Qty check') + 1; dt.ws.getCell(1, qc).note = 'Adjustment lines only. The report qty (amount ÷ net rate) is kept; "Check" means the PO service line has no normal qty to net it against, or the adjustment takes that line\'s qty below zero – usually a deduction booked on a placeholder-priced line. Review the qty before using it.';
       sorted.forEach((r, n) => { if (!r.qcheck) return; const i = n + 2; dt.ws.getCell(i, qc).font = { ...st.RED, bold: true }; dt.ws.getCell(i, qc).fill = FILL.AF;
         dt.ws.getCell(i, cols.indexOf('Report qty') + 1).font = { ...st.RED, bold: true }; }); }
@@ -536,7 +543,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     cols.forEach((_, j) => { const col = dt.ws.getColumn(j + 1); col.font = st.F; if (colFmt[j + 1]) col.numFmt = colFmt[j + 1]; if (textCols.includes(j + 1)) col.numFmt = '@'; });
     dt.ws.getRow(1).eachCell((c) => { c.font = st.H; });
     sorted.forEach((r, n) => { if (r.othpc) { dt.ws.getCell(n + 2, 42).fill = FILL.PCF; dt.ws.getCell(n + 2, 43).fill = FILL.PCF; } });
-    [13, 6, 11, 8, 10, 9, 9, 7, 12, 11, 28, 12, 12, 8, 6, 10, 38, 10, 6, 8, 6, 6, 10, 10, 10, 10, 10, 8, 13, 11, 6, 6, 16, 22, 10, 20, 26, 22, 16, 10, 22, 10, 8, 11, 26, 20, 30, 9, 9, 30, 14, 30].forEach((w, j) => dt.width(j + 1, w));
+    [13, 6, 11, 8, 10, 9, 9, 7, 12, 11, 28, 12, 12, 8, 6, 10, 38, 10, 6, 8, 6, 6, 10, 10, 10, 10, 10, 8, 13, 11, 6, 6, 16, 22, 10, 20, 26, 22, 16, 10, 22, 10, 8, 11, 26, 20, 30, 9, 9, 30, 14, 30, 16].forEach((w, j) => dt.width(j + 1, w));
     const NR = det.length + 1;
     dt.ws.views = [{ state: 'frozen', xSplit: 2, ySplit: 1 }]; dt.ws.autoFilter = `A1:${L(cols.length)}${NR}`;
     const R = (n) => `Detail!$${C[n]}$2:$${C[n]}$${NR}`;
@@ -665,15 +672,17 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       return { O0, P0, T0, PE, RF, LASTC, blocks, amtCol: (b) => b.col + 2 };
     }
     const yr = (m) => Math.floor(m / 100);
-    const MS = flatSheet(S['Service Monthly'], months.map((m, i) => ({ label: MON[(m % 100) - 1] + (m === A.CUT ? ' ◂' : ''), year: yr(m), keys: [m], crit: [m], fill: i % 2 ? '1F3E6B' : '0F2A52' })), 'every Amount', true);
+    const MS = flatSheet(S['Service Monthly'], A.allMonths.map((m, i) => ({ label: MON[(m % 100) - 1] + (m === A.CUT ? ' ◂' : m > A.CUT ? ' · after cut' : ''), year: yr(m), keys: [m], crit: [m],
+      fill: m > A.CUT ? '8E3B37' : (i % 2 ? '1F3E6B' : '0F2A52') })), 'every Amount', true);
     SM_COLS = { ...MS, R1, RN }; SM_TOTAL = `SUM('Service Monthly'!${L(MS.T0 + 3)}${R1}:${L(MS.T0 + 3)}${RN})`; SM_PEND = `SUM('Service Monthly'!${L(MS.PE + 2)}${R1}:${L(MS.PE + 2)}${RN})`;
     S['Service Monthly'].ws.getCell(5, 1).note = 'Permanent: a row keeps its Row ID in every later report, whatever the sort order. Detail → Row key carries the same ID.';
-    S['Service Monthly'].ws.getCell(4, MS.PE).note = `Pending = dated after the cut date (${A.cutDate.toISOString().slice(0, 10)}) or not approved (Detail → Pending reason). Counted when it falls in a reported month and is approved – not in Total.`;
+    S['Service Monthly'].ws.getCell(4, MS.PE).note = `Pending = dated after the cut date (${A.cutDate.toISOString().slice(0, 10)}) or not approved (Detail → Pending reason) – not in Total. A line picked as "Include" on Detail → Include in this report moves into its month block (red "after cut" months) at once.`;
     // quarters (Q1 = Jan–Mar) from the same rows; every figure is a value, row 2 re-adds each quarter from Detail
     await say('Service Quarterly');
-    const qk = (m) => yr(m) * 10 + Math.ceil((m % 100) / 3), qs = [...new Set(months.map(qk))];
-    const QS = flatSheet(S['Service Quarterly'], qs.map((q, i) => { const ms = months.filter((m) => qk(m) === q), y = Math.floor(q / 10), n = q % 10, lo = y * 100 + 3 * n - 2, hi = y * 100 + 3 * n;
-      return { label: `Q${n}` + (ms.includes(A.CUT) ? ' ◂' : ''), year: y, keys: ms, crit: [`">=${lo}",${DTR('Report bucket')},"<=${hi}"`], fill: i % 2 ? '1F3E6B' : '0F2A52' }; }), 'every quarter');
+    const qk = (m) => yr(m) * 10 + Math.ceil((m % 100) / 3), qs = [...new Set(A.allMonths.map(qk))];
+    const QS = flatSheet(S['Service Quarterly'], qs.map((q, i) => { const ms = A.allMonths.filter((m) => qk(m) === q), y = Math.floor(q / 10), n = q % 10, lo = y * 100 + 3 * n - 2, hi = y * 100 + 3 * n;
+      const after = ms.every((m) => m > A.CUT);
+      return { label: `Q${n}` + (ms.includes(A.CUT) ? ' ◂' : after ? ' · after cut' : ''), year: y, keys: ms, crit: [`">=${lo}",${DTR('Report bucket')},"<=${hi}"`], fill: after ? '8E3B37' : (i % 2 ? '1F3E6B' : '0F2A52') }; }), 'every quarter');
     PM.sq = `SUM('Service Quarterly'!${L(QS.T0 + 3)}${R1}:${L(QS.T0 + 3)}${RN})`;
 
     // ---------------- Package Monthly: live – the amounts on Service Monthly summed by their current Package. The Dashboard reads this sheet.
@@ -710,7 +719,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     // ---------------- By Supplier
     await say('By Supplier'); const bs = S['By Supplier'];
     const supTot = sumBy(det, (r) => r.supCode, (r) => r.amt); const sk = mostCommon(supTot).map((x) => x[0]);
-    const bcols = ['OPENING', ...months, 'PENDING'];
+    const bcols = ['OPENING', ...A.allMonths, 'PENDING'];
     ['Supplier code', 'Supplier name', ...bcols, 'Total'].forEach((v, j) => { const x = bs.hdr(1, j + 1, v); x.numFmt = '0'; });
     sk.forEach((k, n) => {
       const i = n + 2; bs.set(i, 1, k, { fmt: '@', font: st.F }); bs.set(i, 2, supName.get(k), { font: st.F });
@@ -1003,8 +1012,8 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       title: 'Work package groups by MNL', valFmt: '#,##0,,"M"',
       series: mt.map((m, j) => ({ name: `'_Chart'!$${L(2 + j)}$2`, cat: `'_Chart'!$A$3:$A$${DG1}`, val: `'_Chart'!$${L(2 + j)}$3:$${L(2 + j)}$${DG1}`, color: m.color, gap: true })) });
     const DM0 = DG1 + 3; cx.set(DM0, 1, 'Month'); cx.set(DM0, 2, 'Approved cost');
-    months.forEach((m, j) => { cx.set(DM0 + 1 + j, 1, mlabel(m)); cx.set(DM0 + 1 + j, 2, `='Package Monthly'!${PM.monthCol(m)}${PM.tot}`, { fmt: NUM }); });
-    const DM1 = DM0 + months.length; cx.width(1, 16); for (let j = 2; j <= 8; j++) cx.width(j, 14);
+    A.allMonths.forEach((m, j) => { cx.set(DM0 + 1 + j, 1, mlabel(m) + (m > A.CUT ? ' (after cut)' : '')); cx.set(DM0 + 1 + j, 2, `='Package Monthly'!${PM.monthCol(m)}${PM.tot}`, { fmt: NUM }); });
+    const DM1 = DM0 + A.allMonths.length; cx.width(1, 16); for (let j = 2; j <= 8; j++) cx.width(j, 14);
 
     // ---- lower half: monthly cost (left) and top services (right)
     const DB0 = DTR + 2; rowH(DB0 - 1, 12); rowH(DB0, 24);
@@ -1051,7 +1060,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     let rr = MA0 + 2; const mRows = [];
     for (const m of allMonths) {
       const inRep = m <= A.CUT, reported = A.prevCut && m <= A.prevCut;
-      const status = m === A.CUT ? 'Report month' : (!inRep ? 'After cut – Pending' : (reported ? 'Reported before' : (A.prevCut ? 'New since last report' : 'In report')));
+      const status = m === A.CUT ? 'Report month' : (!inRep ? { formula: `IF(SUMIFS(${AM},${BK},${m})=0,"After cut – Pending","After cut – "&TEXT(SUMIFS(${AM},${BK},${m}),"#,##0")&" included")` } : (reported ? 'Reported before' : (A.prevCut ? 'New since last report' : 'In report')));
       const f = { font: inRep ? st.F : { ...st.F, italic: true, color: { argb: 'FF8E3B37' } } };
       db.set(rr, acols[0], mlabel(m), { font: { ...f.font, bold: m === A.CUT } }); db.set(rr, acols[1], status, f);
       db.set(rr, acols[2], `=COUNTIFS(${DM},${m},${DF},"<>X")`, { ...f, fmt: '#,##0' });
@@ -1171,7 +1180,8 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     ws.set(n0 + 5, 1, 'Service Monthly Total + Pending', { font: st.F }); ws.set(n0 + 5, 2, `=${SM_TOTAL}+B${n0 + 4}`);
     ws.set(n0 + 6, 1, 'Service Quarterly Total + Pending', { font: st.F }); ws.set(n0 + 6, 2, `=${PM.sq}+B${n0 + 4}`);
     ws.set(n0 + 7, 1, 'Dashboard work package table (= Package Monthly) + Pending', { font: st.F }); ws.set(n0 + 7, 2, `=${DASH_TOTAL}+B${n0 + 4}`);
-    ws.set(n0 + 8, 1, 'Largest difference (must be 0)', { font: st.B }); ws.set(n0 + 8, 2, `=MAX(ABS(B${n0 + 3}-B${n0 + 2}),ABS(B${n0 + 5}-B${n0 + 2}),ABS(B${n0 + 6}-B${n0 + 2}),ABS(B${n0 + 7}-B${n0 + 2}),ABS('Package Monthly'!${PM.totCol}${PM.tot}+'Package Monthly'!${PM.pendCol}${PM.tot}-B${n0 + 2}))`);
+    ws.set(n0 + 6, 1, 'Service Quarterly Total + Pending (values as built – differs only after lines are included on Detail; rebuild to refresh)', { font: st.F });
+    ws.set(n0 + 8, 1, 'Largest difference (must be 0)', { font: st.B }); ws.set(n0 + 8, 2, `=MAX(ABS(B${n0 + 3}-B${n0 + 2}),ABS(B${n0 + 5}-B${n0 + 2}),ABS(B${n0 + 7}-B${n0 + 2}),ABS('Package Monthly'!${PM.totCol}${PM.tot}+'Package Monthly'!${PM.pendCol}${PM.tot}-B${n0 + 2}))`);
     for (let r = n0; r <= n0 + 8; r++) ws.ws.getCell(r, 2).numFmt = NUM;
     ws.width(1, 130); ws.width(2, 18);
 

@@ -73,7 +73,11 @@ const sum = (rs) => rs.reduce((s, r) => s + r.amt, 0);
   if (require('child_process').spawnSync('which', ['soffice']).status === 0) {
     const tmp = require('path').join(require('os').tmpdir(), `rev08_${process.pid}.xlsx`); require('fs').writeFileSync(tmp, Buffer.from(buf));
     const res = require('child_process').spawnSync('python3', [require('path').join(__dirname, 'recalc.py'), tmp], { encoding: 'utf8', timeout: 900000 });
-    require('fs').unlinkSync(tmp); assert.strictEqual(res.status, 0, 'recalculation checks: ' + res.stdout + res.stderr);
+    assert.strictEqual(res.status, 0, 'recalculation checks: ' + res.stdout + res.stderr);
+    // "Include in this report" on every after-cut line: they leave Pending for their month blocks, every check stays ✔
+    const expMonth = sum(A8.det.filter((r) => r.approved && !r.initial && r.month > 202608));
+    const inc = require('child_process').spawnSync('python3', [require('path').join(__dirname, 'include_check.py'), tmp, String(expMonth), String(k8.notApproved)], { encoding: 'utf8', timeout: 900000 });
+    require('fs').unlinkSync(tmp); assert.strictEqual(inc.status, 0, 'include check: ' + inc.stdout + inc.stderr);
   } else console.log('(LibreOffice not installed – recalculation skipped)');
   console.log(`ok · TZ=${process.env.TZ || 'default'} · Aug cut: total ${Math.round(k8.opening + k8.approved)}, pending ${Math.round(k8.pending)}, late 5 + 3 lines (${Math.round(expAdded)} + ${Math.round(expAppr)})`);
 })().catch((e) => { console.error('FAIL', e.message); process.exit(1); });
