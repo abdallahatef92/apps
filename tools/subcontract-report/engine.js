@@ -530,11 +530,11 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
         r.approved && r.month > A.CUT ? 'Not included' : null]);
     });
     dt.ws.addRows(dtRows);
-    { // after-cut lines: a yellow drop-down lets the user count the line in this report, in its own month (Service Monthly adapts live)
-      const ic = cols.length; dt.hdr(1, ic, 'Include in this report', FILL.YF, st.HB);
+    { // after-cut lines: a drop-down lets the user count the line in this report, in its own month (Service Monthly adapts live)
+      const ic = cols.length;
       dt.ws.getCell(1, ic).note = `Lines dated after the cut date (${A.cutDate.toISOString().slice(0, 10)}) are Pending. Pick "Include" to count one in this report: it leaves Pending and joins its month on Service Monthly, Package Monthly and the Dashboard at once. Service Quarterly holds values – its row 2 check shows the difference until the report is rebuilt. Not-approved lines stay Pending.`;
       sorted.forEach((r, n) => { if (!(r.approved && r.month > A.CUT)) return; const x = dt.ws.getCell(n + 2, ic);
-        x.fill = FILL.YF; x.font = st.BLUE; x.dataValidation = { type: 'list', allowBlank: true, formulae: ['"Include,Not included"'] }; }); }
+        x.dataValidation = { type: 'list', allowBlank: true, formulae: ['"Include,Not included"'] }; }); }
     { const qc = cols.indexOf('Qty check') + 1; dt.ws.getCell(1, qc).note = 'Adjustment lines only. The report qty (amount ÷ net rate) is kept; "Check" means the PO service line has no normal qty to net it against, or the adjustment takes that line\'s qty below zero – usually a deduction booked on a placeholder-priced line. Review the qty before using it.';
       sorted.forEach((r, n) => { if (!r.qcheck) return; const i = n + 2; dt.ws.getCell(i, qc).font = { ...st.RED, bold: true }; dt.ws.getCell(i, qc).fill = FILL.AF;
         dt.ws.getCell(i, cols.indexOf('Report qty') + 1).font = { ...st.RED, bold: true }; }); }
@@ -545,7 +545,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     sorted.forEach((r, n) => { if (r.othpc) { dt.ws.getCell(n + 2, 42).fill = FILL.PCF; dt.ws.getCell(n + 2, 43).fill = FILL.PCF; } });
     [13, 6, 11, 8, 10, 9, 9, 7, 12, 11, 28, 12, 12, 8, 6, 10, 38, 10, 6, 8, 6, 6, 10, 10, 10, 10, 10, 8, 13, 11, 6, 6, 16, 22, 10, 20, 26, 22, 16, 10, 22, 10, 8, 11, 26, 20, 30, 9, 9, 30, 14, 30, 16].forEach((w, j) => dt.width(j + 1, w));
     const NR = det.length + 1;
-    dt.ws.views = [{ state: 'frozen', xSplit: 2, ySplit: 1 }]; dt.ws.autoFilter = `A1:${L(cols.length)}${NR}`;
+    dt.ws.views = [{ state: 'frozen', xSplit: 6, ySplit: 1 }];                     // Row key … Approved stay in view dt.ws.autoFilter = `A1:${L(cols.length)}${NR}`;
     const R = (n) => `Detail!$${C[n]}$2:$${C[n]}$${NR}`;
 
     let SM_ORDER, SM_TOTAL, SM_PEND, SM_COLS; const supName = new Map(); for (const r of det) supName.set(r.supCode, r.supName);   // also used by By Supplier

@@ -17,7 +17,7 @@ and downloads the Excel report. Nothing is uploaded; the libraries are embedded 
   (never the PC's local time, so 31-Aug stays in August east of UTC).
 - **The certificate Date decides the month.** A line dated after the cut date, or not approved, is **Pending**:
   shown in its own block, never in Total (Detail → *Pending reason*).
-- **Include in this report** (Detail, yellow drop-down on after-cut lines): picking *Include* takes the line out of Pending
+- **Include in this report** (Detail, drop-down on after-cut lines): picking *Include* takes the line out of Pending
   into its month. Service Monthly has a block for every month in the data – after-cut months are red and fill only with
   included lines – and Package Monthly, By Supplier and the Dashboard follow live. Service Quarterly holds values, so its
   row 2 check shows the difference until the report is rebuilt.
