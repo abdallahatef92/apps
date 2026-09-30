@@ -159,6 +159,112 @@ button.primary:hover{border-color:var(--gold)}
 .control b{color:var(--gold);letter-spacing:.08em;font-size:11px}
 .control .ok{color:#8FD6AE}.control .bad{color:#F2A29B}
 .opt-sel{align-items:center;justify-content:space-between;gap:12px}.opt-sel select{font:inherit;font-size:12.5px;padding:5px 8px;border:1px solid var(--line-2);border-radius:6px;background:var(--panel);color:var(--ink);max-width:60%}
+/* ---- Invoices view: one chip per invoice, coloured by status (status colours only ever mean status) ---- */
+:root{--idle:#5F6B7C;--idle-soft:#E8EBF0}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--idle:#A9B3C1;--idle-soft:#242C38}}
+:root[data-theme="dark"]{--idle:#A9B3C1;--idle-soft:#242C38}
+.inv-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-bottom:16px}
+.inv-tile{all:unset;box-sizing:border-box;cursor:pointer;background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--c,var(--accent));border-radius:8px;padding:10px 14px;display:flex;flex-direction:column;gap:2px}
+.inv-tile:hover{border-color:var(--c,var(--accent))}
+.inv-tile:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.inv-tile[aria-pressed="true"]{background:var(--cs,var(--accent-soft));box-shadow:inset 0 0 0 1px var(--c,var(--accent))}
+.inv-tile .l{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--c,var(--accent));display:flex;gap:6px;align-items:center}
+.inv-tile .v{font-family:var(--mono);font-size:22px;font-weight:500;font-variant-numeric:tabular-nums;color:var(--ink)}
+.inv-tile .s{font-size:12px;color:var(--muted)}
+.st-in{--c:var(--good);--cs:var(--good-soft)} .st-na{--c:var(--bad);--cs:var(--bad-soft)} .st-cut{--c:var(--idle);--cs:var(--idle-soft)}
+.inv-exc{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px}
+.exc{all:unset;box-sizing:border-box;cursor:pointer;display:grid;grid-template-columns:auto 1fr auto;gap:2px 10px;align-items:center;padding:8px 12px;border-radius:8px;background:var(--cs);border:1px solid transparent}
+.exc:hover{border-color:var(--c)}
+.exc:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.exc .ic{grid-row:span 2;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;background:var(--c);color:var(--panel);font-weight:700;font-size:13px}
+.exc .who{font-weight:600;font-size:13px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.exc .amt{font-family:var(--mono);font-weight:600;color:var(--ink);text-align:right}
+.exc .meta{font-size:11.5px;color:var(--muted);grid-column:2 / span 2}
+.inv-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.inv-tools input[type=search]{flex:1 1 240px;min-width:0;font:inherit;padding:7px 10px;border:1px solid var(--line-2);border-radius:8px;background:var(--panel);color:var(--ink)}
+.inv-tools select{font:inherit;font-size:12.5px;padding:6px 8px;border:1px solid var(--line-2);border-radius:8px;background:var(--panel);color:var(--ink)}
+.inv-wrap{overflow:auto;max-height:720px;border:1px solid var(--line);border-radius:8px}
+table.inv{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%;font-size:12px}
+table.inv th,table.inv td{border-bottom:1px solid var(--line);padding:5px 6px;vertical-align:top}
+table.inv thead th{position:sticky;top:0;z-index:2;text-align:center;padding:6px 8px;background:var(--navy);color:#fff;text-transform:none;letter-spacing:0;font-size:11.5px}
+table.inv thead th small{display:block;font-weight:400;opacity:.8;font-size:10.5px}
+table.inv thead th.cut{background:var(--navy-2);box-shadow:inset 0 -3px 0 var(--gold)}
+table.inv thead th.after{background:#8E3B37}
+table.inv thead th.opening{background:#9C7A38}
+table.inv .stk{position:sticky;left:0;z-index:1;background:var(--panel);min-width:230px;max-width:280px;border-right:1px solid var(--line-2)}
+table.inv thead th.stk{z-index:3;background:var(--navy);text-align:left}
+table.inv tr.sup td{background:var(--panel-2);border-top:1px solid var(--line-2)}
+table.inv tr.sup td.stk{background:var(--panel-2)}
+table.inv tr.sup .nm{font-weight:600;font-size:13px;color:var(--ink);display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+table.inv tr.sup .sub{font-size:11px;color:var(--muted)}
+table.inv td.tot{font-family:var(--mono);text-align:right;white-space:nowrap;font-weight:600}
+table.inv td.po{font-family:var(--mono);font-size:11.5px;color:var(--muted);padding-left:18px}
+table.inv td.mc{min-width:88px}
+table.inv td.mc.after{background:color-mix(in srgb,var(--idle-soft) 45%,transparent)}
+.sbar{display:flex;height:6px;border-radius:3px;overflow:hidden;margin-top:5px;gap:2px;max-width:220px}
+.sbar i{display:block;height:100%}
+.msum{font-family:var(--mono);font-size:11px;color:var(--muted);text-align:right;white-space:nowrap}
+.ichip{all:unset;box-sizing:border-box;cursor:pointer;display:flex;align-items:center;gap:5px;width:100%;margin:2px 0;padding:2px 6px 2px 4px;border-radius:5px;background:var(--cs);border:1px solid transparent;font-size:11.5px;white-space:nowrap}
+.ichip:hover{border-color:var(--c)}
+.ichip:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+.ichip .ic{width:14px;height:14px;border-radius:50%;display:grid;place-items:center;background:var(--c);color:var(--panel);font-size:9px;font-weight:700;flex:none}
+.ichip b{font-family:var(--mono);font-weight:600;color:var(--ink)}
+.ichip span.a{margin-left:auto;font-family:var(--mono);color:var(--ink)}
+.ichip.dim{opacity:.22}
+.inv-empty{padding:24px;text-align:center;color:var(--muted)}
+dialog.inv-dlg{border:1px solid var(--line-2);border-radius:12px;padding:0;background:var(--panel);color:var(--ink);width:min(820px,calc(100vw - 32px));max-height:calc(100vh - 48px)}
+dialog.inv-dlg::backdrop{background:rgba(8,14,24,.55)}
+dialog.inv-dlg .hd{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;padding:16px 18px 10px;border-bottom:1px solid var(--line)}
+dialog.inv-dlg .bd{padding:12px 18px 18px;overflow:auto;max-height:calc(100vh - 200px)}
+dialog.inv-dlg .badge{display:inline-flex;gap:6px;align-items:center;padding:3px 10px;border-radius:999px;background:var(--cs);color:var(--c);font-weight:700;font-size:12px}
+dialog.inv-dlg dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px 16px;margin:0 0 12px}
+dialog.inv-dlg dt{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+dialog.inv-dlg dd{margin:0;font-weight:600}
+@media (max-width:640px){.inv-exc{grid-template-columns:1fr}table.inv .stk{min-width:160px;max-width:180px}}
+/* ---- Overview dashboard ---- */
+.hero{display:grid;grid-template-columns:1.35fr 1fr 1fr;gap:1px;background:rgba(200,164,92,.35);border-radius:var(--radius);overflow:hidden;margin-bottom:16px;border:1px solid var(--gold)}
+.hero>div{background:var(--navy);color:#fff;padding:16px 18px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.hero .l{color:var(--gold);font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase}
+.hero .big{font-family:var(--mono);font-size:34px;font-weight:600;line-height:1.1;font-variant-numeric:tabular-nums}
+.hero .mid{font-family:var(--mono);font-size:26px;font-weight:600;line-height:1.15}
+.hero .s{color:var(--band-sub);font-size:12px}
+.hero .unit{font-size:13px;color:var(--band-sub);font-weight:400;margin-left:4px;font-family:var(--sans)}
+.comp{display:flex;height:12px;border-radius:6px;overflow:hidden;gap:2px;margin-top:4px}
+.comp i{display:block;height:100%}
+.comp-lg{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:11.5px;color:var(--band-sub)}
+.comp-lg span{display:inline-flex;align-items:center;gap:6px}.comp-lg i{width:9px;height:9px;border-radius:2px;display:inline-block}
+.comp-lg b{color:#fff;font-family:var(--mono);font-weight:500}
+.delta{display:inline-flex;align-items:center;gap:4px;font-size:12.5px;font-weight:600;padding:2px 8px;border-radius:999px;background:rgba(255,255,255,.08);width:fit-content}
+.hchk{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:12.5px}
+.hchk li{display:flex;gap:8px;align-items:center}
+.hchk .ic{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;font-size:10px;font-weight:700;flex:none;color:var(--navy)}
+.hchk .ok{background:#8FD6AE}.hchk .bad{background:#F2A29B}.hchk .idle{background:#B9C3D1}
+.hchk button{all:unset;cursor:pointer;color:#fff;text-decoration:underline;text-decoration-color:rgba(200,164,92,.7);text-underline-offset:3px}
+.hchk button:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+.hchk .n{margin-left:auto;font-family:var(--mono);color:var(--band-sub)}
+.ovgrid{display:grid;grid-template-columns:1.6fr 1fr;gap:16px;margin-bottom:16px}
+.ovgrid.even{grid-template-columns:1fr 1fr}
+.blist{display:flex;flex-direction:column;gap:7px}
+.brow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;align-items:baseline}
+.brow .nm{font-size:12.5px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.brow .v{font-family:var(--mono);font-size:12.5px;color:var(--ink);text-align:right;white-space:nowrap}
+.brow .v small{color:var(--muted);margin-left:6px;font-size:11px}
+.brow .track{grid-column:1 / -1;height:7px;background:var(--panel-2);border-radius:4px;overflow:hidden;display:flex}
+.brow .track i{display:block;height:100%;border-radius:0 4px 4px 0}
+.brow.un .nm{color:var(--muted);font-style:italic}
+.brow .flag{font-size:11px;font-weight:600;margin-right:8px;font-family:var(--sans)}
+.pkic{display:inline-block;width:1.4em;text-align:center}
+.linkbtn{all:unset;cursor:pointer;color:var(--accent);font-size:12px;font-weight:600;text-decoration:underline;text-underline-offset:3px}
+.linkbtn:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+details.more{margin-top:4px}
+details.more>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;font-weight:600;color:var(--accent);padding:10px 4px;font-size:13.5px}
+details.more>summary::-webkit-details-marker{display:none}
+details.more>summary::before{content:'▸';transition:transform .15s}
+details.more[open]>summary::before{transform:rotate(90deg)}
+@media (max-width:1100px){.hero{grid-template-columns:1fr 1fr}.hero>div:first-child{grid-column:1 / -1}.ovgrid,.ovgrid.even{grid-template-columns:1fr}}
+@media (max-width:640px){.hero{grid-template-columns:1fr}.hero .big{font-size:28px}}
+footer.sig{margin:18px 0 6px;text-align:center;font-size:11.5px;letter-spacing:.04em;color:var(--muted)}
+footer.sig::before{content:'';display:block;width:60px;height:2px;background:var(--gold);margin:0 auto 8px;border-radius:1px}
 </style>
 
 <div class="wrap" id="wrap">
@@ -233,6 +339,7 @@ button.primary:hover{border-color:var(--gold)}
       <section id="results" hidden>
         <div class="tabs" role="tablist" aria-label="Report views">
           <button role="tab" id="tab-overview" aria-selected="true" aria-controls="view-overview">Overview</button>
+          <button role="tab" id="tab-invoices" aria-selected="false" aria-controls="view-invoices">Invoices</button>
           <button role="tab" id="tab-changes" aria-selected="false" aria-controls="view-changes">Changes</button>
           <button role="tab" id="tab-coding" aria-selected="false" aria-controls="view-coding">Service coding</button>
           <button role="tab" id="tab-checks" aria-selected="false" aria-controls="view-checks">Checks</button>
@@ -244,14 +351,41 @@ button.primary:hover{border-color:var(--gold)}
               <div class="actions" style="margin:0"><button class="primary" id="btn-download">Prepare Excel report</button></div></div>
             <div class="bd"><div class="status" id="dl-status" style="margin-top:0"></div></div>
           </div>
+          <div class="hero" id="ov-hero"></div>
+          <div class="ovgrid">
+            <div class="card"><div class="hd"><h3>Approved cost per month by trade</h3><span class="muted" style="font-size:12px" id="ov-month-note">EGP, excl. opening and pending</span></div><div class="bd"><div class="chartbox"><canvas id="ch-month" aria-label="Stacked bar chart of approved amount per month by trade"></canvas></div><div class="legend" id="lg-month"></div></div></div>
+            <div class="card"><div class="hd"><h3 id="ov-rm-h">Report month – top subcontractors</h3><span class="muted" style="font-size:12px" id="ov-rm-note"></span></div><div class="bd"><div class="blist" id="ov-rm"></div></div></div>
+          </div>
+          <div class="ovgrid even">
+            <div class="card"><div class="hd"><h3>Work packages</h3><span class="muted" style="font-size:12px" id="ov-pkg-note"></span></div><div class="bd"><div class="blist" id="ov-pkg"></div></div></div>
+            <div class="card"><div class="hd"><h3>Top 10 subcontractors</h3><span class="muted" style="font-size:12px">to the cut date · opening + months</span></div><div class="bd"><div class="blist" id="ov-subs"></div></div></div>
+          </div>
+          <details class="more" id="ov-more"><summary>More detail – trades, active subcontractors, top services, all figures</summary>
           <div class="kpis" id="kpis"></div>
           <div class="row2">
-            <div class="card"><div class="hd"><h3>Approved amount per month by trade</h3><span class="muted" style="font-size:12px">EGP, excl. opening and pending</span></div><div class="bd"><div class="chartbox"><canvas id="ch-month" aria-label="Stacked bar chart of approved amount per month by trade"></canvas></div><div class="legend" id="lg-month"></div></div></div>
             <div class="card"><div class="hd"><h3>Subcontractors per trade</h3></div><div class="bd"><div class="chartbox"><canvas id="ch-subs" aria-label="Bar chart of subcontractors per trade"></canvas></div></div></div>
+            <div class="card"><div class="hd"><h3>Active subcontractors per month</h3><span class="muted" style="font-size:12px">with approved amount in the month</span></div><div class="bd"><div class="chartbox"><canvas id="ch-active" aria-label="Column chart of active subcontractors per month"></canvas></div></div></div>
           </div>
           <div class="card" style="margin-bottom:16px"><div class="hd"><h3>Amount by trade</h3><span class="muted" style="font-size:12px">EGP excl. VAT · subcontractor counts overlap across trades</span></div><div class="bd tblwrap"><table id="tb-trade"></table></div></div>
-          <div class="card" style="margin-bottom:16px"><div class="hd"><h3>Active subcontractors per month</h3><span class="muted" style="font-size:12px">with approved amount in the month</span></div><div class="bd"><div class="chartbox" style="height:220px"><canvas id="ch-active" aria-label="Column chart of active subcontractors per month"></canvas></div></div></div>
           <div class="card"><div class="hd"><h3>Top 15 services</h3><span class="muted" style="font-size:12px">qty and rate from normal lines</span></div><div class="bd tblwrap"><table id="tb-svc"></table></div></div>
+          </details>
+        </div>
+
+        <div id="view-invoices" role="tabpanel" aria-labelledby="tab-invoices" hidden>
+          <div class="inv-tiles" id="inv-tiles" role="group" aria-label="Filter invoices by status"></div>
+          <div class="card" style="margin-bottom:16px"><div class="hd"><h3>Invoice status by month</h3><span class="muted" style="font-size:12px" id="inv-chart-note"></span></div><div class="bd"><div class="chartbox" style="height:240px"><canvas id="ch-inv" aria-label="Stacked columns: invoice amount per month by status"></canvas></div><div class="legend" id="lg-inv"></div></div></div>
+          <div class="card" style="margin-bottom:16px" id="inv-exc-card"><div class="hd"><h3>Excluded from this report</h3><span class="muted" style="font-size:12px" id="inv-exc-note"></span></div><div class="bd"><div class="inv-exc" id="inv-exc"></div></div></div>
+          <div class="card"><div class="hd"><h3>Invoices by subcontractor and month</h3><span class="muted" style="font-size:12px">one chip per invoice · click it for its lines</span></div>
+            <div class="bd">
+              <div class="inv-tools">
+                <input type="search" id="inv-search" placeholder="Search subcontractor, supplier code, PO or invoice no." aria-label="Search invoices">
+                <select id="inv-sort" aria-label="Sort subcontractors"><option value="name">Sort: name</option><option value="amt">Sort: largest amount</option><option value="exc">Sort: most excluded</option></select>
+                <label class="muted" style="font-size:12px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="inv-onlyexc"> Only with excluded invoices</label>
+              </div>
+              <div class="status" id="inv-count" style="margin:0 0 8px"></div>
+              <div class="inv-wrap"><table class="inv" id="inv-grid"></table></div>
+            </div></div>
+          <dialog class="inv-dlg" id="inv-dlg" aria-labelledby="inv-dlg-h"><div class="hd"><div><div class="eyebrow" id="inv-dlg-e"></div><h3 id="inv-dlg-h" style="margin:2px 0 6px"></h3><span class="badge" id="inv-dlg-b"></span></div><button id="inv-dlg-x" aria-label="Close">✕</button></div><div class="bd" id="inv-dlg-body"></div></dialog>
         </div>
 
         <div id="view-changes" role="tabpanel" aria-labelledby="tab-changes" hidden>
@@ -282,6 +416,7 @@ button.primary:hover{border-color:var(--gold)}
       </section>
     </main>
   </div>
+  <footer class="sig" id="sig">Subcontractor Report · Version 1.01 · A.Atef</footer>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
@@ -295,6 +430,7 @@ button.primary:hover{border-color:var(--gold)}
 (function(){
 'use strict';
 const E = window.SubcontractEngine;
+if (E && E.SIG) document.getElementById('sig').textContent = E.SIG;
 const $ = (id) => document.getElementById(id);
 const state = { files: {}, prev: null, analysis: null, summary: null, coding: new Map(), codingDocs: new Map(), db: null, downloads: null, charts: {} };
 const fmtM = (v) => (v == null ? '–' : (Math.abs(v) >= 1e6 ? (v / 1e6).toLocaleString('en-US', { maximumFractionDigits: 1, minimumFractionDigits: 1 }) + 'M' : Math.round(v).toLocaleString('en-US')));
@@ -426,7 +562,7 @@ $('btn-build').addEventListener('click', async () => {
     state.analysis = analyseNow(); state.summary = E.summarize(state.analysis);
     setStatus('Drawing the overview…', 80); await tick();
     resetPrepared(); $('dl-status').textContent = '';
-    renderAll(); $('empty').hidden = true; $('results').hidden = false; selectTab('overview');
+    const keep = !$('results').hidden && state.tab; renderAll(); $('empty').hidden = true; $('results').hidden = false; selectTab(keep || 'overview');
     setStatus(`Built from ${state.analysis.det.length.toLocaleString('en-US')} certificate lines.`);
     state.summary.warnings.forEach((w) => message('msgs', 'warn', w));
   } catch (e) { setStatus(''); message('msgs', 'bad', e.message || String(e)); }
@@ -485,11 +621,13 @@ function setFold(folded) {
 $('btn-fold').addEventListener('click', () => setFold(true));
 $('btn-unfold').addEventListener('click', () => setFold(false));
 function selectTab(name) {
-  if (name === 'coding') setFold(true);   // coding needs the width; the strip brings the panel back
-  for (const t of ['overview', 'changes', 'coding', 'checks']) { const on = t === name; $('tab-' + t).setAttribute('aria-selected', on); $('view-' + t).hidden = !on; }
+  if (name === 'coding' || name === 'invoices') setFold(true);   // coding and the invoice matrix need the width; the strip brings the panel back
+  for (const t of ['overview', 'invoices', 'changes', 'coding', 'checks']) { const on = t === name; $('tab-' + t).setAttribute('aria-selected', on); $('view-' + t).hidden = !on; }
   if (name === 'coding') renderCoding();
+  if (name === 'invoices') renderInvoices();
+  state.tab = name;
 }
-for (const t of ['overview', 'changes', 'coding', 'checks']) $('tab-' + t).addEventListener('click', () => selectTab(t));
+for (const t of ['overview', 'invoices', 'changes', 'coding', 'checks']) $('tab-' + t).addEventListener('click', () => selectTab(t));
 
 // ---------------------------------------------------------------- render
 const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -518,7 +656,7 @@ function renderAll() {
   const col = series(); const top = S.tradeTot.slice(0, 7); const rest = S.tradeTot.slice(7);
   const ds = top.map((t, i) => ({ label: t.name, data: t.byMonth, backgroundColor: col[i], borderColor: cssVar('--panel'), borderWidth: 1, borderRadius: 2 }));
   if (rest.length) ds.push({ label: 'Other trades', data: S.months.map((_, j) => rest.reduce((a, t) => a + t.byMonth[j], 0)), backgroundColor: col[7], borderColor: cssVar('--panel'), borderWidth: 1 });
-  chart('ch-month', { type: 'bar', data: { labels: S.months.map(E.mlabel), datasets: ds }, options: baseOpts({ scales: { x: { stacked: true, grid: { display: false } }, y: { stacked: true, grid: { color: cssVar('--chart-grid') }, border: { display: false }, ticks: { callback: (v) => (v / 1e6).toFixed(0) + 'M' } } },
+  chart('ch-month', { type: 'bar', data: { labels: S.months.map((m) => m === state.analysis.CUT ? E.mlabel(m) + ' ◂' : E.mlabel(m)), datasets: ds }, options: baseOpts({ scales: { x: { stacked: true, grid: { display: false } }, y: { stacked: true, grid: { color: cssVar('--chart-grid') }, border: { display: false }, ticks: { callback: (v) => (v / 1e6).toFixed(0) + 'M' } } },
     plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false, callbacks: { label: (c) => `${c.dataset.label}: ${fmtN(c.raw)}` } } } }) });
   $('lg-month').innerHTML = ds.map((d) => `<span><i style="background:${d.backgroundColor}"></i>${esc(d.label)}</span>`).join('');
   chart('ch-subs', { type: 'bar', data: { labels: S.tradeTot.map((t) => t.name), datasets: [{ data: S.tradeTot.map((t) => t.subs), backgroundColor: cssVar('--bar'), borderRadius: 3, barThickness: 14 }] },
@@ -531,11 +669,170 @@ function renderAll() {
     `<tr class="tot"><td>Total</td><td class="r num">${fmtN(k.opening)}</td><td class="r num">${fmtN(S.tradeTot.reduce((a, t) => a + t.byMonth.reduce((x, y) => x + y, 0), 0))}</td><td class="r num">${fmtN(S.tradeTot.reduce((a, t) => a + t.pending, 0))}</td><td class="r num">${fmtN(k.total)}</td><td class="r num">100%</td><td class="r num">${k.subs}</td></tr></tbody>`;
   $('tb-svc').innerHTML = `<thead><tr><th>Service</th><th>Service text</th><th>Unit</th><th>Trade</th><th class="r">Qty</th><th class="r">Avg rate</th><th class="r">Amount</th><th class="r">Share</th></tr></thead><tbody>` +
     S.svcTot.map((s) => `<tr><td class="num">${esc(s.svc)}</td><td class="ar">${esc(s.text)}</td><td>${esc(s.unit || '')}</td><td>${esc(s.trade)}</td><td class="r num">${fmtN(s.qty, 2)}</td><td class="r num">${s.rate == null ? '' : fmtN(s.rate, 2)}</td><td class="r num">${fmtN(s.total)}</td><td class="r num">${pct(s.total, k.total)}</td></tr>`).join('') + '</tbody>';
-  renderChanges(); renderChecks();
+  renderOverviewDash();
+  renderChanges(); renderChecks(); if (state.tab === 'invoices') renderInvoices();
   const diff = A.gt == null ? null : A.gt - A.splitAmt - k.total;
   $('control').innerHTML = `<b>FINAL CONTROL</b><span class="num">Certified ${fmtN(k.total)} = Opening ${fmtN(k.opening)} + Approved months ${fmtN(k.approved)} + Pending ${fmtN(k.pending)}</span>` +
     `<span class="num ${diff != null && Math.abs(diff) < 0.01 ? 'ok' : 'bad'}">Report vs SAP (after WBS splits): ${diff == null ? 'footer not found' : fmtN(diff)}</span>`;
 }
+// ---------------------------------------------------------------- invoices: one chip per invoice (PO + Invoice Serial), coloured by status
+const INV_ST = { in: { label: 'In this report', icon: '✓', cls: 'st-in', v: '--good' }, na: { label: 'Not approved', icon: '✕', cls: 'st-na', v: '--bad' }, cut: { label: 'After the cut date', icon: '◷', cls: 'st-cut', v: '--idle' } };
+const fmtK = (v) => { const a = Math.abs(v); return a >= 1e6 ? (v / 1e6).toFixed(a >= 1e7 ? 1 : 2) + 'M' : a >= 1e3 ? Math.round(v / 1e3) + 'k' : String(Math.round(v)); };
+const fmtDay = (d) => d ? `${String(d.getUTCDate()).padStart(2, '0')}-${E.mlabel(d.getUTCFullYear() * 100 + d.getUTCMonth() + 1)}` : '';
+const invUI = { filter: null, q: '', sort: 'name', onlyExc: false };
+function invData() {
+  const A = state.analysis; if (invUI.A === A) return invUI.data;
+  const inv = [...E.groupInvoices(A.det).values()].map((v) => Object.assign(v, { st: !v.approved ? 'na' : v.afterCut ? 'cut' : 'in', col: v.opening ? 'OPENING' : v.month }));
+  const months = [...new Set(inv.filter((v) => !v.opening).map((v) => v.month))].sort((a, b) => a - b);
+  const cols = [{ key: 'OPENING', label: 'Opening', sub: 'pre go-live', cls: 'opening' }, ...months.map((m) => ({ key: m, label: E.mlabel(m), sub: m === A.CUT ? 'report month' : m > A.CUT ? 'after cut' : '', cls: m === A.CUT ? 'cut' : m > A.CUT ? 'after' : '' }))];
+  const subs = new Map();
+  for (const v of inv) { let s = subs.get(v.supCode); if (!s) subs.set(v.supCode, (s = { code: v.supCode, name: v.supName, pos: new Map(), amt: 0, n: { in: 0, na: 0, cut: 0 }, a: { in: 0, na: 0, cut: 0 } }));
+    if (!s.pos.has(v.po)) s.pos.set(v.po, []); s.pos.get(v.po).push(v); s.amt += v.amt; s.n[v.st]++; s.a[v.st] += v.amt; }
+  for (const s of subs.values()) for (const list of s.pos.values()) list.sort((a, b) => a.date - b.date || String(a.serial).localeCompare(String(b.serial)));
+  invUI.A = A; invUI.data = { inv, cols, subs: [...subs.values()] }; return invUI.data;
+}
+function chipHtml(v) {
+  const s = INV_ST[v.st], dim = invUI.filter && invUI.filter !== v.st ? ' dim' : '';
+  return `<button class="ichip ${s.cls}${dim}" data-inv="${esc(v.po + '|' + v.serial)}" title="${esc(`${v.serial} · PO ${v.po} · ${fmtDay(v.dateObj)} · ${fmtN(v.amt)} EGP · ${s.label}`)}"><span class="ic" aria-hidden="true">${s.icon}</span><b>${esc(v.serial)}</b><span class="a">${fmtK(v.amt)}</span><span class="sr" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">${s.label}</span></button>`;
+}
+function renderInvoices() {
+  if (!state.analysis) return;
+  const A = state.analysis, D = invData(), cutTxt = A.cutDate.toISOString().slice(0, 10);
+  // status tiles – also the filter
+  const tot = { in: [0, 0], na: [0, 0], cut: [0, 0] }; for (const v of D.inv) { tot[v.st][0]++; tot[v.st][1] += v.amt; }
+  const all = D.inv.reduce((a, v) => a + v.amt, 0);
+  $('inv-tiles').innerHTML = `<button class="inv-tile" data-f="" aria-pressed="${!invUI.filter}"><span class="l">All invoices</span><span class="v">${D.inv.length}</span><span class="s">${fmtN(all)} EGP · ${D.subs.length} subcontractors</span></button>` +
+    Object.entries(INV_ST).map(([k, s]) => `<button class="inv-tile ${s.cls}" data-f="${k}" aria-pressed="${invUI.filter === k}"><span class="l"><span aria-hidden="true">${s.icon}</span>${s.label}</span><span class="v">${tot[k][0]}</span><span class="s">${fmtN(tot[k][1])} EGP${k === 'cut' ? ` · dated after ${cutTxt}` : k === 'na' ? ' · Character 1 blank in SAP' : ` · to ${cutTxt}`}</span></button>`).join('');
+  // status by month
+  const per = D.cols.map((c) => { const x = { in: 0, na: 0, cut: 0, n: { in: 0, na: 0, cut: 0 } }; for (const v of D.inv) if (v.col === c.key) { x[v.st] += v.amt; x.n[v.st]++; } return x; });
+  const ds = Object.entries(INV_ST).map(([k, s]) => ({ label: s.label, data: per.map((p) => p[k]), backgroundColor: cssVar(s.v), borderColor: cssVar('--panel'), borderWidth: { top: 2 }, borderRadius: 3, borderSkipped: 'bottom', stk: k }));
+  chart('ch-inv', { type: 'bar', data: { labels: D.cols.map((c) => c.cls === 'after' ? [c.label, 'after cut'] : c.cls === 'cut' ? [c.label + ' ◂', 'report month'] : c.label), datasets: ds },
+    options: baseOpts({ scales: { x: { stacked: true, grid: { display: false } }, y: { stacked: true, grid: { color: cssVar('--chart-grid') }, border: { display: false }, ticks: { callback: (v) => fmtK(v) } } },
+      plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false, filter: (i) => i.raw > 0, callbacks: { label: (c) => `${c.dataset.label}: ${fmtN(c.raw)} EGP · ${per[c.dataIndex].n[c.dataset.stk]} inv.` } } },
+      onClick: (e, els) => { if (!els.length) return; invUI.filter = ds[els[0].datasetIndex].stk; renderInvoices(); document.getElementById('inv-grid').scrollIntoView({ behavior: 'smooth', block: 'start' }); } }) });
+  $('lg-inv').innerHTML = Object.values(INV_ST).map((s) => `<span><i style="background:${cssVar(s.v)}"></i>${s.icon} ${esc(s.label)}</span>`).join('') + `<span class="muted">· click a column part to filter the matrix</span>`;
+  $('inv-chart-note').textContent = `EGP excl. VAT · Opening = initial invoices · ${E.mlabel(A.CUT)} is the report month`;
+  // excluded invoices
+  const exc = D.inv.filter((v) => v.st !== 'in').sort((a, b) => (a.st === 'na' ? 0 : 1) - (b.st === 'na' ? 0 : 1) || b.amt - a.amt);
+  $('inv-exc-note').textContent = exc.length ? `${exc.length} invoices · ${fmtN(exc.reduce((a, v) => a + v.amt, 0))} EGP = Pending` : '';
+  $('inv-exc').innerHTML = exc.length ? exc.map((v) => { const s = INV_ST[v.st];
+    return `<button class="exc ${s.cls}" data-inv="${esc(v.po + '|' + v.serial)}"><span class="ic" aria-hidden="true">${s.icon}</span><span class="who ar" title="${esc(v.supName)}">${esc(v.supName)}</span><span class="amt">${fmtN(v.amt)}</span><span class="meta">${esc(v.serial)} · PO ${esc(v.po)} · ${fmtDay(v.dateObj)} · <b style="color:var(--c)">${s.label}</b></span></button>`; }).join('')
+    : '<div class="inv-empty">Every invoice is approved and dated on or before the cut date.</div>';
+  renderInvGrid();
+}
+function renderInvGrid() {
+  const D = invData(), q = invUI.q.trim().toLowerCase(), f = invUI.filter;
+  const hit = (s, v) => !q || [s.name, s.code, v.po, v.serial].some((x) => String(x || '').toLowerCase().includes(q));
+  let subs = D.subs.map((s) => ({ s, pos: [...s.pos.entries()].map(([po, list]) => [po, list.filter((v) => hit(s, v))]).filter(([, l]) => l.length) }))
+    .filter((x) => x.pos.length && (!invUI.onlyExc || x.s.n.na + x.s.n.cut) && (!f || x.pos.some(([, l]) => l.some((v) => v.st === f))));
+  const exA = (s) => s.a.na + s.a.cut;
+  subs.sort(invUI.sort === 'amt' ? (a, b) => b.s.amt - a.s.amt : invUI.sort === 'exc' ? (a, b) => exA(b.s) - exA(a.s) || b.s.amt - a.s.amt : (a, b) => String(a.s.name).localeCompare(String(b.s.name), 'ar'));
+  const nInv = subs.reduce((a, x) => a + x.pos.reduce((b, [, l]) => b + l.length, 0), 0);
+  $('inv-count').textContent = `${subs.length} subcontractors · ${nInv} invoices` + (f ? ` · highlighting “${INV_ST[f].label}”` : '') + (q ? ` · matching “${invUI.q.trim()}”` : '');
+  const head = `<thead><tr><th class="stk">Subcontractor / PO</th>${D.cols.map((c) => `<th class="${c.cls}">${esc(c.label)}${c.sub ? `<small>${esc(c.sub)}</small>` : ''}</th>`).join('')}<th>Total</th></tr></thead>`;
+  const bar = (s) => { const t = s.a.in + s.a.na + s.a.cut || 1; return `<div class="sbar" aria-hidden="true">${['in', 'na', 'cut'].filter((k) => s.a[k] > 0).map((k) => `<i style="flex:${s.a[k] / t};background:var(${INV_ST[k].v})"></i>`).join('')}</div>`; };
+  const rows = subs.map(({ s, pos }) => {
+    const flags = ['na', 'cut'].filter((k) => s.n[k]).map((k) => `<span style="color:var(${INV_ST[k].v});font-weight:600">${INV_ST[k].icon} ${s.n[k]} ${k === 'na' ? 'not approved' : 'after cut'}</span>`).join(' · ');
+    const msum = D.cols.map((c) => { let a = 0; for (const [, l] of pos) for (const v of l) if (v.col === c.key) a += v.amt; return `<td class="msum">${a ? fmtK(a) : ''}</td>`; }).join('');
+    const top = `<tr class="sup"><td class="stk"><span class="nm ar" title="${esc(s.name)}">${esc(s.name)}</span><span class="sub">${esc(s.code)} · ${pos.length} PO${pos.length > 1 ? 's' : ''}${flags ? ' · ' + flags : ''}</span>${bar(s)}</td>${msum}<td class="tot">${fmtN(s.amt)}</td></tr>`;
+    return top + pos.map(([po, l]) => `<tr><td class="stk po">PO ${esc(po)}</td>${D.cols.map((c) => { const cell = l.filter((v) => v.col === c.key); return `<td class="mc ${c.cls === 'after' ? 'after' : ''}">${cell.map(chipHtml).join('')}</td>`; }).join('')}<td class="tot">${fmtN(l.reduce((a, v) => a + v.amt, 0))}</td></tr>`).join('');
+  }).join('');
+  $('inv-grid').innerHTML = head + '<tbody>' + (rows || `<tr><td class="inv-empty" colspan="${D.cols.length + 2}">No invoice matches.</td></tr>`) + '</tbody>';
+}
+function openInvoice(key) {
+  const D = invData(), v = D.inv.find((x) => x.po + '|' + x.serial === key); if (!v) return; const s = INV_ST[v.st], A = state.analysis;
+  $('inv-dlg-e').textContent = `PO ${v.po} · supplier ${v.supCode}`;
+  $('inv-dlg-h').innerHTML = `Invoice ${esc(v.serial)} · <span class="ar">${esc(v.supName)}</span>`;
+  const b = $('inv-dlg-b'); b.className = 'badge ' + s.cls; b.textContent = `${s.icon} ${s.label}`;
+  const why = v.st === 'na' ? 'Not approved in SAP (Character 1 blank) – it stays in Pending until it is approved.'
+    : v.st === 'cut' ? `Dated after the cut date ${A.cutDate.toISOString().slice(0, 10)} – Pending in this report. In the Excel file, Detail → “Include in this report” can count it in its own month.`
+    : v.opening ? 'Approved initial invoice – counted in Opening.' : `Approved – counted in ${E.mlabel(v.month)}.`;
+  const rows = v.rows.slice().sort((a, b) => b.amt - a.amt);
+  $('inv-dlg-body').innerHTML = `<dl><div><dt>Invoice date</dt><dd>${fmtDay(v.dateObj)}</dd></div><div><dt>Report column</dt><dd>${v.opening ? 'Opening' : E.mlabel(v.month)}</dd></div><div><dt>Amount excl. VAT</dt><dd class="num">${fmtN(v.amt, 2)}</dd></div><div><dt>Lines</dt><dd>${v.rows.length}</dd></div></dl>
+    <p class="muted" style="margin:0 0 12px;font-size:12.5px">${esc(why)}</p>
+    <div class="tblwrap"><table><thead><tr><th>Service</th><th>Service text</th><th>Line type</th><th class="r">Current qty</th><th class="r">Amount</th></tr></thead><tbody>` +
+    rows.map((r) => `<tr><td class="num">${esc(r.svc)}</td><td class="ar">${esc(r.text)}</td><td>${esc(r.lt)}</td><td class="r num">${fmtN(r.qty, 2)}</td><td class="r num">${fmtN(r.amt, 2)}</td></tr>`).join('') +
+    `<tr class="tot"><td colspan="4">Total</td><td class="r num">${fmtN(v.amt, 2)}</td></tr></tbody></table></div>`;
+  const d = $('inv-dlg'); if (d.showModal) d.showModal(); else d.setAttribute('open', '');
+}
+$('inv-dlg-x').addEventListener('click', () => $('inv-dlg').close());
+$('inv-dlg').addEventListener('click', (e) => { if (e.target === $('inv-dlg')) $('inv-dlg').close(); });
+$('view-invoices').addEventListener('click', (e) => {
+  const t = e.target.closest('[data-f]'); if (t) { invUI.filter = t.dataset.f || null; renderInvoices(); return; }
+  const c = e.target.closest('[data-inv]'); if (c) openInvoice(c.dataset.inv);
+});
+$('inv-search').addEventListener('input', (e) => { invUI.q = e.target.value; renderInvGrid(); });
+$('inv-sort').addEventListener('change', (e) => { invUI.sort = e.target.value; renderInvGrid(); });
+$('inv-onlyexc').addEventListener('change', (e) => { invUI.onlyExc = e.target.checked; renderInvGrid(); });
+// ---------------------------------------------------------------- overview dashboard: hero, report month, work packages, subcontractors
+const normCode = (c) => String(c || '').replace(/\s+/g, '').toUpperCase();
+function blistRow(name, v, share, color, opts) {
+  const o = opts || {};
+  return `<div class="brow${o.un ? ' un' : ''}"><span class="nm${o.ar ? ' ar' : ''}" title="${esc(o.title || name)}" ${o.ar ? 'style="text-align:left"' : ''}>${o.pre || ''}${esc(name)}</span>` +
+    `<span class="v">${o.flag || ''}${fmtN(v)}<small>${o.small != null ? o.small : ''}</small></span><span class="track" aria-hidden="true"><i style="width:${Math.max(0, Math.min(100, share * 100)).toFixed(1)}%;background:${color}"></i></span></div>`;
+}
+function renderOverviewDash() {
+  const A = state.analysis, S = state.summary, k = S.k, det = A.det, tot = k.total - k.pending;
+  const cutTxt = A.cutDate.toISOString().slice(0, 10), mi = S.months.indexOf(A.CUT);
+  const mAmt = (m) => det.reduce((a, r) => a + (r.bucket === m ? r.amt : 0), 0);
+  const rm = mAmt(A.CUT), pm = mi > 0 ? S.months[mi - 1] : null, pv = pm ? mAmt(pm) : null;
+  const inv = [...E.groupInvoices(det).values()], st = (v) => (!v.approved ? 'na' : v.afterCut ? 'cut' : 'in');
+  const rmInv = inv.filter((v) => !v.opening && v.month === A.CUT && st(v) === 'in');
+  const nNa = inv.filter((v) => st(v) === 'na').length, nCut = inv.filter((v) => st(v) === 'cut').length;
+  // coding coverage by amount (to the cut date)
+  const pk = (A.opts && A.opts.master && A.opts.master.packages) || [], byCode = new Map(pk.map((p) => [normCode(p.code), p]));
+  const pkgOf = (r) => { const s = A.services[r.sid - 1]; return s ? byCode.get(normCode(s.csi)) || null : null; };
+  const inRep = det.filter((r) => r.bucket !== 'PENDING');
+  const pkAmt = new Map(); let un = 0;
+  for (const r of inRep) { const p = pkgOf(r); if (p) pkAmt.set(p.code, (pkAmt.get(p.code) || 0) + r.amt); else un += r.amt; }
+  const coded = tot ? (tot - un) / tot : 0;
+  const diff = A.gt == null ? null : A.gt - A.splitAmt - k.total;
+  // report month by subcontractor – one count for the hero and the list
+  const bySup = new Map(), names = new Map(); for (const r of det) { names.set(r.supCode, r.supName); if (r.bucket === A.CUT) bySup.set(r.supCode, (bySup.get(r.supCode) || 0) + r.amt); }
+  const topRm = [...bySup.entries()].filter(([, v]) => Math.abs(v) > 0.5).sort((a, b) => b[1] - a[1]), mx = topRm.length ? topRm[0][1] : 1, rmSubs = topRm.length;
+  // hero
+  const opC = 'var(--gold)', apC = '#7FA3D9', peC = 'repeating-linear-gradient(135deg,#8E9BB0 0 4px,transparent 4px 7px)';
+  const all = k.opening + k.approved + k.pending || 1;
+  const dTxt = pv == null ? 'first month of the report' : (() => { const d = rm - pv, p = pv ? d / Math.abs(pv) * 100 : null;
+    return `${d >= 0 ? '▲' : '▼'} ${fmtM(Math.abs(d))}${p == null ? '' : ` (${d >= 0 ? '+' : '−'}${Math.abs(p).toFixed(0)}%)`} vs ${E.mlabel(pm)}`; })();
+  const chk = [
+    [diff != null && Math.abs(diff) < 0.01 ? 'ok' : 'bad', diff != null && Math.abs(diff) < 0.01 ? '✓' : '!', 'Report ties to SAP grand total', diff == null ? 'footer not found' : fmtN(diff), null],
+    [coded >= 0.999 ? 'ok' : 'idle', coded >= 0.999 ? '✓' : '◔', 'Cost with a work package', (coded * 100).toFixed(0) + '%', 'coding'],
+    [nNa ? 'bad' : 'ok', nNa ? '✕' : '✓', nNa ? `${nNa} invoice${nNa > 1 ? 's' : ''} not approved` : 'Every invoice approved', nNa ? fmtM(k.notApproved) : '', nNa ? 'inv:na' : null],
+    [nCut ? 'idle' : 'ok', nCut ? '◷' : '✓', nCut ? `${nCut} invoice${nCut > 1 ? 's' : ''} after the cut date` : 'Nothing dated after the cut', nCut ? fmtM(k.afterCut) : '', nCut ? 'inv:cut' : null]];
+  if (k.lateLines) chk.push(['bad', '!', `${k.lateLines} lines added to reported months`, fmtM(k.late), 'changes']);
+  $('ov-hero').innerHTML =
+    `<div><span class="l">Total to cut date · ${cutTxt}</span><span class="big">${fmtN(tot)}<span class="unit">EGP excl. VAT</span></span>` +
+    `<div class="comp" role="img" aria-label="Opening ${fmtN(k.opening)}, approved months ${fmtN(k.approved)}, pending ${fmtN(k.pending)} not in the total"><i style="flex:${k.opening / all};background:${opC}"></i><i style="flex:${k.approved / all};background:${apC}"></i><i style="flex:${k.pending / all};background:${peC}"></i></div>` +
+    `<div class="comp-lg"><span><i style="background:${opC}"></i>Opening <b>${fmtM(k.opening)}</b></span><span><i style="background:${apC}"></i>Approved months <b>${fmtM(k.approved)}</b></span><span><i style="background:${peC}"></i>Pending, not in total <b>${fmtM(k.pending)}</b></span></div></div>` +
+    `<div><span class="l">Report month · ${E.mlabel(A.CUT)}</span><span class="mid">${fmtN(rm)}</span><span class="delta">${dTxt}</span>` +
+    `<span class="s">${rmInv.length} approved invoices · ${rmSubs} active subcontractors · ${k.subs} to date on ${k.pos} POs</span></div>` +
+    `<div><span class="l">Status</span><ul class="hchk">${chk.map(([c, ic, t, n, go]) => `<li><span class="ic ${c}" aria-hidden="true">${ic}</span>${go ? `<button data-go="${go}">${esc(t)}</button>` : `<span>${esc(t)}</span>`}<span class="n">${esc(n)}</span></li>`).join('')}</ul></div>`;
+  $('ov-rm-h').textContent = `${E.mlabel(A.CUT)} – top subcontractors`;
+  $('ov-rm-note').textContent = topRm.length ? `${topRm.length} active · share of ${fmtM(rm)}` : '';
+  $('ov-rm').innerHTML = topRm.length ? topRm.slice(0, 8).map(([c, v]) => blistRow(names.get(c), v, v / mx, 'var(--bar)', { ar: true, small: pct(v, rm) })).join('') +
+    (topRm.length > 8 ? `<div class="muted" style="font-size:12px">+ ${topRm.length - 8} more · ${fmtN(topRm.slice(8).reduce((a, [, v]) => a + v, 0))}</div>` : '')
+    : '<div class="muted">No approved cost in the report month.</div>';
+  // work packages
+  const pkRows = pk.filter((p) => pkAmt.get(p.code)).map((p) => [p, pkAmt.get(p.code)]).sort((a, b) => b[1] - a[1]);
+  const pmx = Math.max(un, ...pkRows.map(([, v]) => v), 1);
+  $('ov-pkg-note').textContent = `${(coded * 100).toFixed(0)}% of ${fmtM(tot)} coded`;
+  $('ov-pkg').innerHTML = pkRows.map(([p, v]) => blistRow(`${p.code} · ${p.label}`, v, v / pmx, '#' + (p.color || E.GROUP_COLOR[p.group] || '6B7280'), { pre: `<span class="pkic" aria-hidden="true">${p.icon || ''}</span>`, small: pct(v, tot) })).join('') +
+    (un ? blistRow('Unallocated – no work package yet', un, un / pmx, 'repeating-linear-gradient(135deg,var(--line-2) 0 4px,transparent 4px 7px)', { un: true, pre: '<span class="pkic" aria-hidden="true">◌</span>', small: pct(un, tot) }) +
+      `<div style="margin-top:4px"><button class="linkbtn" data-go="coding">Code the services on the Coding tab →</button></div>` : '');
+  // top subcontractors to date, with their excluded invoices flagged
+  const toDate = new Map(); for (const r of inRep) toDate.set(r.supCode, (toDate.get(r.supCode) || 0) + r.amt);
+  const exc = new Map(); for (const v of inv) if (st(v) !== 'in') { const e = exc.get(v.supCode) || { na: 0, cut: 0 }; e[st(v)]++; exc.set(v.supCode, e); }
+  const top = [...toDate.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10), tmx = top.length ? top[0][1] : 1;
+  $('ov-subs').innerHTML = top.map(([c, v]) => { const e = exc.get(c);
+    const flag = e ? ` ${e.na ? `<span class="flag" style="color:var(--bad)" title="not approved invoices">✕ ${e.na} not appr.</span>` : ''}${e.cut ? `<span class="flag" style="color:var(--idle)" title="invoices after the cut date">◷ ${e.cut} after cut</span>` : ''}` : '';
+    return blistRow(names.get(c), v, v / tmx, 'var(--bar)', { ar: true, small: pct(v, tot), flag }); }).join('');
+}
+$('view-overview').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-go]'); if (!b) return; const g = b.dataset.go;
+  if (g.startsWith('inv:')) { invUI.filter = g.slice(4); selectTab('invoices'); document.getElementById('inv-grid').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+  else selectTab(g);
+});
 function pct(a, b) { return b ? (a / b * 100).toFixed(1) + '%' : ''; }
 function renderChanges() {
   const A = state.analysis, S = state.summary;

@@ -11,5 +11,7 @@
     "exceljs": "4.4.0",
     "jszip": "3.10.1",
     "xlsx": "0.18.5"
-  }
+  },
+  "version": "1.01",
+  "author": "A.Atef"
 }

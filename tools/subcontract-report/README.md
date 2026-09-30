@@ -1,5 +1,8 @@
 # Subcontract Cost Report tool
 
+**Subcontractor Report · Version 1.01 · A.Atef** – the signature lives in `engine.js` (`TOOL`); the page footer, the
+workbook properties and every printed report page read it from there. Bump `TOOL.version` (and `package.json`) on a release.
+
 A single offline HTML page. The user drops this month's SAP **ZSCPRG01** (certificates) and **ZSCSRV1**
 (PO service lines), optionally last month's report and the work package master, picks the **report month**,
 and downloads the Excel report. Nothing is uploaded; the libraries are embedded in the page.
@@ -29,6 +32,13 @@ and downloads the Excel report. Nothing is uploaded; the libraries are embedded 
   Package / MNL / Cost element / Unit are live lookups on Service Coding on both.
 - **Per-service totals** (Service Coding → Total amount) are values; Dashboard → Final control checks them against Detail.
 - **Package Monthly** sums Service Monthly by current package (live); the Dashboard reads it.
+- **Tool screen**: the **Overview** tab is a dashboard – total to the cut date (opening / approved months / pending),
+  the report month vs the month before, a status list that jumps to the right tab, cost by trade per month, the report
+  month's top subcontractors, work packages (unallocated hatched) and the top 10 subcontractors with their excluded
+  invoices flagged; the older tiles and tables sit under *More detail*. The **Invoices** tab shows every invoice as a
+  chip (✓ in the report, ✕ not approved, ◷ after the cut date) by subcontractor / PO and month, with status tiles that
+  filter, a status-by-month chart, the excluded list, search, and each invoice's lines on click. It follows the report
+  month; Include picks made later in Excel are not visible to it.
 - **Invoice Matrix** (2nd tab): one cell pair (invoice no. + amount) per invoice – an invoice is PO + Invoice Serial, and all
   its lines share one date and one approval – by subcontractor / PO and month. Colours are conditional formats on Detail:
   red = not approved, grey = after the cut date and not picked as Include, green = in this report. Each rule has its own

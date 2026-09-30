@@ -18,6 +18,8 @@
     const dt = new Date(ms); return { y: dt.getUTCFullYear(), m: dt.getUTCMonth() + 1, d: dt.getUTCDate() };
   }
   const ymdDate = (o) => new Date(Date.UTC(o.y, o.m - 1, o.d));
+  // signature: shown in the tool and on every printed report page
+  const TOOL = { name: 'Subcontractor Report', version: '1.01', author: 'A.Atef' }, SIG = `${TOOL.name} · Version ${TOOL.version} · ${TOOL.author}`;
   const mlabel = (m) => MON[(m % 100) - 1] + '-' + String(Math.floor(m / 100)).slice(2);
   const countBy = (arr, f) => { const m = new Map(); for (const x of arr) { const k = f(x); m.set(k, (m.get(k) || 0) + 1); } return m; };
   const sumBy = (arr, f, v) => { const m = new Map(); for (const x of arr) { const k = f(x); m.set(k, (m.get(k) || 0) + v(x)); } return m; };
@@ -341,8 +343,8 @@
   function groupInvoices(det) {
     const m = new Map();
     for (const r of det) { const k = r.po + '|' + r.serial; let v = m.get(k);
-      if (!v) m.set(k, (v = { po: r.po, serial: r.serial, supCode: r.supCode, month: r.month, date: +r.dateObj, dateObj: r.dateObj, amt: 0, lines: 0, approved: true, opening: true, afterCut: false }));
-      v.amt += r.amt; v.lines++; if (!r.approved) v.approved = false; if (!r.initial) v.opening = false; if (r.pendWhy === 'After cut date') v.afterCut = true; }
+      if (!v) m.set(k, (v = { po: r.po, serial: r.serial, supCode: r.supCode, month: r.month, date: +r.dateObj, dateObj: r.dateObj, amt: 0, lines: 0, rows: [], approved: true, opening: true, afterCut: false, supName: r.supName }));
+      v.amt += r.amt; v.lines++; v.rows.push(r); if (!r.approved) v.approved = false; if (!r.initial) v.opening = false; if (r.pendWhy === 'After cut date') v.afterCut = true; }
     return m;
   }
   function makeSheetApi(ws) {
@@ -462,7 +464,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
   async function buildWorkbook(A, libs, progress) {
     const { ExcelJS, JSZip } = libs; const say = progress || (() => {});
     const det = A.det, MAINPC = A.MAINPC, months = A.months, omonths = A.omonths;
-    const wb = new ExcelJS.Workbook(); wb.creator = 'Subcontract report'; wb.calcProperties.fullCalcOnLoad = true;
+    const wb = new ExcelJS.Workbook(); wb.creator = TOOL.author; wb.title = TOOL.name; wb.description = SIG; wb.calcProperties.fullCalcOnLoad = true;
     const ORDER = ['Dashboard', 'Invoice Matrix', 'Service Monthly', 'Service Quarterly', 'Package Monthly', 'Service Coding', 'Changes', 'Detail', 'PO Register', 'By Supplier', 'Subcontractor x Trade',
       'Subcontractors over time', 'Qty Reconciliation', 'Coding', 'Notes', '_History', '_Lines', '_Rows', '_Chart'];
     const S = {}; for (const n of ORDER) S[n] = makeSheetApi(wb.addWorksheet(n, n === 'Dashboard' || n === 'Subcontractor x Trade' || n === 'Subcontractors over time' || n === 'Changes' || n === 'Package Monthly' || n === 'Invoice Matrix' ? { views: [{ showGridLines: false }] } : {}));
@@ -1200,9 +1202,11 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     db.ws.getRow(AVGR + 1).height = 30; db.ws.getCell(AVGR + 1, cB).alignment = { wrapText: true, vertical: 'top' }; merge(AVGR + 1, cB, AVGR + 1, DRE);
     // page 1 = the dashboard, page 2 on = Monthly activity (it grows by a row a month); one page wide, manual break between them
     db.ws.pageSetup = { paperSize: 8, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, horizontalCentered: true,
-      margins: { left: 0.3, right: 0.3, top: 0.35, bottom: 0.35, header: 0.15, footer: 0.15 }, printArea: `A1:${L(DLAST)}${AVGR + 1}` };
+      margins: { left: 0.3, right: 0.3, top: 0.35, bottom: 0.35, header: 0.15, footer: 0.15 }, printArea: `A1:${L(DLAST)}${AVGR + 2}` };
     db.ws.getRow(MA0 - 1).addPageBreak();
-    db.ws.headerFooter = { oddFooter: `&L&8${A.PLANT} · Subcontract cost dashboard&R&8Page &P of &N` };
+    db.set(AVGR + 2, DRE, SIG, { font: st.IT, align: { horizontal: 'right' } });
+    db.ws.headerFooter = { oddFooter: `&L&8${A.PLANT} · Subcontract cost dashboard&C&8${SIG}&R&8Page &P of &N` };
+    for (const n of ORDER) if (!n.startsWith('_') && n !== 'Dashboard') S[n].ws.headerFooter = { oddFooter: `&L&8${A.PLANT} · ${n}&C&8${SIG}&R&8Page &P of &N` };
     db.ws.views = [{ showGridLines: false, zoomScale: 90 }];
     DASH_TOTAL = `Dashboard!${L(cTot)}${DTR}`;
     }
@@ -1333,7 +1337,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     return { map: out, added, changed };
   }
   async function buildCodingMaster(map, libs) {
-    const wb = new libs.ExcelJS.Workbook(); wb.creator = 'Subcontract report';
+    const wb = new libs.ExcelJS.Workbook(); wb.creator = TOOL.author; wb.title = TOOL.name; wb.description = SIG;
     const ws = wb.addWorksheet(MASTER_SHEET);
     ws.addRow(MASTER_COLS);
     const rows = [...map.values()].sort((a, b) => cmpTuple([a.svc, a.text], [b.svc, b.text]));
@@ -1535,7 +1539,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     return n;
   }
   async function buildMaster(master, libs) {
-    const wb = new libs.ExcelJS.Workbook(); wb.creator = 'Subcontract report';
+    const wb = new libs.ExcelJS.Workbook(); wb.creator = TOOL.author; wb.title = TOOL.name; wb.description = SIG;
     const head = (ws, cols, widths, edit) => { ws.addRow(cols); ws.getRow(1).eachCell((c, j) => { const y = edit.includes(j); c.font = y ? st.HB : st.H; c.fill = y ? FILL.YF : FILL.HF;
       c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }; }); widths.forEach((w, j) => { ws.getColumn(j + 1).width = w; }); ws.views = [{ state: 'frozen', ySplit: 1 }]; };
     const pk = wb.addWorksheet('Packages'); head(pk, ['Code', 'Label', 'Group', 'Icon', 'Color', 'Sort', 'System', 'Catalogue v' + (master.version || CATALOGUE_VERSION)], [12, 32, 12, 7, 10, 7, 8, 13], [2, 3, 4, 5, 6]);
@@ -1561,7 +1565,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     return wb.xlsx.writeBuffer();
   }
 
-  const api = { analyse, summarize, readPrevious, buildWorkbook, detectKind, codingKey, tradeName, TRADES, mlabel, VATR,
+  const api = { TOOL, SIG, analyse, summarize, readPrevious, buildWorkbook, groupInvoices, detectKind, codingKey, tradeName, TRADES, mlabel, VATR,
     readCodingMaster, mergeCodingMaster, buildCodingMaster, MASTER_SHEET,
     PACKAGES, MNLS, DIMS, GROUP_COLOR, defaultMaster, readMaster, buildMaster, codingFor, suggest, assign, mkey, adoptPrevious, setBase, listsOf, listStamp };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.SubcontractEngine = api;
