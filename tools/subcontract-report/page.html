@@ -1,0 +1,621 @@
+<title>Subcontract Cost Report</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Arabic:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+:root{
+  --bg:#F3F5F8; --panel:#FFFFFF; --panel-2:#F8FAFC; --ink:#15223A; --muted:#5A6678; --line:#DCE2EA; --line-2:#C9D2DE;
+  --accent:#1F4E9A; --accent-ink:#FFFFFF; --accent-soft:#E6EEFA; --focus:#2A78D6;
+  --good:#1B7F4B; --good-soft:#E3F3EA; --warn:#9A6200; --warn-soft:#FCF1DC; --bad:#B42318; --bad-soft:#FDE8E6;
+  --chart-grid:#E6EAF0; --chart-text:#5A6678;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4; --s6:#008300; --s7:#4a3aa7; --s8:#A6A6A0;
+  --radius:10px;
+  --sans:"IBM Plex Sans","IBM Plex Sans Arabic",system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#0E131B; --panel:#151C27; --panel-2:#111822; --ink:#E5EAF1; --muted:#98A4B5; --line:#263041; --line-2:#334056;
+    --accent:#7FB0F4; --accent-ink:#0E131B; --accent-soft:#1B2A40; --focus:#7FB0F4;
+    --good:#5CC98F; --good-soft:#15291F; --warn:#E3AE4F; --warn-soft:#2B2213; --bad:#F2877D; --bad-soft:#321A18;
+    --chart-grid:#243042; --chart-text:#98A4B5;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --s6:#008300; --s7:#9085e9; --s8:#7C7C77;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0E131B; --panel:#151C27; --panel-2:#111822; --ink:#E5EAF1; --muted:#98A4B5; --line:#263041; --line-2:#334056;
+  --accent:#7FB0F4; --accent-ink:#0E131B; --accent-soft:#1B2A40; --focus:#7FB0F4;
+  --good:#5CC98F; --good-soft:#15291F; --warn:#E3AE4F; --warn-soft:#2B2213; --bad:#F2877D; --bad-soft:#321A18;
+  --chart-grid:#243042; --chart-text:#98A4B5;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --s6:#008300; --s7:#9085e9; --s8:#7C7C77;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:14px/1.5 var(--sans);margin:0}
+.wrap{max-width:1240px;margin:0 auto;padding-inline:16px;padding-block:20px 48px}
+h1,h2,h3{text-wrap:balance;margin:0}
+h1{font-size:22px;font-weight:700;letter-spacing:-.01em}
+h2{font-size:15px;font-weight:600}
+h3{font-size:13px;font-weight:600}
+.eyebrow{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.muted{color:var(--muted)}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+header.top{display:flex;flex-wrap:wrap;gap:12px 24px;align-items:flex-end;justify-content:space-between;padding-bottom:16px;border-bottom:1px solid var(--line);margin-bottom:20px}
+header.top p{margin:4px 0 0;color:var(--muted);max-width:68ch}
+.pillrow{display:flex;gap:8px;flex-wrap:wrap}
+.pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:3px 10px;font-size:12px;color:var(--muted)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--muted)}
+.dot.on{background:var(--good)} .dot.off{background:var(--warn)}
+.grid{display:grid;grid-template-columns:minmax(0,340px) minmax(0,1fr);gap:20px;align-items:start}
+@media (max-width:900px){.grid{grid-template-columns:minmax(0,1fr)}}
+/* the load panel folds to a strip so the results (and the coding table) get the width */
+.fold{border:0;background:none;padding:2px 6px;font-size:16px;line-height:1;color:var(--muted);border-radius:6px}
+.fold:hover{color:var(--ink);background:var(--panel-2)}
+.rail{display:none;writing-mode:vertical-rl;transform:rotate(180deg);border:0;background:none;padding:14px 0;width:100%;font-weight:600;font-size:13px;color:var(--accent);letter-spacing:.04em}
+.grid.folded{grid-template-columns:44px minmax(0,1fr)}
+.grid.folded aside>.hd,.grid.folded aside>.bd{display:none}
+.grid.folded aside .rail{display:block}
+.wrap.wide{max-width:none}
+@media (max-width:900px){.grid.folded{grid-template-columns:minmax(0,1fr)}.grid.folded aside .rail{writing-mode:horizontal-tb;transform:none;padding:10px}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius)}
+.card>.hd{padding:14px 16px 10px;display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap}
+.card>.bd{padding:0 16px 16px}
+.drop{border:1.5px dashed var(--line-2);border-radius:8px;padding:18px 14px;text-align:center;background:var(--panel-2);cursor:pointer;transition:border-color .15s,background .15s}
+.drop:hover,.drop.over{border-color:var(--accent);background:var(--accent-soft)}
+.drop:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.drop strong{display:block;font-weight:600}
+.slots{display:grid;gap:8px;margin-top:12px}
+.slot{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 10px;align-items:center;border:1px solid var(--line);border-radius:8px;padding:9px 11px}
+.slot .tag{font-family:var(--mono);font-size:11px;font-weight:500;padding:2px 6px;border-radius:4px;background:var(--panel-2);border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.slot.ok .tag{background:var(--good-soft);color:var(--good);border-color:transparent}
+.slot .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.slot .meta{grid-column:2;font-size:12px;color:var(--muted)}
+.opt{display:flex;gap:10px;align-items:flex-start;margin-top:14px;font-size:13px}
+.opt input{margin-top:3px}
+button{font:inherit;cursor:pointer;border-radius:8px;border:1px solid var(--line-2);background:var(--panel);color:var(--ink);padding:8px 14px;font-weight:500}
+button:hover{border-color:var(--accent)}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600}
+button:disabled{opacity:.5;cursor:not-allowed}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.status{font-size:12px;color:var(--muted);margin-top:10px;min-height:18px}
+.progress{height:4px;border-radius:2px;background:var(--line);overflow:hidden;margin-top:8px}
+.progress>i{display:block;height:100%;width:0;background:var(--accent);transition:width .25s}
+.note{font-size:12px;color:var(--muted);border-top:1px solid var(--line);padding-top:12px;margin-top:14px}
+.msg{border-radius:8px;padding:10px 12px;font-size:13px;margin-top:12px}
+.monthpick{display:grid;gap:4px}.monthpick label{font-weight:600}.monthpick select{font:inherit;padding:6px 8px;border:1px solid var(--line-2);border-radius:8px;background:var(--panel);color:var(--ink)}.monthpick .muted{font-size:12px}
+.msg.warn{background:var(--warn-soft);color:var(--warn)} .msg.bad{background:var(--bad-soft);color:var(--bad)} .msg.good{background:var(--good-soft);color:var(--good)}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:16px;overflow-x:auto}
+.tabs button{border:0;border-bottom:2px solid transparent;border-radius:0;background:none;padding:8px 12px;color:var(--muted);white-space:nowrap}
+.tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent);font-weight:600}
+.kpis{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:16px}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.kpi .l{font-size:12px;color:var(--muted)}
+.kpi .v{font-family:var(--mono);font-size:20px;font-weight:500;margin-top:2px;font-variant-numeric:tabular-nums}
+.kpi .s{font-size:11px;color:var(--muted)}
+.kpi.lead{border-color:var(--accent)}
+.row2{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:16px;margin-bottom:16px}
+@media (max-width:760px){.row2{grid-template-columns:minmax(0,1fr)}}
+.chartbox{position:relative;height:280px}
+.chartbox.tall{height:340px}
+.tblwrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;background:var(--panel-2);position:sticky;top:0}
+td.r,th.r{text-align:right}
+td.num{white-space:nowrap}
+tr.tot td{font-weight:600;background:var(--panel-2)}
+.ar{font-family:"IBM Plex Sans Arabic",var(--sans);direction:rtl;text-align:right;unicode-bidi:plaintext}
+.chip{display:inline-block;font-size:11px;padding:1px 7px;border-radius:999px;background:var(--panel-2);border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.chip.new{background:var(--good-soft);color:var(--good);border-color:transparent}
+.chip.chg{background:var(--warn-soft);color:var(--warn);border-color:transparent}
+.chip.rem{background:var(--bad-soft);color:var(--bad);border-color:transparent}
+.chip.appr{background:var(--accent-soft);color:var(--accent);border-color:transparent}
+.coding-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.coding-tools input[type=search]{flex:1 1 220px;min-width:0;font:inherit;padding:7px 10px;border:1px solid var(--line-2);border-radius:8px;background:var(--panel);color:var(--ink)}
+td input.code{width:100%;min-width:72px;font:12.5px var(--mono);padding:4px 6px;border:1px solid var(--line);border-radius:5px;background:var(--panel-2);color:var(--ink)}
+td input.code:focus{background:var(--panel);border-color:var(--accent)}
+td input.code.saved{border-color:var(--good)}
+.loop{width:100%;max-width:640px;height:auto;display:block;margin:6px auto 0}
+.loop text{font-family:var(--sans);fill:var(--ink)}
+.loop .sub{fill:var(--muted);font-size:11px}
+.loop rect{fill:var(--panel-2);stroke:var(--line-2)}
+.loop rect.core{fill:var(--accent-soft);stroke:var(--accent)}
+.loop path{stroke:var(--muted);fill:none;stroke-width:1.5}
+.loop .back{stroke:var(--accent);stroke-dasharray:4 4}
+.loop marker path{fill:var(--muted);stroke:none}
+.empty ul{margin:10px 0 0;padding-left:18px;color:var(--muted)}
+.empty li{margin:3px 0}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--muted);margin-top:8px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:10px;height:10px;border-radius:2px;display:inline-block}
+[hidden]{display:none!important}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+/* ---- brand layer: navy / gold, after the company board-report design ---- */
+:root{--navy:#0F2A52;--navy-2:#1F3E6B;--gold:#C8A45C;--gold-soft:#FBF4E3;--band-sub:#B9C6DD;--bar:#1F3E6B;
+  --bg:#F3F5F9;--ink:#111C2E;--muted:#66748C;--line:#E3E7EF;--accent:#0F2A52;--accent-ink:#FFFFFF;--accent-soft:#EAF1FC;--focus:#C8A45C;--tot-ink:#0F2A52}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--accent:#E7CD8F;--accent-ink:#0F2A52;--accent-soft:#1B2A40;--bar:#7FA3D9;--gold-soft:#2A2416;--tot-ink:#E7CD8F}}
+:root[data-theme="dark"]{--accent:#E7CD8F;--accent-ink:#0F2A52;--accent-soft:#1B2A40;--bar:#7FA3D9;--gold-soft:#2A2416;--tot-ink:#E7CD8F}
+header.top{background:var(--navy);color:#fff;border:0;border-radius:var(--radius);padding:18px 20px;margin-bottom:20px;border-bottom:3px solid var(--gold)}
+header.top h1{color:#fff}
+header.top .eyebrow{color:var(--gold)}
+header.top p{color:var(--band-sub)}
+header.top .pill{background:rgba(255,255,255,.06);border-color:rgba(200,164,92,.55);color:#E6ECF5}
+.kpis{background:var(--navy);border-radius:var(--radius);padding:12px}
+.kpi{background:var(--navy-2);border:1px solid var(--gold);border-radius:6px}
+.kpi .l{color:var(--gold);text-transform:uppercase;font-size:10.5px;font-weight:700;letter-spacing:.05em}
+.kpi .v{color:#fff}
+.kpi .s{color:var(--band-sub)}
+.kpi.lead{background:var(--navy);box-shadow:inset 0 0 0 1px var(--gold)}
+.kpi .chip{background:rgba(255,255,255,.1);color:#fff}
+th{background:var(--navy);color:#fff}
+tr.tot td{background:var(--gold-soft);color:var(--tot-ink)}
+.card h3,.card h2{color:var(--accent)}
+.tabs button[aria-selected="true"]{border-bottom-color:var(--gold)}
+button.primary{background:var(--navy);border-color:var(--navy);color:#fff}
+button.primary:hover{border-color:var(--gold)}
+.control{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:center;background:var(--navy);color:#fff;border-radius:var(--radius);padding:10px 16px;margin-top:16px;font-size:12.5px}
+.control b{color:var(--gold);letter-spacing:.08em;font-size:11px}
+.control .ok{color:#8FD6AE}.control .bad{color:#F2A29B}
+.opt-sel{align-items:center;justify-content:space-between;gap:12px}.opt-sel select{font:inherit;font-size:12.5px;padding:5px 8px;border:1px solid var(--line-2);border-radius:6px;background:var(--panel);color:var(--ink);max-width:60%}
+</style>
+
+<div class="wrap" id="wrap">
+  <header class="top">
+    <div>
+      <div class="eyebrow">SAP ZSCPROG01 + ZSCSRV1 → monthly service report</div>
+      <h1>Subcontract Cost Report</h1>
+      <p>Drop this month's two SAP exports, plus last month's report if you have it. The page builds the Excel report and lists what changed since the last load. Your files are read in this browser and are not uploaded.</p>
+    </div>
+    <div class="pillrow">
+      <span class="pill" id="pill-coding"><i class="dot" id="dot-coding"></i><span id="txt-coding">Shared coding: connecting…</span></span>
+      <span class="pill" id="pill-dl"><i class="dot" id="dot-dl"></i><span id="txt-dl">Excel download: checking…</span></span>
+      <span class="pill" id="pill-libs"><i class="dot" id="dot-libs"></i><span id="txt-libs">Loading tools…</span></span>
+    </div>
+  </header>
+
+  <div class="grid" id="layout">
+    <aside class="card" aria-labelledby="load-h">
+      <button class="rail" id="btn-unfold" aria-controls="load-body" aria-expanded="false" title="Show the load panel">› This month's load</button>
+      <div class="hd"><h2 id="load-h">This month's load</h2><span style="display:flex;gap:8px;align-items:center"><span class="eyebrow">Step 1</span><button class="fold" id="btn-fold" aria-controls="load-body" aria-expanded="true" title="Hide the load panel to give the report more room" aria-label="Hide the load panel">‹</button></span></div>
+      <div class="bd" id="load-body">
+        <div class="drop" id="drop" tabindex="0" role="button" aria-describedby="drop-help">
+          <strong>Drop files here or choose them</strong>
+          <span class="muted" id="drop-help">.xlsx · the page recognises each file from its columns</span>
+          <input type="file" id="file" accept=".xlsx,.xls" multiple hidden>
+        </div>
+        <div class="slots">
+          <div class="slot" id="slot-prog"><span class="tag">ZSCPROG01</span><span class="name" id="name-prog">Certificates — required</span><span class="meta" id="meta-prog">Subcontractor progress / certificate lines</span></div>
+          <div class="slot" id="slot-serv"><span class="tag">ZSCSRV1</span><span class="name" id="name-serv">PO service lines — required</span><span class="meta" id="meta-serv">Units, material groups, contract qty</span></div>
+          <div class="slot" id="slot-prev"><span class="tag">LAST REPORT</span><span class="name" id="name-prev">Last month's report — optional</span><span class="meta" id="meta-prev">Brings load history, changes and coding forward</span></div>
+        </div>
+        <div class="opt monthpick"><label for="opt-month">Report month</label><select id="opt-month" disabled><option value="">Load the certificates first</option></select>
+          <span class="muted" id="opt-cut">Cut date = last day of the month. Certificates dated later, or not approved, go to Pending – shown, not in Total.</span></div>
+        <div class="actions">
+          <button class="primary" id="btn-build" disabled>Build report</button>
+          <button id="btn-clear" disabled>Clear</button>
+        </div>
+        <div class="progress" id="prog" hidden><i id="prog-bar"></i></div>
+        <div class="status" id="status" role="status" aria-live="polite"></div>
+        <div id="msgs"></div>
+        <div class="note">Only service codes with the Unit, CSI, MNL and Cost Element Code you type are saved, to the team's shared coding. Certificate data stays on this device.</div>
+      </div>
+    </aside>
+
+    <main>
+      <section class="card empty" id="empty">
+        <div class="hd"><h2>How the monthly loop works</h2><span class="eyebrow">Each month</span></div>
+        <div class="bd">
+          <svg class="loop" viewBox="0 0 640 230" role="img" aria-label="ZSCPROG01, ZSCSRV1 and last month's report go into the tool, which produces this month's report; next month that report goes back in.">
+            <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z"/></marker></defs>
+            <rect x="10" y="14" width="170" height="46" rx="7"/><text x="24" y="35" font-size="13" font-weight="600">ZSCPROG01</text><text class="sub" x="24" y="51">certificate lines</text>
+            <rect x="10" y="74" width="170" height="46" rx="7"/><text x="24" y="95" font-size="13" font-weight="600">ZSCSRV1</text><text class="sub" x="24" y="111">PO service lines</text>
+            <rect x="10" y="134" width="170" height="46" rx="7"/><text x="24" y="155" font-size="13" font-weight="600">Last month's report</text><text class="sub" x="24" y="171">history + coding</text>
+            <rect class="core" x="240" y="64" width="150" height="66" rx="8"/><text x="256" y="92" font-size="13" font-weight="600">This page</text><text class="sub" x="256" y="110">rules + shared coding</text>
+            <rect x="450" y="64" width="180" height="66" rx="8"/><text x="464" y="92" font-size="13" font-weight="600">This month's report</text><text class="sub" x="464" y="110">.xlsx with live formulas</text>
+            <path d="M180 37 C210 37 210 88 238 88" marker-end="url(#arr)"/>
+            <path d="M180 97 L238 97" marker-end="url(#arr)"/>
+            <path d="M180 157 C210 157 210 106 238 106" marker-end="url(#arr)"/>
+            <path d="M390 97 L448 97" marker-end="url(#arr)"/>
+            <path class="back" d="M540 130 C540 215 95 215 95 182" marker-end="url(#arr)"/>
+            <text class="sub" x="300" y="222">next month it goes back in</text>
+          </svg>
+          <ul>
+            <li>The report has one row per service, supplier and contract rate, with qty, rate and amount for each month, plus Opening and Pending blocks.</li>
+            <li>SAP's subtotal rows are dropped, and lines split across several WBS elements are counted once.</li>
+            <li>With last month's report loaded, a Changes sheet lists new, changed, newly approved and removed certificate lines.</li>
+            <li>CSI, MNL and Cost Element Code come from the shared coding, which you can edit here after you build a report.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="results" hidden>
+        <div class="tabs" role="tablist" aria-label="Report views">
+          <button role="tab" id="tab-overview" aria-selected="true" aria-controls="view-overview">Overview</button>
+          <button role="tab" id="tab-changes" aria-selected="false" aria-controls="view-changes">Changes</button>
+          <button role="tab" id="tab-coding" aria-selected="false" aria-controls="view-coding">Service coding</button>
+          <button role="tab" id="tab-checks" aria-selected="false" aria-controls="view-checks">Checks</button>
+        </div>
+
+        <div id="view-overview" role="tabpanel" aria-labelledby="tab-overview">
+          <div class="card" style="margin-bottom:16px">
+            <div class="hd"><div><div class="eyebrow" id="ov-eyebrow"></div><h2 id="ov-title"></h2></div>
+              <div class="actions" style="margin:0"><button class="primary" id="btn-download">Prepare Excel report</button></div></div>
+            <div class="bd"><div class="status" id="dl-status" style="margin-top:0"></div></div>
+          </div>
+          <div class="kpis" id="kpis"></div>
+          <div class="row2">
+            <div class="card"><div class="hd"><h3>Approved amount per month by trade</h3><span class="muted" style="font-size:12px">EGP, excl. opening and pending</span></div><div class="bd"><div class="chartbox"><canvas id="ch-month" aria-label="Stacked bar chart of approved amount per month by trade"></canvas></div><div class="legend" id="lg-month"></div></div></div>
+            <div class="card"><div class="hd"><h3>Subcontractors per trade</h3></div><div class="bd"><div class="chartbox"><canvas id="ch-subs" aria-label="Bar chart of subcontractors per trade"></canvas></div></div></div>
+          </div>
+          <div class="card" style="margin-bottom:16px"><div class="hd"><h3>Amount by trade</h3><span class="muted" style="font-size:12px">EGP excl. VAT · subcontractor counts overlap across trades</span></div><div class="bd tblwrap"><table id="tb-trade"></table></div></div>
+          <div class="card" style="margin-bottom:16px"><div class="hd"><h3>Active subcontractors per month</h3><span class="muted" style="font-size:12px">with approved amount in the month</span></div><div class="bd"><div class="chartbox" style="height:220px"><canvas id="ch-active" aria-label="Column chart of active subcontractors per month"></canvas></div></div></div>
+          <div class="card"><div class="hd"><h3>Top 15 services</h3><span class="muted" style="font-size:12px">qty and rate from normal lines</span></div><div class="bd tblwrap"><table id="tb-svc"></table></div></div>
+        </div>
+
+        <div id="view-changes" role="tabpanel" aria-labelledby="tab-changes" hidden>
+          <div class="card" style="margin-bottom:16px"><div class="hd"><h3>Load history</h3></div><div class="bd"><div class="row2" style="margin:0"><div class="tblwrap"><table id="tb-loads"></table></div><div class="chartbox"><canvas id="ch-loads" aria-label="Certified cost by load"></canvas></div></div></div></div>
+          <div class="kpis" id="chg-kpis"></div>
+          <div class="card"><div class="hd"><h3>Changed lines</h3><span class="muted" style="font-size:12px" id="chg-note"></span></div><div class="bd tblwrap"><table id="tb-chg"></table></div></div>
+        </div>
+
+        <div id="view-coding" role="tabpanel" aria-labelledby="tab-coding" hidden>
+          <div class="card"><div class="hd"><h3>Service coding — shared with your team</h3><span class="muted" style="font-size:12px" id="cd-count"></span></div>
+            <div class="bd">
+              <div class="coding-tools">
+                <input type="search" id="cd-search" placeholder="Filter by service code or text" aria-label="Filter services">
+                <label class="muted" style="font-size:12px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="cd-missing"> Only uncoded</label>
+                <button id="btn-import" hidden>Add codes from last report</button>
+              </div>
+              <div class="status" id="cd-status" style="margin-top:0"></div>
+              <div class="tblwrap" style="max-height:620px;overflow:auto"><table id="tb-coding"></table></div>
+              <div class="note">Each entry saves when you leave the box. Codes apply to every project that uses the same service code and text. To use new codes, download the Excel report again.</div>
+            </div>
+          </div>
+        </div>
+
+        <div id="view-checks" role="tabpanel" aria-labelledby="tab-checks" hidden>
+          <div class="card"><div class="hd"><h3>Reconciliation and data checks</h3></div><div class="bd tblwrap"><table id="tb-checks"></table><div id="checks-msgs"></div></div></div>
+        </div>
+        <div class="control" id="control" role="note"></div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+<script>
+/*ENGINE*/
+</script>
+<script>
+(function(){
+'use strict';
+const E = window.SubcontractEngine;
+const $ = (id) => document.getElementById(id);
+const state = { files: {}, prev: null, analysis: null, summary: null, coding: new Map(), codingDocs: new Map(), db: null, downloads: null, charts: {} };
+const fmtM = (v) => (v == null ? '–' : (Math.abs(v) >= 1e6 ? (v / 1e6).toLocaleString('en-US', { maximumFractionDigits: 1, minimumFractionDigits: 1 }) + 'M' : Math.round(v).toLocaleString('en-US')));
+const fmtN = (v, d) => (v == null || v === '' ? '' : Number(v).toLocaleString('en-US', { maximumFractionDigits: d || 0, minimumFractionDigits: d || 0 }));
+const fmtD = (d) => (d instanceof Date && !isNaN(d) ? d.toISOString().slice(0, 10) : '');
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
+// ---------------------------------------------------------------- libraries
+function libsReady() { return !!(window.XLSX && window.ExcelJS && window.JSZip && window.Chart && E); }
+function showLibs() {
+  const ok = libsReady();
+  $('dot-libs').className = 'dot ' + (ok ? 'on' : 'off');
+  $('txt-libs').textContent = ok ? 'Ready' : 'Tools did not load – reload the page';
+}
+showLibs();
+
+// ---------------------------------------------------------------- shared coding (db)
+const docId = (code) => { const s = code.replace(/[^A-Za-z0-9_\-~:@+]/g, '_'); return s === '' || s === '.' || s === '..' ? '_' + s : s; };
+function setCodingPill(txt, on) { $('dot-coding').className = 'dot ' + (on ? 'on' : 'off'); $('txt-coding').textContent = txt; }
+async function initDb() {
+  try {
+    const db = window.claude && window.claude.use ? await window.claude.use('db') : null;
+    if (!db) { setCodingPill('Shared coding unavailable here', false); return; }
+    state.db = db;
+    db.collection('coding').limit(1000).onSnapshot((snap) => {
+      const m = new Map(), docs = new Map();
+      snap.docs.forEach((d) => { const x = d.data() || {}; docs.set(d.id, x);
+        (x.entries || []).forEach((e) => m.set(E.codingKey(x.code, e.text), { unit: e.unit || '', csi: e.csi || '', mnl: e.mnl || '', cec: e.cec || '' })); });
+      state.coding = m; state.codingDocs = docs;
+      const n = [...m.values()].filter((e) => e.csi || e.mnl || e.cec || e.unit).length;
+      setCodingPill(`Shared coding: ${n.toLocaleString('en-US')} services coded`, true);
+      if (!$('view-coding').hidden) renderCoding();
+    }, () => setCodingPill('Shared coding could not be read', false));
+  } catch (e) { setCodingPill('Shared coding unavailable here', false); }
+}
+async function saveCoding(svc, text, field, value) {
+  if (!state.db) throw new Error('Shared coding is not available in this view.');
+  const ref = state.db.doc('coding/' + docId(svc));
+  const snap = await ref.get();
+  const cur = snap.exists ? (snap.data() || {}) : { code: svc, entries: [] };
+  const entries = (cur.entries || []).map((x) => ({ ...x }));  /* stored entries come back frozen */ let e = entries.find((x) => x.text === text);
+  if (!e) { e = { text }; entries.push(e); }
+  e[field] = value; e.at = Date.now();
+  await ref.set({ code: svc, entries });
+}
+async function initDownloads() {
+  try { state.downloads = window.claude && window.claude.use ? await window.claude.use('downloads') : null; } catch (e) { state.downloads = null; }
+  $('dot-dl').className = 'dot ' + (state.downloads ? 'on' : 'off');
+  $('txt-dl').textContent = state.downloads ? 'Excel download: ready' : 'Excel download: open this page inside claude.ai';
+}
+initDb(); initDownloads();
+
+// ---------------------------------------------------------------- files
+const drop = $('drop'), fileIn = $('file');
+drop.addEventListener('click', () => fileIn.click());
+drop.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileIn.click(); } });
+['dragenter', 'dragover'].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', (e) => handleFiles([...e.dataTransfer.files]));
+fileIn.addEventListener('change', () => { handleFiles([...fileIn.files]); fileIn.value = ''; });
+
+function setStatus(t, pct) { $('status').textContent = t || ''; const p = $('prog'); if (pct == null) { p.hidden = true; } else { p.hidden = false; $('prog-bar').style.width = Math.max(3, Math.min(100, pct)) + '%'; } }
+function message(where, kind, text) { const d = document.createElement('div'); d.className = 'msg ' + kind; d.textContent = text; $(where).appendChild(d); }
+
+async function handleFiles(list) {
+  if (!libsReady()) { message('msgs', 'bad', 'The spreadsheet tools did not load. Check the connection and reload the page.'); return; }
+  $('msgs').textContent = '';
+  for (const f of list) {
+    setStatus(`Reading ${f.name}…`, 10); await tick();
+    try {
+      const buf = await f.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array', dense: true, cellHTML: false, cellText: false, cellFormula: false });
+      if (wb.SheetNames.includes('_History') || wb.SheetNames.includes('_Lines')) {
+        const by = {}; for (const n of ['_History', '_Lines', '_Rows', 'Service Coding', 'Service Monthly']) if (wb.Sheets[n]) by[n] = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: '' });
+        state.prev = E.readPrevious(by); state.files.prevName = f.name;
+        const last = state.prev.loads[state.prev.loads.length - 1];
+        setSlot('prev', f.name, `${state.prev.project || 'Report'} · load ${last ? last.no : '?'} · ${state.prev.lines.size.toLocaleString('en-US')} lines · data to ${last && last.dataDate ? fmtD(last.dataDate) : '?'}`);
+        continue;
+      }
+      const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
+      const kind = E.detectKind(aoa);
+      if (kind === 'prog') { state.files.prog = aoa; state.files.progName = f.name;
+        const plants = new Set(aoa.slice(1, 200).map((r) => String(r[0]).trim()).filter((x) => x && !x.includes('(')));
+        setSlot('prog', f.name, `${[...plants].join(', ') || '?'} · ${(aoa.length - 1).toLocaleString('en-US')} rows incl. SAP subtotals`); }
+      else if (kind === 'serv') { state.files.serv = aoa; state.files.servName = f.name; setSlot('serv', f.name, `${(aoa.length - 1).toLocaleString('en-US')} rows`); }
+      else message('msgs', 'warn', `${f.name} is not a ZSCPROG01 or ZSCSRV1 export, or a report from this page. Check that the first sheet has SAP's column headers in row 1.`);
+    } catch (e) { message('msgs', 'bad', `${f.name} could not be read: ${e.message || e}`); }
+  }
+  setStatus('');
+  $('btn-build').disabled = !(state.files.prog && state.files.serv);
+  $('btn-clear').disabled = !(state.files.prog || state.files.serv || state.prev);
+  if (state.prev && state.files.prog) {
+    const plants = new Set(state.files.prog.slice(1, 200).map((r) => String(r[0]).trim()).filter((x) => x && !x.includes('(')));
+    if (state.prev.project && plants.size && !plants.has(state.prev.project)) message('msgs', 'warn', `The last report is for ${state.prev.project}, but the certificates are for ${[...plants].join(', ')}. The Changes sheet would compare two different projects.`);
+  }
+}
+// report month: the months found in the certificates, newest first; the cut date is the month's last day (UTC – never the PC's local time)
+function fillMonths(aoa) {
+  const sel = $('opt-month'), ms = new Set();
+  for (const r of aoa.slice(1)) if (String(r[4]).trim() && typeof r[3] === 'number') { const d = new Date(Math.round((r[3] - 25569) * 86400000)); ms.add(d.getUTCFullYear() * 100 + d.getUTCMonth() + 1); }
+  const list = [...ms].sort((a, b) => b - a);
+  sel.innerHTML = list.map((m) => { const last = new Date(Date.UTC(Math.floor(m / 100), m % 100, 0));
+    return `<option value="${m}">${last.toLocaleString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' })} · cut ${last.toISOString().slice(0, 10)}</option>`; }).join('');
+  sel.disabled = !list.length;
+}
+function setSlot(which, name, meta) { $('slot-' + which).classList.add('ok'); $('name-' + which).textContent = name; $('meta-' + which).textContent = meta; }
+$('btn-clear').addEventListener('click', () => {
+  state.files = {}; state.prev = null; state.analysis = null;
+  [['prog', 'Certificates — required', 'Subcontractor progress / certificate lines'], ['serv', 'PO service lines — required', 'Units, material groups, contract qty'], ['prev', "Last month's report — optional", 'Brings load history, changes and coding forward']]
+    .forEach(([w, n, m]) => { $('slot-' + w).classList.remove('ok'); $('name-' + w).textContent = n; $('meta-' + w).textContent = m; });
+  $('btn-build').disabled = true; $('btn-clear').disabled = true; $('msgs').textContent = ''; $('results').hidden = true; $('empty').hidden = false; setStatus('');
+});
+
+// ---------------------------------------------------------------- build
+function mergedCoding() {
+  const m = new Map();
+  if (state.prev) for (const [k, v] of state.prev.coding) if (v.csi || v.mnl || v.cec || (v.unit && /Your entry/.test(v.unitSrc || ''))) m.set(k, { unit: /Your entry/.test(v.unitSrc || '') ? v.unit : '', csi: v.csi, mnl: v.mnl, cec: v.cec });
+  for (const [k, v] of state.coding) { const o = m.get(k) || {}; m.set(k, { unit: v.unit || o.unit || '', csi: v.csi || o.csi || '', mnl: v.mnl || o.mnl || '', cec: v.cec || o.cec || '' }); }
+  return m;
+}
+function analyseNow() {
+  return E.analyse(state.files.prog, state.files.serv, { coding: mergedCoding(), history: state.prev, pendingInMonth: $('opt-pending').checked,
+    files: { prog: state.files.progName, serv: state.files.servName } });
+}
+$('btn-build').addEventListener('click', async () => {
+  $('msgs').textContent = ''; $('btn-build').disabled = true; setStatus('Applying the rules…', 40); await tick();
+  try {
+    state.analysis = analyseNow(); state.summary = E.summarize(state.analysis);
+    setStatus('Drawing the overview…', 80); await tick();
+    resetPrepared(); $('dl-status').textContent = '';
+    renderAll(); $('empty').hidden = true; $('results').hidden = false; selectTab('overview');
+    setStatus(`Built from ${state.analysis.det.length.toLocaleString('en-US')} certificate lines.`);
+    state.summary.warnings.forEach((w) => message('msgs', 'warn', w));
+  } catch (e) { setStatus(''); message('msgs', 'bad', e.message || String(e)); }
+  $('btn-build').disabled = false;
+});
+// Two steps so the save runs straight from its own click: Prepare builds the file, Save hands it over.
+let prepared = null;   // { name, blob, size }
+async function getDownloads() {
+  if (state.downloads) return state.downloads;
+  if (!(window.claude && window.claude.use)) return null;
+  try { state.downloads = await window.claude.use('downloads'); } catch (e) { state.downloads = null; }
+  return state.downloads;
+}
+function resetPrepared() { prepared = null; $('btn-download').textContent = 'Prepare Excel report'; }
+$('btn-download').addEventListener('click', async () => {
+  const st = $('dl-status'); const b = $('btn-download');
+  if (!prepared) {
+    b.disabled = true;
+    try {
+      const A = analyseNow();
+      const buf = await E.buildWorkbook(A, { ExcelJS, JSZip }, async (what) => { st.textContent = `Building the workbook: ${what}…`; await tick(); });
+      const name = `${A.PLANT}_service_report_load${A.loadNo}_${fmtD(A.dataDate)}.xlsx`;
+      prepared = { name, blob: new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), size: buf.length };
+      b.textContent = `Save Excel file (${(prepared.size / 1048576).toFixed(1)} MB)`;
+      st.textContent = `${name} is ready. Click Save to download it.`;
+    } catch (e) { st.textContent = `The workbook could not be built: ${(e && e.message) || e}`; }
+    b.disabled = false; return;
+  }
+  // step 2: save, directly from this click
+  b.disabled = true;
+  try {
+    const dl = await getDownloads();
+    if (!dl) {
+      let why = '';
+      try { const perms = window.claude && window.claude.use ? await window.claude.use('permissions') : null; if (perms) why = ' (download permission: ' + (await perms.state('downloads')) + ')'; } catch (e) {}
+      throw Object.assign(new Error('Saving files only works when this page is open inside claude.ai – open it from your Artifacts list, not as a separate browser tab.' + why), { code: 'unavailable' });
+    }
+    st.textContent = 'Confirm the download in the dialog…';
+    const res = await dl.save({ filename: prepared.name, data: prepared.blob });
+    st.textContent = res && res.status === 'delivered' ? `Sent ${prepared.name}.` : `Saved ${prepared.name}. Next month, drop it here together with the new SAP files.`;
+  } catch (e) {
+    const code = e && e.code;
+    st.textContent = code === 'declined' ? 'Download cancelled. Click Save to try again.'
+      : code === 'rate_limited' ? 'A download dialog is already open. Finish it, then click Save again.'
+      : code === 'too_large' ? 'The file is too large for this device. Try the desktop browser.'
+      : `The file could not be saved${code ? ' (' + code + ')' : ''}: ${(e && e.message) || e}`;
+  }
+  b.disabled = false;
+});
+// ---------------------------------------------------------------- tabs
+function setFold(folded) {
+  $('layout').classList.toggle('folded', folded); $('wrap').classList.toggle('wide', folded);
+  $('btn-fold').setAttribute('aria-expanded', String(!folded)); $('btn-unfold').setAttribute('aria-expanded', String(!folded));
+  try { localStorage.setItem('scr.folded', folded ? '1' : '0'); } catch (e) {}
+}
+$('btn-fold').addEventListener('click', () => setFold(true));
+$('btn-unfold').addEventListener('click', () => setFold(false));
+function selectTab(name) {
+  if (name === 'coding') setFold(true);   // coding needs the width; the strip brings the panel back
+  for (const t of ['overview', 'changes', 'coding', 'checks']) { const on = t === name; $('tab-' + t).setAttribute('aria-selected', on); $('view-' + t).hidden = !on; }
+  if (name === 'coding') renderCoding();
+}
+for (const t of ['overview', 'changes', 'coding', 'checks']) $('tab-' + t).addEventListener('click', () => selectTab(t));
+
+// ---------------------------------------------------------------- render
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const series = () => ['--s1', '--s2', '--s3', '--s4', '--s5', '--s6', '--s7', '--s8'].map(cssVar);
+function baseOpts(extra) {
+  const grid = cssVar('--chart-grid'), text = cssVar('--chart-text');
+  Chart.defaults.font.family = '"IBM Plex Sans","IBM Plex Sans Arabic",system-ui,sans-serif'; Chart.defaults.color = text;
+  return Object.assign({ responsive: true, maintainAspectRatio: false, animation: false,
+    plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false } },
+    scales: { x: { grid: { display: false }, ticks: { color: text } }, y: { grid: { color: grid }, border: { display: false }, ticks: { color: text } } } }, extra || {});
+}
+function chart(id, cfg) { if (state.charts[id]) state.charts[id].destroy(); state.charts[id] = new Chart($(id), cfg); }
+function renderAll() {
+  const A = state.analysis, S = state.summary, k = S.k;
+  const cutTxt = A.cutDate.toISOString().slice(0, 10), tot = k.total - k.pending;
+  $('ov-eyebrow').textContent = `${S.PLANT} · main profit centre ${S.MAINPC} · report month ${E.mlabel(A.CUT)} · cut date ${cutTxt} · load ${A.loadNo}`;
+  $('ov-title').textContent = `${fmtM(tot)} EGP to ${cutTxt} across ${k.subs} subcontractors and ${k.pos} POs`;
+  const kp = [['Total to cut date', tot, 'excl. VAT · opening + months', true], ['Approved since go-live', k.approved, pct(k.approved, tot)], ['Opening (pre go-live)', k.opening, pct(k.opening, tot)],
+    ['Pending – not in total', k.pending, `${fmtM(k.notApproved)} not approved · ${fmtM(k.afterCut)} after the cut`]];
+  if (k.lateLines) kp.push(['Added to reported months', k.late, `${k.lateLines} lines – see Detail`]);
+  kp.push(['Adjustments', k.adjustments, 'qty = amount ÷ net rate'], ['VAT certified', k.vat, ''], ['Subcontractors', k.subs, `${k.pos} POs`, false, true]);
+  if (k.otherPc) kp.push([`Other profit centres`, k.otherPc, `not ${S.MAINPC}`]);
+  if (k.splitAmt) kp.push(['Repeated on WBS splits', -k.splitAmt, `${k.splitLines} lines counted once`]);
+  $('kpis').innerHTML = kp.map(([l, v, s, lead, isCount]) => `<div class="kpi${lead ? ' lead' : ''}"><div class="l">${esc(l)}</div><div class="v">${isCount ? v : fmtM(v)}</div><div class="s">${esc(s || '')}</div></div>`).join('');
+  // monthly stacked chart
+  const col = series(); const top = S.tradeTot.slice(0, 7); const rest = S.tradeTot.slice(7);
+  const ds = top.map((t, i) => ({ label: t.name, data: t.byMonth, backgroundColor: col[i], borderColor: cssVar('--panel'), borderWidth: 1, borderRadius: 2 }));
+  if (rest.length) ds.push({ label: 'Other trades', data: S.months.map((_, j) => rest.reduce((a, t) => a + t.byMonth[j], 0)), backgroundColor: col[7], borderColor: cssVar('--panel'), borderWidth: 1 });
+  chart('ch-month', { type: 'bar', data: { labels: S.months.map(E.mlabel), datasets: ds }, options: baseOpts({ scales: { x: { stacked: true, grid: { display: false } }, y: { stacked: true, grid: { color: cssVar('--chart-grid') }, border: { display: false }, ticks: { callback: (v) => (v / 1e6).toFixed(0) + 'M' } } },
+    plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false, callbacks: { label: (c) => `${c.dataset.label}: ${fmtN(c.raw)}` } } } }) });
+  $('lg-month').innerHTML = ds.map((d) => `<span><i style="background:${d.backgroundColor}"></i>${esc(d.label)}</span>`).join('');
+  chart('ch-subs', { type: 'bar', data: { labels: S.tradeTot.map((t) => t.name), datasets: [{ data: S.tradeTot.map((t) => t.subs), backgroundColor: cssVar('--bar'), borderRadius: 3, barThickness: 14 }] },
+    options: baseOpts({ indexAxis: 'y', layout: { padding: { left: 6, right: 8 } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => `${c.raw} subcontractors` } } }, scales: { x: { grid: { color: cssVar('--chart-grid') }, ticks: { precision: 0 } }, y: { grid: { display: false }, ticks: { autoSkip: false, font: { size: 11 } }, afterFit: (sc) => { sc.width = Math.max(sc.width, 150); } } } }) });
+  chart('ch-active', { type: 'bar', data: { labels: S.omonths.map(E.mlabel), datasets: [{ data: S.activeByMonth, backgroundColor: cssVar('--bar'), borderRadius: 3 }] },
+    options: baseOpts({ plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => `${c.raw} active subcontractors` } } }, scales: { x: { grid: { display: false } }, y: { grid: { color: cssVar('--chart-grid') }, ticks: { precision: 0 } } } }) });
+  // trade table
+  $('tb-trade').innerHTML = `<thead><tr><th>Trade</th><th class="r">Opening</th><th class="r">Months</th><th class="r">Pending</th><th class="r">Total</th><th class="r">Share</th><th class="r">Subs</th></tr></thead><tbody>` +
+    S.tradeTot.map((t) => `<tr><td>${esc(t.name)}</td><td class="r num">${fmtN(t.opening)}</td><td class="r num">${fmtN(t.byMonth.reduce((a, b) => a + b, 0))}</td><td class="r num">${fmtN(t.pending)}</td><td class="r num">${fmtN(t.total)}</td><td class="r num">${pct(t.total, k.total)}</td><td class="r num">${t.subs}</td></tr>`).join('') +
+    `<tr class="tot"><td>Total</td><td class="r num">${fmtN(k.opening)}</td><td class="r num">${fmtN(S.tradeTot.reduce((a, t) => a + t.byMonth.reduce((x, y) => x + y, 0), 0))}</td><td class="r num">${fmtN(S.tradeTot.reduce((a, t) => a + t.pending, 0))}</td><td class="r num">${fmtN(k.total)}</td><td class="r num">100%</td><td class="r num">${k.subs}</td></tr></tbody>`;
+  $('tb-svc').innerHTML = `<thead><tr><th>Service</th><th>Service text</th><th>Unit</th><th>Trade</th><th class="r">Qty</th><th class="r">Avg rate</th><th class="r">Amount</th><th class="r">Share</th></tr></thead><tbody>` +
+    S.svcTot.map((s) => `<tr><td class="num">${esc(s.svc)}</td><td class="ar">${esc(s.text)}</td><td>${esc(s.unit || '')}</td><td>${esc(s.trade)}</td><td class="r num">${fmtN(s.qty, 2)}</td><td class="r num">${s.rate == null ? '' : fmtN(s.rate, 2)}</td><td class="r num">${fmtN(s.total)}</td><td class="r num">${pct(s.total, k.total)}</td></tr>`).join('') + '</tbody>';
+  renderChanges(); renderChecks();
+  const diff = A.gt == null ? null : A.gt - A.splitAmt - k.total;
+  $('control').innerHTML = `<b>FINAL CONTROL</b><span class="num">Certified ${fmtN(k.total)} = Opening ${fmtN(k.opening)} + Approved months ${fmtN(k.approved)} + Pending ${fmtN(k.pending)}</span>` +
+    `<span class="num ${diff != null && Math.abs(diff) < 0.01 ? 'ok' : 'bad'}">Report vs SAP (after WBS splits): ${diff == null ? 'footer not found' : fmtN(diff)}</span>`;
+}
+function pct(a, b) { return b ? (a / b * 100).toFixed(1) + '%' : ''; }
+function renderChanges() {
+  const A = state.analysis, S = state.summary;
+  $('tb-loads').innerHTML = `<thead><tr><th>Load</th><th>Cut date</th><th>File</th><th class="r">Lines</th><th class="r">Certified</th><th class="r">Pending</th></tr></thead><tbody>` +
+    S.loads.map((l, i) => `<tr${i === S.loads.length - 1 ? ' class="tot"' : ''}><td class="num">${l.no}</td><td class="num">${fmtD(l.dataDate)}</td><td>${esc(l.file || '')}</td><td class="r num">${fmtN(l.lines)}</td><td class="r num">${fmtN(l.total)}</td><td class="r num">${fmtN(l.pending)}</td></tr>`).join('') + '</tbody>';
+  chart('ch-loads', { type: 'bar', data: { labels: S.loads.map((l) => 'Load ' + l.no), datasets: [{ data: S.loads.map((l) => l.total), backgroundColor: cssVar('--bar'), borderRadius: 3 }] },
+    options: baseOpts({ plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => fmtN(c.raw) + ' EGP' } } }, scales: { x: { grid: { display: false } }, y: { grid: { color: cssVar('--chart-grid') }, ticks: { callback: (v) => (v / 1e6).toFixed(0) + 'M' } } } }) });
+  const c = S.changes;
+  const cls = { New: 'new', 'Amount changed': 'chg', 'Approved since last load': 'appr', Removed: 'rem' };
+  $('chg-kpis').innerHTML = Object.entries(c).map(([t, [n, v]]) => `<div class="kpi"><div class="l"><span class="chip ${cls[t]}">${esc(t)}</span></div><div class="v">${n.toLocaleString('en-US')}</div><div class="s">${t === 'Removed' ? 'lines gone from SAP' : fmtM(v) + ' EGP'}</div></div>`).join('');
+  if (!S.hasHistory) { $('chg-note').textContent = ''; $('tb-chg').innerHTML = '<tbody><tr><td class="muted">This is the first load. Next month, add this report next to the new SAP files and this view will list every new, changed, approved and removed line.</td></tr></tbody>'; return; }
+  const list = A.changes.slice().sort((a, b) => Math.abs(b.now - b.prev || b.now) - Math.abs(a.now - a.prev || a.now));
+  const shown = list.slice(0, 300);
+  $('chg-note').textContent = list.length > 300 ? `largest 300 of ${list.length.toLocaleString('en-US')} – the Excel report lists all` : `${list.length.toLocaleString('en-US')} lines`;
+  $('tb-chg').innerHTML = `<thead><tr><th>Change</th><th>PO</th><th>Supplier</th><th>Service</th><th>Service text</th><th class="r">Before</th><th class="r">Now</th><th class="r">Difference</th></tr></thead><tbody>` +
+    shown.map((x) => { const r = x.r || {}; const p = x.p || {}; return `<tr><td><span class="chip ${cls[x.type]}">${esc(x.type)}</span></td><td class="num">${esc(r.po || p.po)}</td><td class="ar">${esc(r.supName || p.sup)}</td><td class="num">${esc(r.svc || p.svc)}</td><td class="ar">${esc(r.text || p.text)}</td><td class="r num">${fmtN(x.prev)}</td><td class="r num">${fmtN(x.now)}</td><td class="r num">${fmtN(x.now - x.prev)}</td></tr>`; }).join('') + '</tbody>';
+}
+function renderChecks() {
+  const A = state.analysis, k = state.summary.k;
+  const rows = [['SAP grand total (file footer)', A.gt == null ? 'not found' : fmtN(A.gt, 2)], ['Less: repeated on WBS-split lines', fmtN(-A.splitAmt, 2)], ['Certified cost in this report', fmtN(k.total, 2)],
+    ['Difference', A.gt == null ? '–' : fmtN(A.gt - A.splitAmt - k.total, 2)], ['Certificate rows in file (excl. SAP subtotals)', fmtN(A.RAWN)], ['Lines after WBS splits counted once', fmtN(A.det.length)],
+    ['Service rows in the report', fmtN(A.keyTuples.length)], ['Adjustment lines (qty = amount ÷ net rate)', fmtN(A.det.filter((r) => r.isadj).length)], ['Qty-only lines excluded', fmtN(A.det.filter((r) => r.isqo).length)],
+    ['Lines on equivalent qty (paid % ≠ 100 etc.)', fmtN(A.det.filter((r) => r.equiv).length)], ['Lines not matched to a ZSCSRV1 service line', fmtN(A.det.filter((r) => !r.match).length)], ['Services without a unit', fmtN(A.services.filter((s) => !s.unit).length)]];
+  $('tb-checks').innerHTML = '<tbody>' + rows.map(([a, b]) => `<tr><td>${esc(a)}</td><td class="r num">${esc(b)}</td></tr>`).join('') + '</tbody>';
+  $('checks-msgs').textContent = '';
+  const diff = A.gt == null ? 0 : Math.abs(A.gt - A.splitAmt - k.total);
+  message('checks-msgs', diff < 0.01 ? 'good' : 'bad', diff < 0.01 ? 'The report total matches the SAP footer once repeated WBS rows are taken out.' : 'The report total does not match the SAP footer. Check the file for manual edits.');
+  if (A.keyConflicts) message('checks-msgs', 'warn', `${A.keyConflicts} rows share a line ID but carry different amounts; they were kept as separate lines.`);
+}
+
+// ---------------------------------------------------------------- coding editor
+let codingFilter = '';
+$('cd-search').addEventListener('input', (e) => { codingFilter = e.target.value.trim().toLowerCase(); renderCoding(); });
+$('cd-missing').addEventListener('change', renderCoding);
+$('opt-pending').addEventListener('change', () => { if (prepared) { resetPrepared(); $('dl-status').textContent = 'Option changed – prepare the Excel report again.'; } });
+function renderCoding() {
+  const A = state.analysis; if (!A) return;
+  const only = $('cd-missing').checked;
+  const rows = A.services.map((s) => ({ s, c: state.coding.get(s.key) || {} }))
+    .filter(({ s, c }) => (!codingFilter || (s.svc + ' ' + s.text).toLowerCase().includes(codingFilter)) && (!only || !(c.csi || c.mnl || c.cec)));
+  const coded = A.services.filter((s) => { const c = state.coding.get(s.key) || {}; return c.csi || c.mnl || c.cec; }).length;
+  $('cd-count').textContent = `${coded} of ${A.services.length} services in this load have codes`;
+  const ro = !state.db;
+  $('cd-status').textContent = ro ? 'Shared coding is not available in this view, so the boxes are read-only.' : '';
+  $('tb-coding').innerHTML = `<thead><tr><th>Service</th><th>Service text</th><th>SAP unit</th><th>Unit</th><th>CSI</th><th>MNL</th><th>Cost element</th></tr></thead><tbody>` +
+    rows.slice(0, 400).map(({ s, c }) => `<tr data-svc="${esc(s.svc)}" data-text="${esc(s.text)}"><td class="num">${esc(s.svc)}</td><td class="ar">${esc(s.text)}</td><td class="num">${esc(s.sapUnit || '')}</td>` +
+      ['unit', 'csi', 'mnl', 'cec'].map((f) => `<td><input class="code" data-f="${f}" value="${esc(c[f] || '')}" aria-label="${f.toUpperCase()} for ${esc(s.svc)}"${ro ? ' readonly' : ''}></td>`).join('') + '</tr>').join('') +
+    (rows.length > 400 ? `<tr><td colspan="7" class="muted">${rows.length - 400} more – narrow the filter.</td></tr>` : '') + '</tbody>';
+  const missingFromShared = state.prev ? [...state.prev.coding].filter(([k, v]) => (v.csi || v.mnl || v.cec) && !(state.coding.get(k) || {}).csi && !(state.coding.get(k) || {}).mnl && !(state.coding.get(k) || {}).cec) : [];
+  $('btn-import').hidden = ro || !missingFromShared.length;
+  $('btn-import').textContent = `Add ${missingFromShared.length} codes from last report`;
+}
+$('tb-coding').addEventListener('change', async (e) => {
+  const inp = e.target; if (!inp.classList.contains('code')) return;
+  resetPrepared();
+  const tr = inp.closest('tr'); const svc = tr.dataset.svc, text = tr.dataset.text, f = inp.dataset.f, v = inp.value.trim();
+  inp.classList.remove('saved'); $('cd-status').textContent = `Saving ${svc}…`;
+  try { await saveCoding(svc, text, f, v); inp.classList.add('saved'); $('cd-status').textContent = `Saved ${f.toUpperCase()} for ${svc}.`; }
+  catch (err) { $('cd-status').textContent = (err && err.code === 'invalid_argument') ? 'You can view the shared coding but not change it. Ask the owner for edit access.' : `Not saved: ${err.message || err}`; }
+});
+$('btn-import').addEventListener('click', async () => {
+  const b = $('btn-import'); b.disabled = true; let n = 0;
+  const todo = [...state.prev.coding].filter(([k, v]) => (v.csi || v.mnl || v.cec) && !((state.coding.get(k) || {}).csi || (state.coding.get(k) || {}).mnl || (state.coding.get(k) || {}).cec));
+  const byCode = new Map(); for (const [k, v] of todo) { const [svc, text] = k.split('\u0001'); if (!byCode.has(svc)) byCode.set(svc, []); byCode.get(svc).push({ text, v }); }
+  try {
+    for (const [svc, items] of byCode) {
+      const ref = state.db.doc('coding/' + docId(svc)); const snap = await ref.get();
+      const cur = snap.exists ? (snap.data() || {}) : { code: svc, entries: [] }; const entries = (cur.entries || []).map((x) => ({ ...x }));  /* stored entries come back frozen */
+      for (const { text, v } of items) { let e = entries.find((x) => x.text === text); if (!e) { e = { text }; entries.push(e); }
+        for (const f of ['csi', 'mnl', 'cec']) if (v[f] && !e[f]) e[f] = v[f]; e.at = Date.now(); n++; }
+      await ref.set({ code: svc, entries }); $('cd-status').textContent = `Added codes for ${n} services…`;
+    }
+    $('cd-status').textContent = `Added codes for ${n} services from the last report.`;
+  } catch (err) { $('cd-status').textContent = `Stopped after ${n}: ${err.message || err}`; }
+  b.disabled = false;
+});
+
+// redraw charts when the theme changes
+try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (state.analysis) renderAll(); }); } catch (e) {}
+new MutationObserver(() => { if (state.analysis) renderAll(); }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+window.addEventListener('load', showLibs);
+})();
+</script>

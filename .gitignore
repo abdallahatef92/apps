@@ -9,3 +9,7 @@ release/
 *.log
 .vite/
 *.tsbuildinfo
+
+# SAP extracts and generated reports stay out of the repository
+*.xlsx
+tools/subcontract-report/dist/
