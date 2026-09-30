@@ -14,7 +14,7 @@ w = openpyxl.load_workbook(d + '/o/b.xlsx', data_only=True); sm = w['Service Mon
 r1, r2, r4 = [c.value for c in sm[1]], [c.value for c in sm[2]], [c.value for c in sm[4]]
 after = [i for i, v in enumerate(r4) if isinstance(v, str) and v.endswith('after cut')]
 got_month = sum(r1[i + 2] or 0 for i in after); pend = r1[r4.index('Pending – not in Total') + 2]
-bad = [v for v in r2[11:] if v not in (None, '', '✔')]; diff = w['Notes'].cell(40, 2).value
+bad = [v for v in r2[11:] if v not in (None, '', '✔')] + [v for v in [c.value for c in w['Service Quarterly'][2]][11:] if v not in (None, '', '✔')]; diff = w['Notes'].cell(40, 2).value
 print(f'included {n} lines · after-cut blocks {got_month:,.2f} · pending {pend:,.2f} · checks not ✔ {bad} · notes difference {diff}')
 ok = n > 0 and abs(got_month - exp_month) < 0.01 and abs(pend - exp_pend) < 0.01 and not bad and diff is not None and abs(diff) < 0.5
 sys.exit(0 if ok else 1)

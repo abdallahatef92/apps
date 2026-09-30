@@ -19,14 +19,13 @@ and downloads the Excel report. Nothing is uploaded; the libraries are embedded 
   shown in its own block, never in Total (Detail → *Pending reason*).
 - **Include in this report** (Detail, drop-down on after-cut lines): picking *Include* takes the line out of Pending
   into its month. Service Monthly has a block for every month in the data – after-cut months are red and fill only with
-  included lines – and Package Monthly, By Supplier and the Dashboard follow live. Service Quarterly holds values, so its
-  row 2 check shows the difference until the report is rebuilt.
+  included lines – and Service Quarterly, Package Monthly, By Supplier and the Dashboard follow live.
 - **Late lines** are flagged, never moved: *Added to a reported month* / *Approved after the month was reported*
   (Detail → *Reported-month flag*), from last month's report.
 - **Service Monthly** and **Service Quarterly** are flat tables (no merged cells, no header or blank rows between data):
   row 1 TOTAL (SUBTOTAL), row 2 check against Detail (✔ or the difference), row 3 year, row 4 month / quarter,
   row 5 column names. Identity (11) → Opening → Qty / Rate / Amount per period → Total → Pending → reference columns.
-  Service Monthly figures are live SUMIFS on Detail; Service Quarterly figures are values with a live check per quarter.
+  Service Monthly and Service Quarterly figures are live SUMIFS on Detail; row 2 re-adds every block from Detail.
   Package / MNL / Cost element / Unit are live lookups on Service Coding on both.
 - **Per-service totals** (Service Coding → Total amount) are values; Dashboard → Final control checks them against Detail.
 - **Package Monthly** sums Service Monthly by current package (live); the Dashboard reads it.

@@ -532,7 +532,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     dt.ws.addRows(dtRows);
     { // after-cut lines: a drop-down lets the user count the line in this report, in its own month (Service Monthly adapts live)
       const ic = cols.length;
-      dt.ws.getCell(1, ic).note = `Lines dated after the cut date (${A.cutDate.toISOString().slice(0, 10)}) are Pending. Pick "Include" to count one in this report: it leaves Pending and joins its month on Service Monthly, Package Monthly and the Dashboard at once. Service Quarterly holds values – its row 2 check shows the difference until the report is rebuilt. Not-approved lines stay Pending.`;
+      dt.ws.getCell(1, ic).note = `Lines dated after the cut date (${A.cutDate.toISOString().slice(0, 10)}) are Pending. Pick "Include" to count one in this report: it leaves Pending and joins its month on Service Monthly, Service Quarterly, Package Monthly and the Dashboard at once. Not-approved lines stay Pending.`;
       sorted.forEach((r, n) => { if (!(r.approved && r.month > A.CUT)) return; const x = dt.ws.getCell(n + 2, ic);
         x.dataValidation = { type: 'list', allowBlank: true, formulae: ['"Include,Not included"'] }; }); }
     { const qc = cols.indexOf('Qty check') + 1; dt.ws.getCell(1, qc).note = 'Adjustment lines only. The report qty (amount ÷ net rate) is kept; "Check" means the PO service line has no normal qty to net it against, or the adjustment takes that line\'s qty below zero – usually a deduction booked on a placeholder-priced line. Review the qty before using it.';
@@ -554,7 +554,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     // ---------------- Service Monthly / Service Quarterly: one flat table each (same rows, same order), laid out like Material Monthly.
     //   rows 1 TOTAL (SUBTOTAL, follows filters) · 2 check against Detail · 3 year · 4 month / quarter · 5 column names · data from 6
     //   columns Identity (11) → Opening → one Qty / Rate / Amount block per period → Total (Price, Qty, Avg rate, Amount) → Pending → reference (folded)
-    //   Service Monthly figures are live SUMIFS on Detail; Service Quarterly figures are values with a live check per quarter.
+    //   Service Monthly and Service Quarterly figures are live SUMIFS on Detail (by Row ID and bucket / quarter range).
     //   Package / MNL / Cost element / Unit are live lookups on both, so re-coding changes a row where it stands.
     await say('Service Monthly');
     const mgrp = new Map(), chk = new Set();
@@ -574,7 +574,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     const AMTF = '#,##0;[Red]-#,##0;;@', QTYF = '#,##0.00;[Red]-#,##0.00;;@', R1 = 6, RN = R1 + SM_ORDER.length - 1;
     const DTR = (n) => `Detail!$${C[n]}$2:$${C[n]}$${NR}`;
     // periods: [{ label, year, fill, keys: [buckets], crit: SUMIFS criteria on Detail → Report bucket }]
-    // live = true (Service Monthly): every Qty / Amount cell is a SUMIFS on Detail by Row ID and bucket; otherwise values (Service Quarterly)
+    // live = true: every Qty / Amount cell is a SUMIFS on Detail by Row ID and bucket; otherwise values
     function flatSheet(sh, periods, what, live) {
       const nI = ID.length, O0 = nI + 1, P0 = O0 + 3, T0 = P0 + 3 * periods.length, PE = T0 + 4, RF = PE + 3, LASTC = RF + REF.length - 1;
       const rc = (n) => RF + REF.indexOf(n);
@@ -677,12 +677,12 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     SM_COLS = { ...MS, R1, RN }; SM_TOTAL = `SUM('Service Monthly'!${L(MS.T0 + 3)}${R1}:${L(MS.T0 + 3)}${RN})`; SM_PEND = `SUM('Service Monthly'!${L(MS.PE + 2)}${R1}:${L(MS.PE + 2)}${RN})`;
     S['Service Monthly'].ws.getCell(5, 1).note = 'Permanent: a row keeps its Row ID in every later report, whatever the sort order. Detail → Row key carries the same ID.';
     S['Service Monthly'].ws.getCell(4, MS.PE).note = `Pending = dated after the cut date (${A.cutDate.toISOString().slice(0, 10)}) or not approved (Detail → Pending reason) – not in Total. A line picked as "Include" on Detail → Include in this report moves into its month block (red "after cut" months) at once.`;
-    // quarters (Q1 = Jan–Mar) from the same rows; every figure is a value, row 2 re-adds each quarter from Detail
+    // quarters (Q1 = Jan–Mar) from the same rows; live SUMIFS over the quarter's months, row 2 re-adds each quarter from Detail
     await say('Service Quarterly');
     const qk = (m) => yr(m) * 10 + Math.ceil((m % 100) / 3), qs = [...new Set(A.allMonths.map(qk))];
     const QS = flatSheet(S['Service Quarterly'], qs.map((q, i) => { const ms = A.allMonths.filter((m) => qk(m) === q), y = Math.floor(q / 10), n = q % 10, lo = y * 100 + 3 * n - 2, hi = y * 100 + 3 * n;
       const after = ms.every((m) => m > A.CUT);
-      return { label: `Q${n}` + (ms.includes(A.CUT) ? ' ◂' : after ? ' · after cut' : ''), year: y, keys: ms, crit: [`">=${lo}",${DTR('Report bucket')},"<=${hi}"`], fill: after ? '8E3B37' : (i % 2 ? '1F3E6B' : '0F2A52') }; }), 'every quarter');
+      return { label: `Q${n}` + (ms.includes(A.CUT) ? ' ◂' : after ? ' · after cut' : ''), year: y, keys: ms, crit: [`">=${lo}",${DTR('Report bucket')},"<=${hi}"`], fill: after ? '8E3B37' : (i % 2 ? '1F3E6B' : '0F2A52') }; }), 'every quarter', true);
     PM.sq = `SUM('Service Quarterly'!${L(QS.T0 + 3)}${R1}:${L(QS.T0 + 3)}${RN})`;
 
     // ---------------- Package Monthly: live – the amounts on Service Monthly summed by their current Package. The Dashboard reads this sheet.
@@ -1180,8 +1180,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     ws.set(n0 + 5, 1, 'Service Monthly Total + Pending', { font: st.F }); ws.set(n0 + 5, 2, `=${SM_TOTAL}+B${n0 + 4}`);
     ws.set(n0 + 6, 1, 'Service Quarterly Total + Pending', { font: st.F }); ws.set(n0 + 6, 2, `=${PM.sq}+B${n0 + 4}`);
     ws.set(n0 + 7, 1, 'Dashboard work package table (= Package Monthly) + Pending', { font: st.F }); ws.set(n0 + 7, 2, `=${DASH_TOTAL}+B${n0 + 4}`);
-    ws.set(n0 + 6, 1, 'Service Quarterly Total + Pending (values as built – differs only after lines are included on Detail; rebuild to refresh)', { font: st.F });
-    ws.set(n0 + 8, 1, 'Largest difference (must be 0)', { font: st.B }); ws.set(n0 + 8, 2, `=MAX(ABS(B${n0 + 3}-B${n0 + 2}),ABS(B${n0 + 5}-B${n0 + 2}),ABS(B${n0 + 7}-B${n0 + 2}),ABS('Package Monthly'!${PM.totCol}${PM.tot}+'Package Monthly'!${PM.pendCol}${PM.tot}-B${n0 + 2}))`);
+    ws.set(n0 + 8, 1, 'Largest difference (must be 0)', { font: st.B }); ws.set(n0 + 8, 2, `=MAX(ABS(B${n0 + 3}-B${n0 + 2}),ABS(B${n0 + 5}-B${n0 + 2}),ABS(B${n0 + 6}-B${n0 + 2}),ABS(B${n0 + 7}-B${n0 + 2}),ABS('Package Monthly'!${PM.totCol}${PM.tot}+'Package Monthly'!${PM.pendCol}${PM.tot}-B${n0 + 2}))`);
     for (let r = n0; r <= n0 + 8; r++) ws.ws.getCell(r, 2).numFmt = NUM;
     ws.width(1, 130); ws.width(2, 18);
 

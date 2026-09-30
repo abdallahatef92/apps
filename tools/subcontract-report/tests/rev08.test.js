@@ -68,7 +68,8 @@ const sum = (rs) => rs.reduce((s, r) => s + r.amt, 0);
   assert.ok(!(w.Sheets['Service Monthly']['!merges'] || []).length, 'no merged cells');
   const sq = X.utils.sheet_to_json(w.Sheets['Service Quarterly'], { header: 1, raw: true, defval: '' });
   const q3 = sq[3].indexOf('Q3 ◂') + 2, qd = sq.slice(5).filter((r) => /^TRAZ-\d{5}$/.test(r[0]));
-  near(qd.reduce((s, r) => s + (+r[q3] || 0), 0), sum(A8.det.filter((r) => [202607, 202608].includes(r.bucket))), 'SQ Q3 = Jul + Aug');
+  { const sqWs = w.Sheets['Service Quarterly'], f = (sqWs[X.utils.encode_cell({ r: 5, c: q3 })] || {}).f || '';   // live: Q3 = SUMIFS over Jul–Sep for the row
+    assert.ok(/^SUMIFS\(Detail!.*,\$A6,Detail!.*,">=202607",Detail!.*,"<=202609"\)$/.test(f), 'SQ Q3 is a live SUMIFS: ' + f); }
   // full recalculation in LibreOffice (when installed): every check cell ✔ and the Notes reconciliation 0
   if (require('child_process').spawnSync('which', ['soffice']).status === 0) {
     const tmp = require('path').join(require('os').tmpdir(), `rev08_${process.pid}.xlsx`); require('fs').writeFileSync(tmp, Buffer.from(buf));
