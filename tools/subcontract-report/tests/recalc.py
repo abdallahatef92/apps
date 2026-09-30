@@ -23,4 +23,15 @@ db = wb['Dashboard']
 for r in db.iter_rows(min_row=7, max_row=9, values_only=True): print('  tiles', [v for v in r if v not in (None, '')])
 for r in db.iter_rows(values_only=True):
     if r[1] and str(r[1]).startswith('FINAL'): print('  ', r[2])
+if 'Invoice Matrix' in wb.sheetnames:
+    im = wb['Invoice Matrix']; nck = 0
+    for row in im.iter_rows(values_only=True):
+        a = str(row[0] or '')
+        if a.startswith('Check'):
+            vals = [v for v in row[3:] if v not in (None, '')]; nck += len(vals); bad = [v for v in vals if v != '✔']
+            print(f'  IM {a}: {len(vals)} checks, not ✔: {bad[:8]}')
+            if bad or not vals: fails.append('Invoice Matrix ' + a)
+        if row[-1] is not None and (a in ('All invoices', 'In this report') or a.startswith('Excluded (')): print('  IM', a, '=', row[-1])
+    print('  IM header', im.cell(2, 4).value)
+    if not nck: fails.append('Invoice Matrix checks missing')
 if fails: print('FAILED:', fails); sys.exit(1)

@@ -332,11 +332,19 @@
   const BRAND = '1F3E6B';   // single-series charts
   const GOLDLINE = { style: 'thin', color: { argb: 'FFC8A45C' } };
   // tab groups: log / file history & transactions / reports
-  const TAB_GROUPS = [['0F2A52', ['Dashboard', 'Service Monthly', 'Service Quarterly', 'Package Monthly', 'Service Coding']], ['C8A45C', ['Changes', 'Detail']],
+  const TAB_GROUPS = [['0F2A52', ['Dashboard', 'Invoice Matrix', 'Service Monthly', 'Service Quarterly', 'Package Monthly', 'Service Coding']], ['C8A45C', ['Changes', 'Detail']],
     ['4A6FA5', ['PO Register', 'By Supplier', 'Subcontractor x Trade', 'Subcontractors over time', 'Qty Reconciliation', 'Coding', 'Notes']]];
   const NOTES_RECON_ROW = 32;   // fixed so the Dashboard control strip can point at it
   const PAL = ['2A78D6', 'EB6834', '1BAF7A', 'EDA100', 'E87BA4', '008300', '4A3AA7', 'A6A6A0'];
 
+  // invoices = PO + Invoice Serial; every line of one invoice shares its date and approval in SAP
+  function groupInvoices(det) {
+    const m = new Map();
+    for (const r of det) { const k = r.po + '|' + r.serial; let v = m.get(k);
+      if (!v) m.set(k, (v = { po: r.po, serial: r.serial, supCode: r.supCode, month: r.month, date: +r.dateObj, dateObj: r.dateObj, amt: 0, lines: 0, approved: true, opening: true, afterCut: false }));
+      v.amt += r.amt; v.lines++; if (!r.approved) v.approved = false; if (!r.initial) v.opening = false; if (r.pendWhy === 'After cut date') v.afterCut = true; }
+    return m;
+  }
   function makeSheetApi(ws) {
     return {
       ws,
@@ -433,6 +441,11 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       const ext = x.lastIndexOf('<extLst'), pos = at.length ? Math.min(...at) : (ext > x.lastIndexOf('</conditionalFormatting>') && ext > 0 ? ext : x.lastIndexOf('</worksheet>'));
       z.file(name, x.slice(0, pos) + tag + x.slice(pos));
     }
+    // Invoice Matrix colours: a red or grey rule stops the green one under it (ExcelJS does not write stopIfTrue)
+    for (const name of Object.keys(z.files).filter((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n))) {
+      const x = await z.file(name).async('string'); if (!x.includes('COUNTIFS(IM_')) continue;
+      z.file(name, x.replace(/<cfRule type="expression"([^>]*)><formula>([^<]*COUNTIFS\(IM_[^<]*)<\/formula>/g, (m, at, f) => at.includes('stopIfTrue') ? m : `<cfRule type="expression"${at} stopIfTrue="1"><formula>${f}</formula>`));
+    }
     // a grouped column that is shown must not carry collapsed="1" (Excel then offers to repair the file)
     for (const name of Object.keys(z.files).filter((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n))) {
       const x = await z.file(name).async('string');
@@ -450,9 +463,9 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     const { ExcelJS, JSZip } = libs; const say = progress || (() => {});
     const det = A.det, MAINPC = A.MAINPC, months = A.months, omonths = A.omonths;
     const wb = new ExcelJS.Workbook(); wb.creator = 'Subcontract report'; wb.calcProperties.fullCalcOnLoad = true;
-    const ORDER = ['Dashboard', 'Service Monthly', 'Service Quarterly', 'Package Monthly', 'Service Coding', 'Changes', 'Detail', 'PO Register', 'By Supplier', 'Subcontractor x Trade',
+    const ORDER = ['Dashboard', 'Invoice Matrix', 'Service Monthly', 'Service Quarterly', 'Package Monthly', 'Service Coding', 'Changes', 'Detail', 'PO Register', 'By Supplier', 'Subcontractor x Trade',
       'Subcontractors over time', 'Qty Reconciliation', 'Coding', 'Notes', '_History', '_Lines', '_Rows', '_Chart'];
-    const S = {}; for (const n of ORDER) S[n] = makeSheetApi(wb.addWorksheet(n, n === 'Dashboard' || n === 'Subcontractor x Trade' || n === 'Subcontractors over time' || n === 'Changes' || n === 'Package Monthly' ? { views: [{ showGridLines: false }] } : {}));
+    const S = {}; for (const n of ORDER) S[n] = makeSheetApi(wb.addWorksheet(n, n === 'Dashboard' || n === 'Subcontractor x Trade' || n === 'Subcontractors over time' || n === 'Changes' || n === 'Package Monthly' || n === 'Invoice Matrix' ? { views: [{ showGridLines: false }] } : {}));
     const charts = [];
     for (const [color, names] of TAB_GROUPS) for (const n of names) S[n].ws.properties.tabColor = { argb: 'FF' + color };
 
@@ -549,6 +562,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     const R = (n) => `Detail!$${C[n]}$2:$${C[n]}$${NR}`;
 
     let SM_ORDER, SM_TOTAL, SM_PEND, SM_COLS; const supName = new Map(); for (const r of det) supName.set(r.supCode, r.supName);   // also used by By Supplier
+    const IM = {};                                              // Invoice Matrix check range, read by Notes
     const PM = {};                                              // Package Monthly layout, read by the Dashboard
     { // own scope: the sheet's local names stay apart from the other sheets'
     // ---------------- Service Monthly / Service Quarterly: one flat table each (same rows, same order), laid out like Material Monthly.
@@ -715,6 +729,99 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     { const bySvc = sumBy(det, (r) => r.sid, (r) => r.amt);     // per-item totals are values; the Dashboard checks them against Detail
       for (const s of A.services) sc.set(s.id + 1, 10, Math.round((bySvc.get(s.id) || 0) * 100) / 100, { fmt: NUM, font: st.F });
       sc.ws.getCell(1, 10).note = 'All certificate lines of the service (opening, months and pending), written as a value when the report was built. Dashboard → Final control checks the column against Detail.'; }
+
+    // ---------------- Invoice Matrix: one cell pair (invoice no. + amount) per invoice, by subcontractor / PO and month.
+    // An invoice = PO + Invoice Serial; the colour is live (conditional format on Detail): red = not approved,
+    // grey = dated after the cut date and not picked as Include, green = counted in this report.
+    await say('Invoice Matrix'); const im = S['Invoice Matrix'];
+    const INV = [...groupInvoices(det).values()];
+    const imMonths = [...new Set(INV.filter((v) => !v.opening).map((v) => v.month))].sort((a, b) => a - b);
+    const IB = [{ key: 'OPENING', label: 'Opening', fillc: '9C7A38' }, ...imMonths.map((m, i) => ({ key: m, label: mlabel(m) + (m === A.CUT ? ' ◂' : m > A.CUT ? ' · after cut' : ''),
+      fillc: m > A.CUT ? '8E3B37' : (i % 2 ? '1F3E6B' : '0F2A52') }))];
+    IB.forEach((b, j) => { b.col = 4 + 2 * j; });
+    const ITOT = 4 + 2 * IB.length, IH = 4, I1 = 5;
+    // rows: subcontractor (by name) → PO → as many rows as the PO's busiest month has invoices
+    const bySup = new Map(); for (const v of INV) { if (!bySup.has(v.supCode)) bySup.set(v.supCode, new Map()); const p = bySup.get(v.supCode); if (!p.has(v.po)) p.set(v.po, []); p.get(v.po).push(v); }
+    const supKeys = [...bySup.keys()].sort((a, b) => str(supName.get(a)).localeCompare(str(supName.get(b)), 'ar') || cmpTuple([a], [b]));
+    const imRows = []; const firstOfSup = new Set();
+    for (const sk of supKeys) { firstOfSup.add(imRows.length);
+      for (const po of [...bySup.get(sk).keys()].sort()) {
+        const cells = new Map(); for (const v of bySup.get(sk).get(po).sort((a, b) => a.date - b.date || cmpTuple([a.serial], [b.serial]))) {
+          const k = v.opening ? 'OPENING' : v.month; if (!cells.has(k)) cells.set(k, []); cells.get(k).push(v); }
+        const n = Math.max(...[...cells.values()].map((x) => x.length));
+        for (let s = 0; s < n; s++) imRows.push({ sk, po, first: s === 0, inv: IB.map((b) => (cells.get(b.key) || [])[s] || null) }); } }
+    const IN = I1 + imRows.length - 1;
+    const hdI = (r, c, v, f, al) => im.set(r, c, v, { font: { ...st.H, size: 9.5 }, fill: fill(f), align: { horizontal: al || 'center', vertical: 'middle', wrapText: al !== 'centerContinuous' } });
+    for (let c = 1; c <= ITOT; c++) { hdI(3, c, null, '0F2A52'); hdI(IH, c, null, '0F2A52'); }
+    ['Subcontractor', 'Supplier code', 'PO'].forEach((h, j) => hdI(IH, 1 + j, h, '0F2A52'));
+    for (const b of IB) { hdI(3, b.col, b.label, b.fillc, 'centerContinuous'); hdI(3, b.col + 1, null, b.fillc, 'centerContinuous'); hdI(IH, b.col, 'Invoice', b.fillc); hdI(IH, b.col + 1, 'Amount', b.fillc); }
+    hdI(3, ITOT, null, '7A5C1E'); hdI(IH, ITOT, 'Total', '7A5C1E');
+    const GREY = { ...st.F, color: { argb: 'FFA0A8B8' } };
+    imRows.forEach((x, n) => { const i = I1 + n, lead = firstOfSup.has(n);
+      im.set(i, 1, supName.get(x.sk), { font: lead ? st.B : GREY }); im.set(i, 2, x.sk, { fmt: '@', font: lead ? st.F : GREY }); im.set(i, 3, x.po, { fmt: '@', font: x.first ? st.F : GREY });
+      IB.forEach((b, j) => { const v = x.inv[j]; if (!v) return;
+        im.set(i, b.col, v.serial, { fmt: '@', font: st.B, align: { horizontal: 'center' } }); im.set(i, b.col + 1, Math.round(v.amt * 100) / 100, { fmt: NUM, font: st.F }); });
+      im.set(i, ITOT, `=SUMIF($D$${IH}:$${L(ITOT - 1)}$${IH},"Amount",D${i}:${L(ITOT - 1)}${i})`, { fmt: NUM, font: st.B });
+      if (lead && n) for (let c = 1; c <= ITOT; c++) im.ws.getCell(i, c).border = { top: { style: 'thin', color: { argb: 'FF9AA7BD' } } }; });
+    // live colours: Detail ranges through defined names (a conditional format may not point at another sheet directly)
+    const dn = (name, col) => wb.definedNames.add(`Detail!$${C[col]}$2:$${C[col]}$${NR}`, name);
+    dn('IM_PO', 'PO'); dn('IM_SER', 'Cert. serial'); dn('IM_APPR', 'Approved (Character 1)'); dn('IM_BKT', 'Report bucket'); dn('IM_COST', 'Cost (excl VAT)');
+    // Excel needs every rule on a sheet to have its own priority; red and grey stop the rules under them
+    let pri = 0;
+    for (const b of IB) { const iv = `$${L(b.col)}${I1}`, has = `${iv}<>""`;
+      im.ws.addConditionalFormatting({ ref: `${L(b.col)}${I1}:${L(b.col + 1)}${IN}`, rules: [
+        { type: 'expression', priority: ++pri, stopIfTrue: true, formulae: [`AND(${has},COUNTIFS(IM_PO,$C${I1},IM_SER,${iv},IM_APPR,"<>X")>0)`], style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: 'FFF8D7D5' } } } },
+        { type: 'expression', priority: ++pri, stopIfTrue: true, formulae: [`AND(${has},COUNTIFS(IM_PO,$C${I1},IM_SER,${iv},IM_BKT,"PENDING")>0)`], style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: 'FFE3E5E9' } } } },
+        { type: 'expression', priority: ++pri, formulae: [has], style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: 'FFDDF0DF' } } } }] }); }
+    // totals and checks under each month
+    const smBlock = (key) => SM_COLS.blocks.find((b) => b.keys.length === 1 && b.keys[0] === key);
+    const IT = IN + 2, TL = [['All invoices', st.B], ['In this report', st.B], ['Excluded (not approved or after the cut date)', st.B], ['Check – invoices vs Detail', st.F], ['Check – in this report vs Service Monthly', st.F]];
+    TL.forEach(([t, f], k) => { im.set(IT + k, 1, t, { font: f }); for (let c = 1; c <= ITOT; c++) im.ws.getCell(IT + k, c).fill = k < 3 ? FILL.TF : fill('F4F6F9'); });
+    const ok = (d) => `=IF(ROUND(${d},0)=0,"✔",ROUND(${d},0))`, OKF = { font: { ...st.B, color: { argb: 'FF1B7A4A' } }, fmt: '#,##0;[Red]-#,##0', align: { horizontal: 'right' } };
+    for (const b of IB) { const a = L(b.col + 1), rng = `${a}${I1}:${a}${IN}`, crit = b.key === 'OPENING' ? '"OPENING"' : b.key, smb = smBlock(b.key);
+      im.set(IT, b.col, `=COUNTA(${L(b.col)}${I1}:${L(b.col)}${IN})`, { fmt: '0 "inv."', font: st.SMALL, align: { horizontal: 'center' } });
+      im.set(IT, b.col + 1, `=SUM(${rng})`, { fmt: NUM, font: st.B });
+      im.set(IT + 1, b.col + 1, `=SUMIFS(IM_COST,IM_BKT,${crit})`, { fmt: NUM, font: st.B });
+      im.set(IT + 2, b.col + 1, `=${a}${IT}-${a}${IT + 1}`, { fmt: NUM, font: { ...st.B, color: { argb: 'FFB4413C' } } });
+      im.set(IT + 3, b.col + 1, ok(`${a}${IT}-` + (b.key === 'OPENING' ? `SUMIFS(${R('Cost (excl VAT)')},${R('Initial invoice (Flag)')},"X")` : `SUMIFS(${R('Cost (excl VAT)')},${R('Month')},${b.key},${R('Initial invoice (Flag)')},"<>X")`)), OKF);
+      im.set(IT + 4, b.col + 1, ok(`${a}${IT + 1}-` + (smb ? `SUM('Service Monthly'!$${L(SM_COLS.amtCol(smb))}$${SM_COLS.R1}:$${L(SM_COLS.amtCol(smb))}$${SM_COLS.RN})` : '0')), OKF); }
+    for (let k = 0; k < 3; k++) im.set(IT + k, ITOT, `=SUMIF($D$${IH}:$${L(ITOT - 1)}$${IH},"Amount",D${IT + k}:${L(ITOT - 1)}${IT + k})`, { fmt: NUM, font: st.B });
+    im.set(IT + 3, ITOT, ok(`${L(ITOT)}${IT}-SUM(${R('Cost (excl VAT)')})`), OKF);
+    IM.check = `'Invoice Matrix'!$D$${IT + 3}:$${L(ITOT)}$${IT + 4}`;
+    // excluded list, below the matrix; its reason reads Detail live, so an after-cut invoice picked as Include says so
+    const EX = IT + 7, exList = INV.filter((v) => !v.approved || v.afterCut).sort((a, b) => (a.approved - b.approved) || a.date - b.date || cmpTuple([a.po, a.serial], [b.po, b.serial]));
+    im.set(EX - 1, 1, 'EXCLUDED FROM THIS REPORT – every invoice that is not approved, or dated after the cut date', { font: st.T1 });
+    ['Subcontractor', 'Supplier code', 'PO', 'Invoice', 'Invoice date', 'Month', 'Amount', 'Status'].forEach((h, j) => hdI(EX, 1 + j, h, '8E3B37'));
+    exList.forEach((v, n) => { const i = EX + 1 + n;
+      [supName.get(v.supCode), v.supCode, v.po, v.serial].forEach((x, j) => im.set(i, 1 + j, x, { fmt: j ? '@' : undefined, font: j === 3 ? st.B : st.F, align: j === 3 ? { horizontal: 'center' } : undefined }));
+      im.set(i, 5, v.dateObj, { fmt: 'dd-mmm-yy', font: st.F }); im.set(i, 6, v.opening ? 'Opening' : mlabel(v.month), { font: st.F, align: { horizontal: 'center' } });
+      im.set(i, 7, Math.round(v.amt * 100) / 100, { fmt: NUM, font: st.B });
+      im.set(i, 8, `=IF(COUNTIFS(IM_PO,C${i},IM_SER,D${i},IM_APPR,"<>X")>0,"Not approved",IF(COUNTIFS(IM_PO,C${i},IM_SER,D${i},IM_BKT,"PENDING")>0,"After the cut date – not included","Included (Detail → Include)"))`, { font: st.F }); });
+    const EXN = EX + exList.length;
+    if (exList.length) im.ws.addConditionalFormatting({ ref: `A${EX + 1}:H${EXN}`, rules: [
+      { type: 'expression', priority: ++pri, stopIfTrue: true, formulae: [`$H${EX + 1}="Not approved"`], style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: 'FFF8D7D5' } } } },
+      { type: 'expression', priority: ++pri, stopIfTrue: true, formulae: [`LEFT($H${EX + 1},5)="After"`], style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: 'FFE3E5E9' } } } },
+      { type: 'expression', priority: ++pri, formulae: [`$H${EX + 1}<>""`], style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: 'FFDDF0DF' } } } }] });
+    im.set(EXN + 1, 1, 'Total', { font: st.B }); im.set(EXN + 1, 7, exList.length ? `=SUM(G${EX + 1}:G${EXN})` : 0, { fmt: NUM, font: st.B });
+    for (let c = 1; c <= 8; c++) im.ws.getCell(EXN + 1, c).fill = FILL.TF;
+    // title, legend and the jump to the list
+    im.set(1, 1, `Invoices by subcontractor and month · EGP excl. VAT · report month ${mlabel(A.CUT)}, cut date ${A.cutDate.toISOString().slice(0, 10)}`, { font: st.T1 });
+    const lg = [['In this report', 'DDF0DF'], ['Not approved', 'F8D7D5'], ['After cut date', 'E3E5E9']];
+    lg.forEach(([t, c], j) => im.set(2, 1 + j, t, { font: { ...st.F, size: 9 }, fill: fill(c), align: { horizontal: 'center', vertical: 'middle', wrapText: true } }));
+    im.ws.getCell(2, 4).value = { formula: `"Excluded: "&COUNTIF($H$${EX + 1}:$H$${Math.max(EXN, EX + 1)},"Not approved")&" not approved, "&COUNTIF($H$${EX + 1}:$H$${Math.max(EXN, EX + 1)},"After*")&" after the cut date (Detail → Include in this report adds one)  → list at row ${EX}"`,
+      hyperlink: `#'Invoice Matrix'!A${EX}` };
+    im.ws.getCell(2, 4).font = { ...st.B, color: { argb: 'FF2A78D6' }, underline: true };
+    im.ws.getRow(2).height = 30; im.ws.getRow(IH).height = 20;
+    im.width(1, 34); im.width(2, 11); im.width(3, 12); for (const b of IB) { im.width(b.col, 7); im.width(b.col + 1, 12); } im.width(ITOT, 14);
+    im.width(5, Math.max(12, im.ws.getColumn(5).width || 0)); im.width(8, Math.max(12, im.ws.getColumn(8).width || 0));
+    // months before the last six up to the cut fold away with "+" (left open)
+    const keep = imMonths.filter((m) => m <= A.CUT).slice(-6)[0];
+    for (const b of IB) if (typeof b.key === 'number' && keep && b.key < keep) { im.ws.getColumn(b.col).outlineLevel = 1; im.ws.getColumn(b.col + 1).outlineLevel = 1; }
+    im.ws.properties.outlineLevelCol = 1; im.ws.properties.outlineProperties = { summaryBelow: false, summaryRight: true };
+    im.ws.views = [{ state: 'frozen', xSplit: 3, ySplit: IH, showGridLines: false, zoomScale: 90 }];
+    im.ws.autoFilter = { from: { row: IH, column: 1 }, to: { row: IN, column: ITOT } };
+    im.ws.pageSetup = { paperSize: 8, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, printTitlesRow: `3:${IH}`,
+      margins: { left: 0.25, right: 0.25, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 } };
 
     // ---------------- By Supplier
     await say('By Supplier'); const bs = S['By Supplier'];

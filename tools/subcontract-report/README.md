@@ -29,6 +29,11 @@ and downloads the Excel report. Nothing is uploaded; the libraries are embedded 
   Package / MNL / Cost element / Unit are live lookups on Service Coding on both.
 - **Per-service totals** (Service Coding → Total amount) are values; Dashboard → Final control checks them against Detail.
 - **Package Monthly** sums Service Monthly by current package (live); the Dashboard reads it.
+- **Invoice Matrix** (2nd tab): one cell pair (invoice no. + amount) per invoice – an invoice is PO + Invoice Serial, and all
+  its lines share one date and one approval – by subcontractor / PO and month. Colours are conditional formats on Detail:
+  red = not approved, grey = after the cut date and not picked as Include, green = in this report. Each rule has its own
+  priority and red / grey stop the green one (Excel needs both). Under each month: all invoices, in this report,
+  excluded, and ✔ checks against Detail and Service Monthly; below, the list of every excluded invoice with a live status.
 - **Monthly activity** (Dashboard, page 2): lines, approved cost, not approved, late lines per month, and for months
   the last report showed, *change = late lines* ✔ or the unexplained amount.
 
