@@ -547,7 +547,8 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     // ---------------- Service Monthly / Service Quarterly: one flat table each (same rows, same order), laid out like Material Monthly.
     //   rows 1 TOTAL (SUBTOTAL, follows filters) · 2 check against Detail · 3 year · 4 month / quarter · 5 column names · data from 6
     //   columns Identity (11) → Opening → one Qty / Rate / Amount block per period → Total (Price, Qty, Avg rate, Amount) → Pending → reference (folded)
-    //   Figures are values (they never depend on coding); Package / MNL / Cost element / Unit are live lookups, so re-coding changes a row where it stands.
+    //   Service Monthly figures are live SUMIFS on Detail; Service Quarterly figures are values with a live check per quarter.
+    //   Package / MNL / Cost element / Unit are live lookups on both, so re-coding changes a row where it stands.
     await say('Service Monthly');
     const mgrp = new Map(), chk = new Set();
     for (const r of det) { if (r.isqo) continue; if (!mgrp.has(r.rk)) mgrp.set(r.rk, new Map()); if (r.mg || r.mgd) mgrp.get(r.rk).set(r.mg + '\u0001' + r.mgd, [r.mg, r.mgd]); if (r.qcheck) chk.add(r.rk); }
@@ -566,7 +567,8 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     const AMTF = '#,##0;[Red]-#,##0;;@', QTYF = '#,##0.00;[Red]-#,##0.00;;@', R1 = 6, RN = R1 + SM_ORDER.length - 1;
     const DTR = (n) => `Detail!$${C[n]}$2:$${C[n]}$${NR}`;
     // periods: [{ label, year, fill, keys: [buckets], crit: SUMIFS criteria on Detail → Report bucket }]
-    function flatSheet(sh, periods, what) {
+    // live = true (Service Monthly): every Qty / Amount cell is a SUMIFS on Detail by Row ID and bucket; otherwise values (Service Quarterly)
+    function flatSheet(sh, periods, what, live) {
       const nI = ID.length, O0 = nI + 1, P0 = O0 + 3, T0 = P0 + 3 * periods.length, PE = T0 + 4, RF = PE + 3, LASTC = RF + REF.length - 1;
       const rc = (n) => RF + REF.indexOf(n);
       const blocks = [{ label: 'Opening', keys: ['OPENING'], crit: ['"OPENING"'], col: O0, fill: '9C7A38' },
@@ -592,12 +594,19 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
         row[4] = svc; row[5] = text; row[6] = dig(po); row[7] = dig(sup); row[8] = supName.get(sup);
         row[9] = adj ? (chk.has(id) ? '⚠ Adjustment – check' : 'Adjustment') : 'Normal'; row[10] = { formula: code('D') };
         const put = (c, q, am) => { if (q) row[c - 1] = q; if (q) row[c] = am / q; if (am) row[c + 1] = am; };
+        const sumifs = (col, b) => b.crit.map((cr) => `SUMIFS(${DTR(col)},${DTR('Row key')},$A${i},${DTR('Report bucket')},${cr})`).join('+');
         let tq = 0, ta = 0;
         for (const b of blocks) { let q = 0, am = 0; for (const k of b.keys) { const x = a.get(k); if (x) { q += x[0]; am += x[1]; } }
-          put(b.col, q, am); if (b.keys[0] !== 'PENDING') { tq += q; ta += am; } }
-        const net = ctype === 'A2' ? price / (1 + (VATR[tax] || 0)) : price;
-        row[T0 - 1] = net; if (tq) { row[T0] = tq; row[T0 + 1] = ta / tq; } if (ta) row[T0 + 2] = ta;
-        const refv = { 'Rate check': Math.round(ta - tq * net) || null, 'First seen (load)': A.rowFirst[idx], 'Svc ID': sid, 'Contract type': ctype, 'Tax code': tax, 'Gross price': price,
+          if (live) { row[b.col - 1] = { formula: sumifs('Report qty', b) }; row[b.col] = { formula: `IF(${L(b.col)}${i}=0,"",${L(b.col + 2)}${i}/${L(b.col)}${i})` };
+            row[b.col + 1] = { formula: sumifs('Cost (excl VAT)', b) }; }
+          else put(b.col, q, am);
+          if (b.keys[0] !== 'PENDING') { tq += q; ta += am; } }
+        const net = ctype === 'A2' ? price / (1 + (VATR[tax] || 0)) : price, inT = blocks.filter((b) => b.keys[0] !== 'PENDING');
+        row[T0 - 1] = net;
+        if (live) { row[T0] = { formula: inT.map((b) => L(b.col) + i).join('+') }; row[T0 + 2] = { formula: inT.map((b) => L(b.col + 2) + i).join('+') };
+          row[T0 + 1] = { formula: `IF(${L(T0 + 1)}${i}=0,"",${L(T0 + 3)}${i}/${L(T0 + 1)}${i})` }; }
+        else { if (tq) { row[T0] = tq; row[T0 + 1] = ta / tq; } if (ta) row[T0 + 2] = ta; }
+        const refv = { 'Rate check': live ? { formula: `ROUND(${L(T0 + 3)}${i}-${L(T0 + 1)}${i}*${L(T0)}${i},0)` } : (Math.round(ta - tq * net) || null), 'First seen (load)': A.rowFirst[idx], 'Svc ID': sid, 'Contract type': ctype, 'Tax code': tax, 'Gross price': price,
           Resource: { formula: lk('Coding', 'A', 'B', `"${svc.slice(0, 1)}"`) }, Trade: { formula: lk('Coding', 'D', 'E', `"${trade(svc)}"`) },
           'Material group': mg.map((x) => x[0]).sort().join(' / ') || null, 'Material group description': mg.map((x) => x[1]).sort().join(' / ') || null, 'Profit centre': pc };
         REF.forEach((h, j) => { row[RF - 1 + j] = refv[h]; });
@@ -656,7 +665,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       return { O0, P0, T0, PE, RF, LASTC, blocks, amtCol: (b) => b.col + 2 };
     }
     const yr = (m) => Math.floor(m / 100);
-    const MS = flatSheet(S['Service Monthly'], months.map((m, i) => ({ label: MON[(m % 100) - 1] + (m === A.CUT ? ' ◂' : ''), year: yr(m), keys: [m], crit: [m], fill: i % 2 ? '1F3E6B' : '0F2A52' })), 'every Amount');
+    const MS = flatSheet(S['Service Monthly'], months.map((m, i) => ({ label: MON[(m % 100) - 1] + (m === A.CUT ? ' ◂' : ''), year: yr(m), keys: [m], crit: [m], fill: i % 2 ? '1F3E6B' : '0F2A52' })), 'every Amount', true);
     SM_COLS = { ...MS, R1, RN }; SM_TOTAL = `SUM('Service Monthly'!${L(MS.T0 + 3)}${R1}:${L(MS.T0 + 3)}${RN})`; SM_PEND = `SUM('Service Monthly'!${L(MS.PE + 2)}${R1}:${L(MS.PE + 2)}${RN})`;
     S['Service Monthly'].ws.getCell(5, 1).note = 'Permanent: a row keeps its Row ID in every later report, whatever the sort order. Detail → Row key carries the same ID.';
     S['Service Monthly'].ws.getCell(4, MS.PE).note = `Pending = dated after the cut date (${A.cutDate.toISOString().slice(0, 10)}) or not approved (Detail → Pending reason). Counted when it falls in a reported month and is approved – not in Total.`;
@@ -694,7 +703,9 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       sc.set(1, 12, 'Codes typed in the yellow columns update Service Monthly, Service Quarterly, Package Monthly and the Dashboard at once – no sorting needed.', { font: st.IT });
       sc.width(11, 3); sc.width(12, 60); }
     }
-    for (let i = 2; i <= NSC; i++) sc.set(i, 10, `=SUMIFS(${R('Cost (excl VAT)')},${R('Svc ID')},A${i})`, { fmt: NUM, font: st.F });
+    { const bySvc = sumBy(det, (r) => r.sid, (r) => r.amt);     // per-item totals are values; the Dashboard checks them against Detail
+      for (const s of A.services) sc.set(s.id + 1, 10, Math.round((bySvc.get(s.id) || 0) * 100) / 100, { fmt: NUM, font: st.F });
+      sc.ws.getCell(1, 10).note = 'All certificate lines of the service (opening, months and pending), written as a value when the report was built. Dashboard → Final control checks the column against Detail.'; }
 
     // ---------------- By Supplier
     await say('By Supplier'); const bs = S['By Supplier'];
@@ -1021,7 +1032,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     // ---- final control + control figures
     const DFC = DB0 + DNB + 3; rowH(DFC - 1, 10); rowH(DFC, 22); band(DFC, 1, DLAST, FILL.BAND);
     db.set(DFC, 2, 'FINAL CONTROL', { font: st.EYE, align: { vertical: 'middle' } });
-    db.set(DFC, 3, `="Total "&TEXT(${DTOT},"#,##0")&"  =  Opening "&TEXT(${L(cNS)}8,"#,##0")&"  +  Approved months "&TEXT(${L(cM)}8,"#,##0")&"     |     Pending, not in total "&TEXT(${L(DR0)}8,"#,##0")&"     |     Work package table vs total: "&TEXT(${L(cTot)}${DTR}-${DTOT},"#,##0")&"     |     Report vs SAP (after WBS splits): "&TEXT(Notes!B${NOTES_RECON_ROW + 8},"#,##0")`,
+    db.set(DFC, 3, `="Total "&TEXT(${DTOT},"#,##0")&"  =  Opening "&TEXT(${L(cNS)}8,"#,##0")&"  +  Approved months "&TEXT(${L(cM)}8,"#,##0")&"     |     Pending, not in total "&TEXT(${L(DR0)}8,"#,##0")&"     |     Work package table vs total: "&TEXT(${L(cTot)}${DTR}-${DTOT},"#,##0")&"     |     Report vs SAP (after WBS splits): "&TEXT(Notes!B${NOTES_RECON_ROW + 8},"#,##0")&"     |     Per-service totals vs Detail: "&IF(ROUND(SUM('Service Coding'!$J$2:$J$${NSC})-SUM(Detail!$${C['Cost (excl VAT)']}:$${C['Cost (excl VAT)']}),0)=0,"✔",TEXT(SUM('Service Coding'!$J$2:$J$${NSC})-SUM(Detail!$${C['Cost (excl VAT)']}:$${C['Cost (excl VAT)']}),"#,##0"))`,
       { font: st.CTRL, align: { vertical: 'middle' } });
     db.set(DFC + 1, 2, `="Also certified: VAT "&TEXT(SUM(Detail!$${C['VAT current']}:$${C['VAT current']}),"#,##0")&"  ·  adjustments "&TEXT(SUMIFS(${AM},${R('Line type')},"Adjustment"),"#,##0")&"  ·  other profit centres (not ${MAINPC}) "&TEXT(SUMIFS(${AM},${R('Other profit centre')},"X"),"#,##0")`, { font: st.SMALL });
     db.set(DFC + 2, 2, `Cut date ${A.cutDate.toISOString().slice(0, 10)} (end of the report month). Months = approved certificates by certificate date · Opening = approved initial invoices (Flag X) · Pending = not approved or dated after the cut date – shown, not in the total. Work package and MNL come from Service Coding via Service Monthly / Package Monthly.`, { font: st.IT });

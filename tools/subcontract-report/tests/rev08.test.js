@@ -51,18 +51,29 @@ const sum = (rs) => rs.reduce((s, r) => s + r.amt, 0);
   for (const m of [202605, 202606, 202607]) near(N.prevByMonth.get(m) + sum(late.filter((r) => r.month === m)), sum(N.det.filter((r) => r.bucket === m)), `month ${m} explained`);
   near(N.prevByMonth.get(202607), sum(P.det.filter((r) => r.bucket === 202607)), 'last report Jul amount');
   // 4. Service Monthly: values match the detail per row and bucket
-  const buf = await E.buildWorkbook(A8, { ExcelJS, JSZip }); const w = X.read(Buffer.from(buf));
+  const buf = await E.buildWorkbook(A8, { ExcelJS, JSZip }); const w = X.read(Buffer.from(buf), { cellFormula: true, sheetStubs: true });
   const sm = X.utils.sheet_to_json(w.Sheets['Service Monthly'], { header: 1, raw: true, defval: '' });
   assert.deepStrictEqual(sm[4].slice(0, 11), ['Row ID', 'Package', 'MNL', 'Cost element', 'Service', 'Description', 'PO', 'Supplier code', 'Supplier', 'Line type', 'Unit']);
   const hdr = sm[3], tcol = hdr.indexOf('Total') + 3, pcol = hdr.findIndex((v) => String(v).startsWith('Pending')) + 2;
   const data = sm.slice(5).filter((r) => /^TRAZ-\d{5}$/.test(r[0]));
   assert.strictEqual(data.length, A8.keyTuples.length, 'one row per Row ID');
-  near(data.reduce((s, r) => s + (+r[tcol] || 0), 0), k8.opening + k8.approved, 'SM Total');
-  near(data.reduce((s, r) => s + (+r[pcol] || 0), 0), k8.pending, 'SM Pending');
-  const augCol = hdr.indexOf('Aug ◂') + 2; near(data.reduce((s, r) => s + (+r[augCol] || 0), 0), sum(A8.det.filter((r) => r.bucket === 202608)), 'SM Aug');
+  // Service Monthly is live: each month cell is a SUMIFS on Detail for its own Row ID and bucket; the numbers are proven by the recalculation below
+  const smWs = w.Sheets['Service Monthly'], augC = hdr.indexOf('Aug ◂') + 2, cell = (r, c) => smWs[X.utils.encode_cell({ r, c })] || {};
+  sm.slice(5).forEach((r, n) => { if (!/^TRAZ-\d{5}$/.test(r[0])) return; const f = cell(5 + n, augC).f || '';
+    assert.ok(new RegExp(`^SUMIFS\\(Detail!.*,\\$A${6 + n},Detail!.*,202608\\)$`).test(f), `live SUMIFS on row ${6 + n}: ${f}`);
+    assert.ok(/^[A-Z]+\d+(\+[A-Z]+\d+)+$/.test(cell(5 + n, tcol).f || ''), 'Total amount sums the row'); });
+  // per-service totals on Service Coding are values that add up to the Detail total
+  const scv = X.utils.sheet_to_json(w.Sheets['Service Coding'], { header: 1, raw: true, defval: '' });
+  near(scv.slice(1).reduce((s, r) => s + (typeof r[9] === 'number' ? r[9] : 0), 0), k8.total, 'per-service totals');
   assert.ok(!(w.Sheets['Service Monthly']['!merges'] || []).length, 'no merged cells');
   const sq = X.utils.sheet_to_json(w.Sheets['Service Quarterly'], { header: 1, raw: true, defval: '' });
   const q3 = sq[3].indexOf('Q3 ◂') + 2, qd = sq.slice(5).filter((r) => /^TRAZ-\d{5}$/.test(r[0]));
   near(qd.reduce((s, r) => s + (+r[q3] || 0), 0), sum(A8.det.filter((r) => [202607, 202608].includes(r.bucket))), 'SQ Q3 = Jul + Aug');
+  // full recalculation in LibreOffice (when installed): every check cell ✔ and the Notes reconciliation 0
+  if (require('child_process').spawnSync('which', ['soffice']).status === 0) {
+    const tmp = require('path').join(require('os').tmpdir(), `rev08_${process.pid}.xlsx`); require('fs').writeFileSync(tmp, Buffer.from(buf));
+    const res = require('child_process').spawnSync('python3', [require('path').join(__dirname, 'recalc.py'), tmp], { encoding: 'utf8', timeout: 900000 });
+    require('fs').unlinkSync(tmp); assert.strictEqual(res.status, 0, 'recalculation checks: ' + res.stdout + res.stderr);
+  } else console.log('(LibreOffice not installed – recalculation skipped)');
   console.log(`ok · TZ=${process.env.TZ || 'default'} · Aug cut: total ${Math.round(k8.opening + k8.approved)}, pending ${Math.round(k8.pending)}, late 5 + 3 lines (${Math.round(expAdded)} + ${Math.round(expAppr)})`);
 })().catch((e) => { console.error('FAIL', e.message); process.exit(1); });

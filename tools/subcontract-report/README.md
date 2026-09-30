@@ -22,7 +22,9 @@ and downloads the Excel report. Nothing is uploaded; the libraries are embedded 
 - **Service Monthly** and **Service Quarterly** are flat tables (no merged cells, no header or blank rows between data):
   row 1 TOTAL (SUBTOTAL), row 2 check against Detail (✔ or the difference), row 3 year, row 4 month / quarter,
   row 5 column names. Identity (11) → Opening → Qty / Rate / Amount per period → Total → Pending → reference columns.
-  Figures are values; Package / MNL / Cost element / Unit are live lookups on Service Coding.
+  Service Monthly figures are live SUMIFS on Detail; Service Quarterly figures are values with a live check per quarter.
+  Package / MNL / Cost element / Unit are live lookups on Service Coding on both.
+- **Per-service totals** (Service Coding → Total amount) are values; Dashboard → Final control checks them against Detail.
 - **Package Monthly** sums Service Monthly by current package (live); the Dashboard reads it.
 - **Monthly activity** (Dashboard, page 2): lines, approved cost, not approved, late lines per month, and for months
   the last report showed, *change = late lines* ✔ or the unexplained amount.
@@ -38,4 +40,4 @@ python3 tests/ooxml_order.py <report.xlsx>   # element order Excel requires
 ```
 
 The tests assert the TRAZ numbers (SAP grand total 73,923,142.32, pending and after-cut amounts, late lines)
-under two time zones. Real SAP extracts and generated reports are never committed (`*.xlsx` is ignored).
+under two time zones and, when LibreOffice is installed, recalculate the report and require every check cell ✔. Real SAP extracts and generated reports are never committed (`*.xlsx` is ignored).
