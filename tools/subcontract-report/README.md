@@ -32,6 +32,9 @@ and downloads the Excel report. Nothing is uploaded; the libraries are embedded 
   DIV / Package / MNL / Cost element / Unit are live lookups on Service Coding on both.
   **Trade** (after Unit) is the trade name from the service code, a live lookup on Coding → trades.
 - **Per-service totals** (Service Coding → Total amount) are values; Dashboard → Final control checks them against Detail.
+- **Rolling Monthly** (after Service Monthly): the same rows at a fixed width however long the project runs –
+  Opening | B/F prior years | Jan … Dec of the report year | YTD | ITD (to date) | Pending, all live SUMIFS on Detail.
+  In January the previous year folds into B/F by itself; checks: ITD = Opening + B/F + YTD, ITD + Pending = Detail.
 - **PO Register**: one row per PO, its services underneath (grouped, − / + folds them), each service with its DIV,
   Package, MNL and Cost element live from Service Coding; a check row confirms the services add up to their POs.
 - **Type of works** (ZSCSRV1 "Type of Works for PO", one per PO) shows on Service Monthly, Service Quarterly and the PO Register.

@@ -408,7 +408,7 @@
   const BRAND = '1F3E6B';   // single-series charts
   const GOLDLINE = { style: 'thin', color: { argb: 'FFC8A45C' } };
   // tab groups: log / file history & transactions / reports
-  const TAB_GROUPS = [['0F2A52', ['Dashboard', 'Invoice Matrix', 'Service Monthly', 'Service Quarterly', 'DIV Monthly', 'Service Coding', 'Lists']], ['C8A45C', ['Changes', 'Detail']],
+  const TAB_GROUPS = [['0F2A52', ['Dashboard', 'Invoice Matrix', 'Service Monthly', 'Rolling Monthly', 'Service Quarterly', 'DIV Monthly', 'Service Coding', 'Lists']], ['C8A45C', ['Changes', 'Detail']],
     ['4A6FA5', ['PO Register', 'By Supplier', 'Subcontractor x Trade', 'Subcontractors over time', 'Qty Reconciliation', 'Coding', 'Notes']]];
   const NOTES_RECON_ROW = 32;   // fixed so the Dashboard control strip can point at it
   const PAL = ['2A78D6', 'EB6834', '1BAF7A', 'EDA100', 'E87BA4', '008300', '4A3AA7', 'A6A6A0'];
@@ -539,7 +539,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     const { ExcelJS, JSZip } = libs; const say = progress || (() => {});
     const det = A.det, MAINPC = A.MAINPC, months = A.months, omonths = A.omonths;
     const wb = new ExcelJS.Workbook(); wb.creator = TOOL.author; wb.title = TOOL.name; wb.description = SIG; wb.calcProperties.fullCalcOnLoad = true;
-    const ORDER = ['Dashboard', 'Invoice Matrix', 'Service Monthly', 'Service Quarterly', 'DIV Monthly', 'Service Coding', 'Lists', 'Changes', 'Detail', 'PO Register', 'By Supplier', 'Subcontractor x Trade',
+    const ORDER = ['Dashboard', 'Invoice Matrix', 'Service Monthly', 'Rolling Monthly', 'Service Quarterly', 'DIV Monthly', 'Service Coding', 'Lists', 'Changes', 'Detail', 'PO Register', 'By Supplier', 'Subcontractor x Trade',
       'Subcontractors over time', 'Qty Reconciliation', 'Coding', 'Notes', '_History', '_Lines', '_LinesPrev', '_Rows', '_Serv', '_Chart'];
     const S = {}; for (const n of ORDER) S[n] = makeSheetApi(wb.addWorksheet(n, n === 'Dashboard' || n === 'Subcontractor x Trade' || n === 'Subcontractors over time' || n === 'Changes' || n === 'DIV Monthly' || n === 'Invoice Matrix' ? { views: [{ showGridLines: false }] } : {}));
     const charts = [];
@@ -686,7 +686,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     const DTR = (n) => `Detail!$${C[n]}$2:$${C[n]}$${NR}`;
     // periods: [{ label, year, fill, keys: [buckets], crit: SUMIFS criteria on Detail → Report bucket }]
     // live = true: every Qty / Amount cell is a SUMIFS on Detail by Row ID and bucket; otherwise values
-    function flatSheet(sh, periods, what, live) {
+    function flatSheet(sh, periods, what, live, fo) {      // fo.totalLabel; a period with inTotal: false (YTD) is shown but not added to the Total
       const nI = ID.length, O0 = nI + 1, P0 = O0 + 3, T0 = P0 + 3 * periods.length, PE = T0 + 4, RF = PE + 3, LASTC = RF + REF.length - 1;
       const rc = (n) => RF + REF.indexOf(n);
       const blocks = [{ label: 'Opening', keys: ['OPENING'], crit: ['"OPENING"'], col: O0, fill: '9C7A38' },
@@ -699,7 +699,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       for (const b of blocks) { span(4, b.col, b.col + 2, b.label, b.fill); span(3, b.col, b.col + 2, null, b.fill); ['Qty', 'Rate', 'Amount'].forEach((t, o) => hd(5, b.col + o, t, b.fill)); }
       let y0 = 0; periods.forEach((p, i) => { if (i === 0 || periods[i - 1].year !== p.year) y0 = i;
         if (i === periods.length - 1 || periods[i + 1].year !== p.year) span(3, P0 + 3 * y0, P0 + 3 * i + 2, p.year, p.fill); });
-      span(3, T0, T0 + 3, null, '7A5C1E'); span(4, T0, T0 + 3, 'Total', '7A5C1E'); ['Price', 'Qty', 'Avg rate', 'Amount'].forEach((t, o) => hd(5, T0 + o, t, '7A5C1E'));
+      span(3, T0, T0 + 3, null, '7A5C1E'); span(4, T0, T0 + 3, (fo && fo.totalLabel) || 'Total', '7A5C1E'); ['Price', 'Qty', 'Avg rate', 'Amount'].forEach((t, o) => hd(5, T0 + o, t, '7A5C1E'));
       span(4, RF, LASTC, 'Reference', '6B7280'); REF.forEach((h, j) => hd(5, RF + j, h, '6B7280'));
       // data rows
       let band = 0, prevSvc = null; const DF = fill('F3F6FB'), WF = fill('FFFFFF');
@@ -720,8 +720,8 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
           if (live) { row[b.col - 1] = { formula: sumifs('Report qty', b) }; row[b.col] = { formula: `IF(${L(b.col)}${i}=0,"",${L(b.col + 2)}${i}/${L(b.col)}${i})` };
             row[b.col + 1] = { formula: sumifs('Cost (excl VAT)', b) }; }
           else put(b.col, q, am);
-          if (b.keys[0] !== 'PENDING') { tq += q; ta += am; } }
-        const net = ctype === 'A2' ? price / (1 + (VATR[tax] || 0)) : price, inT = blocks.filter((b) => b.keys[0] !== 'PENDING');
+          if (b.keys[0] !== 'PENDING' && b.inTotal !== false) { tq += q; ta += am; } }
+        const net = ctype === 'A2' ? price / (1 + (VATR[tax] || 0)) : price, inT = blocks.filter((b) => b.keys[0] !== 'PENDING' && b.inTotal !== false);
         row[T0 - 1] = net;
         if (live) { row[T0] = { formula: inT.map((b) => L(b.col) + i).join('+') }; row[T0 + 2] = { formula: inT.map((b) => L(b.col + 2) + i).join('+') };
           row[T0 + 1] = { formula: `IF(${L(T0 + 1)}${i}=0,"",${L(T0 + 3)}${i}/${L(T0 + 1)}${i})` }; }
@@ -790,6 +790,21 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     SM_COLS = { ...MS, R1, RN }; SM_TOTAL = `SUM('Service Monthly'!${L(MS.T0 + 3)}${R1}:${L(MS.T0 + 3)}${RN})`; SM_PEND = `SUM('Service Monthly'!${L(MS.PE + 2)}${R1}:${L(MS.PE + 2)}${RN})`;
     S['Service Monthly'].ws.getCell(5, 1).note = 'Permanent: a row keeps its Row ID in every later report, whatever the sort order. Detail → Row key carries the same ID.';
     S['Service Monthly'].ws.getCell(4, MS.PE).note = `Pending = dated after the cut date (${A.cutDate.toISOString().slice(0, 10)}) or not approved (Detail → Pending reason) – not in Total. A line picked as "Include" on Detail → Include in this report moves into its month block (red "after cut" months) at once.`;
+    // Rolling Monthly: fixed width however long the project runs – Opening | B/F prior years | Jan … Dec of the report year | YTD | ITD | Pending.
+    // In a new year the old one folds into B/F by itself; Service Quarterly keeps the long history.
+    await say('Rolling Monthly');
+    { const Y = yr(A.CUT), YS = Y * 100 + 1, YE = Y * 100 + 12, BKr = DTR('Report bucket');
+      const per = [{ label: 'B/F prior years', year: `Before ${Y}`, keys: A.allMonths.filter((m) => m < YS), crit: [`">0",${BKr},"<${YS}"`], fill: '4A5568' }];
+      for (let k = 1; k <= 12; k++) { const m = Y * 100 + k;
+        per.push({ label: MON[k - 1] + (m === A.CUT ? ' ◂' : m > A.CUT ? ' · after cut' : ''), year: Y, keys: [m], crit: [m], fill: m > A.CUT ? '8E3B37' : (k % 2 ? '0F2A52' : '1F3E6B') }); }
+      if (A.allMonths.some((m) => m > YE)) per.push({ label: 'After Dec (included)', year: `${Y + 1}+`, keys: A.allMonths.filter((m) => m > YE), crit: [`">${YE}"`], fill: '8E3B37' });
+      per.push({ label: `YTD ${Y}`, year: 'Year to date', keys: A.allMonths.filter((m) => m >= YS && m <= YE), crit: [`">=${YS}",${BKr},"<=${YE}"`], fill: '7A5C1E', inTotal: false });
+      const RS = flatSheet(S['Rolling Monthly'], per, 'every block', true, { totalLabel: 'ITD (to date)' });
+      const ws = S['Rolling Monthly'].ws;
+      ws.getCell(4, RS.blocks.find((b) => b.label === 'B/F prior years').col).note = `Approved cost dated before 1 January ${Y} (opening invoices are in Opening). Next January this year folds in here.`;
+      ws.getCell(4, RS.blocks.find((b) => b.inTotal === false).col).note = `Year to date: Jan–Dec ${Y} – months after the cut date count only lines picked as Include on Detail. Not added again to ITD.`;
+      ws.getCell(4, RS.T0).note = 'ITD (inception to date) = Opening + B/F + the months of this year. ITD + Pending = everything certified.'; }
+
     // quarters (Q1 = Jan–Mar) from the same rows; live SUMIFS over the quarter's months, row 2 re-adds each quarter from Detail
     await say('Service Quarterly');
     const qk = (m) => yr(m) * 10 + Math.ceil((m % 100) / 3), qs = [...new Set(A.allMonths.map(qk))];

@@ -6,7 +6,7 @@ src = os.path.abspath(sys.argv[1]); d = tempfile.mkdtemp(); shutil.copy(src, d +
 subprocess.run(['soffice', '--headless', '--norestore', '--convert-to', 'xlsx:Calc MS Excel 2007 XML', '--outdir', d + '/o', d + '/b.xlsx'], capture_output=True, timeout=900)
 wb = openpyxl.load_workbook(d + '/o/b.xlsx', data_only=True)
 def rowvals(ws, r): return [c.value for c in ws[r]]
-for name in ['Service Monthly', 'Service Quarterly']:
+for name in [n for n in ['Service Monthly', 'Rolling Monthly', 'Service Quarterly'] if n in wb.sheetnames]:
     ws = wb[name]; r2 = rowvals(ws, 2); r1 = rowvals(ws, 1); r4 = rowvals(ws, 4)
     checks = [v for v in r2[11:] if v not in (None, '')]
     bad = [v for v in checks if v != '✔']
@@ -52,4 +52,13 @@ if 'Invoice Matrix' in wb.sheetnames:
         if row[-1] is not None and (a in ('All invoices', 'In this report') or a.startswith('Excluded (')): print('  IM', a, '=', row[-1])
     print('  IM header', im.cell(2, 4).value)
     if not nck: fails.append('Invoice Matrix checks missing')
+if 'Rolling Monthly' in wb.sheetnames:
+    rm = wb['Rolling Monthly']; r1, r4 = rowvals(rm, 1), rowvals(rm, 4)
+    blk = {v: i for i, v in enumerate(r4) if v}
+    amt = lambda lab: r1[blk[lab] + 2] if lab in blk else None
+    itd = r1[blk['ITD (to date)'] + 3]; ytd = next(amt(k) for k in blk if str(k).startswith('YTD'))
+    months = sum(r1[i + 2] or 0 for k, i in blk.items() if k not in ('Opening', 'B/F prior years', 'ITD (to date)', 'Pending – not in Total', 'Reference') and not str(k).startswith('YTD') and not str(k).startswith('After'))
+    print(f'  Rolling: Opening {amt("Opening"):,.0f} · B/F {amt("B/F prior years"):,.0f} · YTD {ytd:,.0f} (months {months:,.0f}) · ITD {itd:,.0f} · Pending {amt("Pending – not in Total"):,.0f}')
+    if abs(itd - (amt('Opening') + amt('B/F prior years') + ytd + (amt('After Dec (included)') or 0))) > 0.5 or abs(months - ytd) > 0.5: fails.append('Rolling ITD = Opening + B/F + YTD')
+    if abs(itd + amt('Pending – not in Total') - (n.cell(35, 2).value or 0)) > 0.5: fails.append('Rolling ITD + Pending = Detail')
 if fails: print('FAILED:', fails); sys.exit(1)
