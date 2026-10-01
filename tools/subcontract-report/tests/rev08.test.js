@@ -53,7 +53,7 @@ const sum = (rs) => rs.reduce((s, r) => s + r.amt, 0);
   // 4. Service Monthly: values match the detail per row and bucket
   const buf = await E.buildWorkbook(A8, { ExcelJS, JSZip }); const w = X.read(Buffer.from(buf), { cellFormula: true, sheetStubs: true });
   const sm = X.utils.sheet_to_json(w.Sheets['Service Monthly'], { header: 1, raw: true, defval: '' });
-  assert.deepStrictEqual(sm[4].slice(0, 13), ['Row ID', 'DIV', 'Package', 'MNL', 'Cost element', 'Service', 'Description', 'PO', 'Supplier code', 'Supplier', 'Line type', 'Unit', 'Trade']);
+  assert.deepStrictEqual(sm[4].slice(0, 14), ['Row ID', 'DIV', 'Package', 'MNL', 'Cost element', 'Service', 'Description', 'PO', 'Supplier code', 'Supplier', 'Type of works', 'Line type', 'Unit', 'Trade']);
   const hdr = sm[3], tcol = hdr.indexOf('Total') + 3, pcol = hdr.findIndex((v) => String(v).startsWith('Pending')) + 2;
   const data = sm.slice(5).filter((r) => /^TRAZ-\d{5}$/.test(r[0]));
   assert.strictEqual(data.length, A8.keyTuples.length, 'one row per Row ID');
@@ -72,9 +72,15 @@ const sum = (rs) => rs.reduce((s, r) => s + r.amt, 0);
     assert.ok(/^SUMIFS\(Detail!.*,\$A6,Detail!.*,">=202607",Detail!.*,"<=202609"\)$/.test(f), 'SQ Q3 is a live SUMIFS: ' + f); }
   // Trade sits after Unit on both flat sheets: the trade name from the service code, live from Coding (values proven by recalc.py)
   for (const n of ['Service Monthly', 'Service Quarterly']) { const ws = w.Sheets[n], rows = X.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
-    assert.strictEqual(rows[4][12], 'Trade', n + ': Trade after Unit'); assert.strictEqual(rows[4][13], 'Qty', n + ': Opening follows Trade');
-    rows.slice(5).forEach((r, k) => { if (!/^TRAZ-\d{5}$/.test(r[0])) return; const f = (ws[X.utils.encode_cell({ r: 5 + k, c: 12 })] || {}).f || '';
+    assert.strictEqual(rows[4][13], 'Trade', n + ': Trade after Unit'); assert.strictEqual(rows[4][14], 'Qty', n + ': Opening follows Trade');
+    rows.slice(5).forEach((r, k) => { if (!/^TRAZ-\d{5}$/.test(r[0])) return; const f = (ws[X.utils.encode_cell({ r: 5 + k, c: 13 })] || {}).f || '';
       assert.ok(/MATCH\("[^"]+",'Coding'!\$D\$2:\$D\$\d+,0\)/.test(f), `${n} row ${6 + k} trade lookup: ${f}`); }); }
+  // Type of works (ZSCSRV1 "Type of Works for PO") on every Service Monthly row and every PO of the PO Register
+  { const types = new Map(); for (const x of A8.sv) types.set(String(A8.g(x, 'Purchase Order')).trim(), String(A8.g(x, 'Type of Works for PO')).trim());
+    data.forEach((r) => assert.strictEqual(r[10], types.get(String(r[7]).trim()), `type of works on ${r[0]}`));
+    const pr = X.utils.sheet_to_json(w.Sheets['PO Register'], { header: 1, raw: true, defval: '' }), ti = pr[0].indexOf('Type of works');
+    const poRows = pr.filter((r) => r[1] === 'PO'); assert.ok(poRows.length > 0 && ti > 0);
+    poRows.forEach((r) => assert.strictEqual(r[ti], types.get(String(r[0]).trim()), `PO Register type of works on ${r[0]}`)); }
   // full recalculation in LibreOffice (when installed): every check cell ✔ and the Notes reconciliation 0
   if (require('child_process').spawnSync('which', ['soffice']).status === 0) {
     const tmp = require('path').join(require('os').tmpdir(), `rev08_${process.pid}.xlsx`); require('fs').writeFileSync(tmp, Buffer.from(buf));

@@ -30,6 +30,17 @@ db = wb['Dashboard']
 for r in db.iter_rows(min_row=7, max_row=9, values_only=True): print('  tiles', [v for v in r if v not in (None, '')])
 for r in db.iter_rows(values_only=True):
     if r[1] and str(r[1]).startswith('FINAL'): print('  ', r[2])
+if 'PO Register' in wb.sheetnames:
+    pr = wb['PO Register']; h = [c.value for c in pr[1]]
+    if 'Row' in h:
+        rows = list(pr.iter_rows(min_row=2, values_only=True)); ck = next((r for r in rows if str(r[0] or '').startswith('Check')), None)
+        tot = next(r for r in rows if r[0] == 'Total'); ti = h.index('Total (excl VAT)')
+        vals = [v for v in (ck or [])[1:] if v not in (None, '')]; bad = [v for v in vals if v != '✔']
+        npo = sum(1 for r in rows if r[1] == 'PO'); nsv = sum(1 for r in rows if r[1] == 'Service')
+        coded = sum(1 for r in rows if r[1] == 'Service' and r[h.index('DIV')])
+        print(f'  PO Register: {npo} POs, {nsv} service rows ({coded} with a DIV), total {tot[ti]:,.2f}, checks {len(vals)} not ✔ {bad}')
+        if bad or not vals: fails.append('PO Register services vs POs')
+        if abs((tot[ti] or 0) - (n.cell(35, 2).value or 0)) > 0.5: fails.append('PO Register total vs Detail')
 if 'Invoice Matrix' in wb.sheetnames:
     im = wb['Invoice Matrix']; nck = 0
     for row in im.iter_rows(values_only=True):
