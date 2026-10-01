@@ -22,17 +22,31 @@ and downloads the Excel report. Nothing is uploaded; the libraries are embedded 
   shown in its own block, never in Total (Detail → *Pending reason*).
 - **Include in this report** (Detail, drop-down on after-cut lines): picking *Include* takes the line out of Pending
   into its month. Service Monthly has a block for every month in the data – after-cut months are red and fill only with
-  included lines – and Service Quarterly, Package Monthly, By Supplier and the Dashboard follow live.
+  included lines – and Service Quarterly, DIV Monthly, By Supplier and the Dashboard follow live.
 - **Late lines** are flagged, never moved: *Added to a reported month* / *Approved after the month was reported*
   (Detail → *Reported-month flag*), from last month's report.
 - **Service Monthly** and **Service Quarterly** are flat tables (no merged cells, no header or blank rows between data):
   row 1 TOTAL (SUBTOTAL), row 2 check against Detail (✔ or the difference), row 3 year, row 4 month / quarter,
   row 5 column names. Identity (11) → Opening → Qty / Rate / Amount per period → Total → Pending → reference columns.
   Service Monthly and Service Quarterly figures are live SUMIFS on Detail; row 2 re-adds every block from Detail.
-  Package / MNL / Cost element / Unit are live lookups on Service Coding on both.
+  DIV / Package / MNL / Cost element / Unit are live lookups on Service Coding on both.
   **Trade** (after Unit) is the trade name from the service code, a live lookup on Coding → trades.
 - **Per-service totals** (Service Coding → Total amount) are values; Dashboard → Final control checks them against Detail.
-- **Package Monthly** sums Service Monthly by current package (live); the Dashboard reads it.
+- **Coding dimensions**: **DIV** (CSI division) is automatic from the service code (S0303 → DIV 03; S01/S02/S34, labour L
+  and plant P → INDIRECT); a DIV typed for a service overrides it and only overrides are stored. **Package** is the team's
+  own work package list (starts empty), **MNL** and **Cost Element** as before. Older masters and reports migrate on load:
+  a DIV in the old Package column becomes automatic (or an override when it differs), S03-style codes become their DIV,
+  any other name becomes a team Package.
+- **DIV Monthly** sums Service Monthly by DIV (live); the Dashboard's cost table reads it. The Dashboard tile *Cost with a
+  package* is the share with a team Package.
+- **Lists** sheet (after Service Coding): the DIV, Package and MNL lists, which feed drop-downs on Service Coding. Rows
+  added there, and codes typed in Service Coding that no list has, join the tool's lists when the report is loaded.
+- **Opening a report on its own**: a report rebuilds without the SAP files – Detail holds every ZSCPRG01 line (WBS splits
+  repeated, the SAP grand total from Notes as the footer), the hidden `_Serv` sheet keeps ZSCSRV1 and `_LinesPrev` the
+  previous load's lines, so Changes and late flags come out as they did. Older reports open with warnings.
+- **Work package master**: sheets DIV (division list), Packages (team list), MNL, Cost Elements, Service Mapping (DIV,
+  Package, MNL, Cost Element), Removed (codes deleted in the tool – a newer tool list keeps master rows added in Excel but
+  never brings a deleted code back).
 - **Tool screen**: the **Overview** tab is a dashboard – total to the cut date (opening / approved months / pending),
   the report month vs the month before, a status list that jumps to the right tab, cost by trade per month, the report
   month's top subcontractors, work packages (unallocated hatched) and the top 10 subcontractors with their excluded

@@ -161,8 +161,8 @@ S = S[:a] + """<div id="view-coding" role="tabpanel" aria-labelledby="tab-coding
                 <input type="search" id="wp-filter" placeholder="Filter by code, description, PO or supplier" aria-label="Filter rows">
                 <label class="muted wpo"><input type="checkbox" id="wp-open"> Only unallocated</label>
                 <span class="segs vw" role="group" aria-label="View"><button class="seg" data-view="svc">Services</button><button class="seg" data-view="po">By PO</button><button class="seg" data-view="sup">By supplier</button></span>
-                <label class="muted wpo" id="wp-g1l">Group by <select id="wp-g1"><option value="svcgroup">Service group (S04)</option><option value="month">Month</option><option value="package">Package</option><option value="mnl">MNL</option><option value="cec">Cost element</option></select></label>
-                <label class="muted wpo" id="wp-g2l">Then by <select id="wp-g2"><option value="none">—</option><option value="month">Month</option><option value="svcgroup">Service group</option><option value="package">Package</option><option value="mnl">MNL</option><option value="cec">Cost element</option></select></label>
+                <label class="muted wpo" id="wp-g1l">Group by <select id="wp-g1"><option value="svcgroup">Service group (S04)</option><option value="month">Month</option><option value="package">DIV</option><option value="wp">Package</option><option value="mnl">MNL</option><option value="cec">Cost element</option></select></label>
+                <label class="muted wpo" id="wp-g2l">Then by <select id="wp-g2"><option value="none">—</option><option value="month">Month</option><option value="svcgroup">Service group</option><option value="package">DIV</option><option value="wp">Package</option><option value="mnl">MNL</option><option value="cec">Cost element</option></select></label>
                 <button id="wp-expand">Expand all</button><button id="wp-collapse">Collapse all</button>
                 <button class="primary" id="btn-master">Download work package master</button>
                 <button id="btn-savetool" title="Download this tool with the current Package, MNL and Cost element lists built in – replace your copy with it">💾 Save tool</button>
@@ -187,7 +187,7 @@ a = S.index("function effectiveCoding() {"); b = S.index("function saveBlob(name
 S = S[:a] + """function effectiveCoding() {
   // this project's work package coding, with last month's report filling any field the master leaves empty
   const m = prevCodes(); const wp = E.codingFor(state.wp, state.plant || '');
-  for (const [k, v] of wp) { const o = m.get(k) || {}; m.set(k, { unit: v.unit || o.unit || '', csi: v.csi || o.csi || '', mnl: v.mnl || o.mnl || '', cec: v.cec || o.cec || '' }); }
+  for (const [k, v] of wp) { const o = m.get(k) || {}; m.set(k, { unit: v.unit || o.unit || '', csi: v.csi || o.csi || '', wp: v.wp || o.wp || '', mnl: v.mnl || o.mnl || '', cec: v.cec || o.cec || '' }); }
   return m;
 }
 function setCodingPill() {
@@ -282,6 +282,7 @@ R('</style>', """/* ---- work package coding ---- */
 .wpt td.bd{white-space:nowrap}
 .wpb,.wps,.wpu{display:inline-flex;align-items:center;font:11.5px var(--mono);padding:1px 7px;border-radius:999px;white-space:nowrap}
 .wpb{background:color-mix(in srgb,var(--c) 14%,var(--panel));color:var(--c);border:1px solid color-mix(in srgb,var(--c) 35%,transparent);font-weight:600}
+.wpb.auto{background:transparent;border-style:dotted;font-weight:400;opacity:.85}
 .wps{border:1px dashed var(--c);color:var(--muted);background:transparent}
 .wpu{background:var(--warn-soft);color:var(--warn);font-weight:700;font-size:10.5px;letter-spacing:.03em}
 .wpx{border:0;background:none;color:var(--muted);padding:0 0 0 4px;font-size:11px;cursor:pointer}.wpx:hover{color:var(--bad)}
@@ -332,8 +333,9 @@ R("""  setStatus('');
   applyPrevCoding();
   $('btn-build').disabled = !(state.files.prog && state.files.serv);""")
 R("""    if (v.csi || v.mnl || v.cec || own) m.set(k, { unit: own ? v.unit : '', csi: v.csi || '', mnl: v.mnl || '', cec: v.cec || '' });""",
-  """    const csi = state.wp.packages.some((p) => p.code === v.csi) ? v.csi : '', mnl = state.wp.mnl.some((x) => x.code === v.mnl) ? v.mnl : '';   // a code not in the lists stays unallocated
-    if (csi || mnl || v.cec || own) m.set(k, { unit: own ? v.unit : '', csi, mnl, cec: v.cec || '' });""")
+  """    const csi = state.wp.packages.some((p) => p.code === v.csi) && v.csi !== E.autoDiv(k.split('\\u0001')[0], state.wp.packages) ? v.csi : '', mnl = state.wp.mnl.some((x) => x.code === v.mnl) ? v.mnl : '';   // a code not in the lists stays unallocated
+    const wpc = (state.wp.wpList || []).some((x) => x.code === v.wp) ? v.wp : '';
+    if (csi || wpc || mnl || v.cec || own) m.set(k, { unit: own ? v.unit : '', csi, wp: wpc, mnl, cec: v.cec || '' });""")
 R("function saveBlob(name, blob) {", """function applyPrevCoding() {
   // runs once per (report, master, project): loading a master afterwards replaces state.wp, so the report's codes go in again
   if (!state.prev) return; const pr = state.plant || state.prev.project; if (!pr) return;
@@ -399,6 +401,50 @@ function saveBlob(name, blob) {""")
 R(".warnx{color:var(--warn);font-weight:600}", "header.top .pill.themebtn{cursor:pointer;font:inherit;font-size:12px;font-weight:600;color:#fff}header.top .pill.themebtn:hover{background:rgba(255,255,255,.14)}\n.warnx{color:var(--warn);font-weight:600}")
 
 # ---- embed libraries
+# ---- a report on its own: rebuilt from its Detail sheet (no SAP files needed to view, recode or re-download it)
+R("for (const n of ['_History', '_Lines', '_Rows', 'Service Coding', 'Service Monthly'])",
+  "for (const n of ['_History', '_Lines', '_LinesPrev', '_Rows', 'Service Coding', 'Service Monthly', 'Lists', 'Detail', 'Notes', '_Serv'])")
+R("state.prev.savedAt = f.lastModified ? new Date(f.lastModified) : null; state.files.prevName = f.name;",
+  "state.prev.savedAt = f.lastModified ? new Date(f.lastModified) : null; state.files.prevName = f.name; state.prevSheets = by; state.reopen = null;")
+R("""  setStatus('');
+  applyPrevCoding();
+  $('btn-build').disabled = !(state.files.prog && state.files.serv);""", """  setStatus('');
+  prepareReopen();
+  applyPrevCoding();
+  $('btn-build').disabled = !canBuild();""")
+R("""  return E.analyse(state.files.prog, state.files.serv, { coding: mergedCoding(), master: state.wp, history: state.prev, cutMonth: +$('opt-month').value || undefined,
+    files: { prog: state.files.progName, serv: state.files.servName } });""", """  const src = sourceNow();
+  return E.analyse(src.prog, src.serv, { coding: mergedCoding(), master: state.wp, history: src.history, reopen: src.reopen, cutMonth: +$('opt-month').value || undefined,
+    files: { prog: src.progName, serv: state.files.servName || src.progName } });""")
+R("state.files = {}; state.prev = null; state.analysis = null; state.wp = E.defaultMaster();",
+  "state.files = {}; state.prev = null; state.prevSheets = null; state.reopen = null; state.analysis = null; state.wp = E.defaultMaster();")
+R("function applyPrevCoding() {", """function canBuild() { return !!((state.files.prog && state.files.serv) || (!state.files.prog && state.reopen)); }
+// SAP files when they are loaded (the report is then last month's report); otherwise the report itself, rebuilt from its Detail sheet
+function sourceNow() {
+  if (state.files.prog) return { prog: state.files.prog, serv: state.files.serv, history: state.prev, reopen: null, progName: state.files.progName };
+  const R = state.reopen; return { prog: R.prog, serv: state.files.serv || R.serv, history: R.history, reopen: R.reopen, progName: state.files.prevName };
+}
+function prepareReopen() {
+  if (state.files.prog || !state.prevSheets || !state.prevSheets.Detail || state.reopen) return;
+  try { state.reopen = E.fromReport(state.prevSheets); } catch (e) { message('msgs', 'bad', e.message || String(e)); return; }
+  const R = state.reopen; state.plant = R.plant; CodingUI.reset(); setCodingPill();
+  fillMonths(R.prog); if (R.cutMonth) $('opt-month').value = String(R.cutMonth);
+  message('msgs', 'good', `${state.files.prevName} opens on its own: ${(R.prog.length - 2).toLocaleString('en-US')} certificate rows rebuilt from its Detail sheet. Build report to view it, recode it, pick another month or download it again. For a new month, drop the new SAP exports with it.`);
+  R.warnings.forEach((w) => message('msgs', 'warn', w));
+}
+function applyPrevCoding() {""")
+# ---- the report's package / MNL lists, and codes typed that no list has, join the tool's lists
+R("""  const r = E.adoptPrevious(state.wp, pr, state.prev.coding, state.prev.savedAt);""", """  const pk = E.adoptPackages(state.wp, state.prev);
+  if (pk.packages.length || pk.wp.length || pk.mnl.length) { state.wp.version = E.listStamp(); state.wpDirty = true; state.toolDirty = true; const sb = $('btn-savetool'); if (sb) sb.classList.add('dirty'); CodingUI.reset();
+    message('msgs', 'good', `New in the lists from ${state.files.prevName}: ` + [pk.wp.length ? `package${pk.wp.length > 1 ? 's' : ''} ${pk.wp.join(', ')}` : '', pk.packages.length ? `DIV ${pk.packages.join(', ')}` : '', pk.mnl.length ? `MNL ${pk.mnl.join(', ')}` : ''].filter(Boolean).join(' · ')
+      + '. Rename them with ✎ Edit list; 💾 Save tool and Download master keep them.'); }
+  if (pk.skipped.length) message('msgs', 'warn', `${pk.skipped.join(', ')} ${pk.skipped.length > 1 ? 'were' : 'was'} deleted in the tool, so the report does not bring ${pk.skipped.length > 1 ? 'them' : 'it'} back – those services stay unallocated.`);
+  const r = E.adoptPrevious(state.wp, pr, state.prev.coding, state.prev.savedAt);""")
+# ---- master: rows added in Excel survive when the tool's own lists are newer
+R("""(state.wp.dropped ? ` · ${state.wp.dropped} codings on deleted packages are unallocated again` : ''));""",
+  """(state.wp.dropped ? ` · ${state.wp.dropped} codings on deleted packages are unallocated again` : ''));
+        if (state.wp.addedFromMaster && state.wp.addedFromMaster.length) message('msgs', 'good', `Added from ${f.name}: ${state.wp.addedFromMaster.join(', ')} – rows added to the master in Excel join the tool's lists (💾 Save tool keeps them).`);""")
+
 libs = [('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js', 'node_modules/xlsx/dist/xlsx.full.min.js'),
         ('https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js', 'node_modules/exceljs/dist/exceljs.min.js'),
         ('https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js', 'node_modules/jszip/dist/jszip.min.js'),

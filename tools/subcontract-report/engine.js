@@ -187,9 +187,9 @@
       return [null, null];
     };
     const services = svcKeys.map((k) => {
-      const [svc, text] = k.split('\u0001'); const [u, src] = unitGuess(svc, text); const c = coding.get(k) || {};
+      const [svc, text] = k.split('\u0001'); const [u, src] = unitGuess(svc, text); const c = coding.get(k) || {}, ad = autoDiv(svc, (opts.master && opts.master.packages) || PACKAGES);
       return { id: svcId.get(k), key: k, svc, text, unit: c.unit || u, unitSrc: c.unit ? (c.unit === u ? src : 'Your entry (shared coding)') : (src || 'unknown – please fill'),
-        sapUnit: u, csi: c.csi || '', mnl: c.mnl || '', cec: c.cec || '' };
+        sapUnit: u, csi: c.csi || ad, divAuto: !c.csi && !!ad, wp: c.wp || '', mnl: c.mnl || '', cec: c.cec || '' };
     });
 
     // ---- history (previous report)
@@ -212,6 +212,7 @@
       }
       for (const [k, p] of hist.lines) if (!seen.has(k)) changes.push({ type: 'Removed', lid: k, p, prev: p.amt, now: 0 });
     } else for (const r of det) r.first = loadNo;
+    if (opts.reopen && !opts.reopen.fromLines) for (const r of det) { if (opts.reopen.first.has(r.lid)) r.first = opts.reopen.first.get(r.lid); r.late = opts.reopen.late.get(r.lid) || null; }
     // months already reported: last report's amount per month, so every change can be tied to lines added since
     let prevByMonth = null;
     if (hist && hist.lines && hist.lines.size && [...hist.lines.values()].some((p) => p.bucket != null)) {
@@ -288,9 +289,18 @@
     const asDate = (v) => v instanceof Date ? v : (typeof v === 'number' && v > 0 ? new Date(Math.round((v - 25569) * 86400000)) : null);
     if (h) for (const r of h.slice(1)) if (!blank(r[0])) out.loads.push({ no: num(r[0]), run: asDate(r[1]), dataDate: asDate(r[2]), file: str(r[3]), lines: num(r[4]), total: num(r[5]),
       approved: num(r[6]), opening: num(r[7]), pending: num(r[8]), adjustments: num(r[9]), subs: num(r[10]), pos: num(r[11]), project: str(r[12]) });
-    const ln = aoaBySheet['_Lines'];
-    if (ln) for (const r of ln.slice(1)) if (!blank(r[0])) out.lines.set(str(r[0]), { amt: num(r[1]), appr: str(r[2]), flag: str(r[3]), first: num(r[4]), po: str(r[5]), sup: str(r[6]), svc: str(r[7]), text: str(r[8]),
-      bucket: blank(r[9]) ? null : (isFinite(+r[9]) ? +r[9] : str(r[9])), month: num(r[10]) || null });
+    const lines = (ln) => { const m = new Map(); if (ln) for (const r of ln.slice(1)) if (!blank(r[0])) m.set(str(r[0]), { amt: num(r[1]), appr: str(r[2]), flag: str(r[3]), first: num(r[4]), po: str(r[5]), sup: str(r[6]), svc: str(r[7]), text: str(r[8]),
+      bucket: blank(r[9]) ? null : (isFinite(+r[9]) ? +r[9] : str(r[9])), month: num(r[10]) || null }); return m; };
+    out.lines = lines(aoaBySheet['_Lines']);
+    out.prevLines = aoaBySheet['_LinesPrev'] ? lines(aoaBySheet['_LinesPrev']) : null;    // the load before this report – lets the report be reopened on its own
+    // the report's own package / MNL lists (Packages sheet): rows added there in Excel come into the tool
+    out.divList = []; out.wpList = []; out.mnlList = [];
+    const pk = aoaBySheet['Lists'];
+    if (pk) { const H = (pk[0] || []).map((x) => str(x).trim()), ix = (n) => H.indexOf(n), cell = (r, n) => (ix(n) >= 0 ? str(r[ix(n)]).trim() : '');
+      for (const r of pk.slice(1)) {
+        const dc = normPkg(cell(r, 'DIV code')); if (dc && !/^S\d{2}$/i.test(dc)) out.divList.push({ code: dc, label: cell(r, 'DIV label'), group: cell(r, 'Group'), icon: cell(r, 'Icon') });
+        const pc = cell(r, 'Package code'); if (pc && divLike(pc) == null) out.wpList.push({ code: pc, label: cell(r, 'Package label') });
+        const mc = cell(r, 'MNL code'); if (mc) out.mnlList.push({ code: mc, label: cell(r, 'MNL label') }); } }
     out.rows = new Map();                            // row identity -> { id, first, order }
     out.smOrder = new Map();                         // Row ID -> position in last report's Service Monthly, as the user left it
     const smv = aoaBySheet['Service Monthly'];
@@ -304,14 +314,78 @@
       const H = sc[0].map((x) => str(x).trim()); const ix = (n) => H.indexOf(n);
       for (const r of sc.slice(1)) {
         const svc = str(r[ix('Service')]).trim(); if (!svc) continue;
-        const e = { unit: str(r[ix('Unit')]).trim(), csi: normPkg(r[ix('Package') >= 0 ? ix('Package') : ix('CSI')]),   // "CSI" in older reports
-          mnl: str(r[ix('MNL')]).trim(), cec: str(r[ix('Cost Element Code')]).trim(),
-          unitSrc: str(r[ix('Unit source')]) };
+        // reports from before DIV had its own column: their Package column holds the DIV ("CSI" in the oldest)
+        const newFmt = ix('DIV') >= 0, rawDiv = str(r[newFmt ? ix('DIV') : (ix('Package') >= 0 ? ix('Package') : ix('CSI'))]).trim();
+        const dl = rawDiv ? divLike(rawDiv) : '';
+        let csi = newFmt ? (dl ?? normPkg(rawDiv)) : (dl || ''), wp = newFmt ? str(r[ix('Package')]).trim() : (dl == null ? rawDiv : '');   // older: a non-division code was the team's own package
+        if (wp && divLike(wp) != null) { if (!csi) csi = divLike(wp); wp = ''; }          // S03 / DIV 03 typed as a package is a DIV
+        const e = { unit: str(r[ix('Unit')]).trim(), csi, wp, mnl: str(r[ix('MNL')]).trim(), cec: str(r[ix('Cost Element Code')]).trim(), unitSrc: str(r[ix('Unit source')]) };
         out.coding.set(codingKey(svc, str(r[ix('Service text')]).trim()), e);
       }
     }
     if (out.loads.length) out.project = out.loads[out.loads.length - 1].project || null;
     return out;
+  }
+
+
+  // ================================================================== REOPEN A REPORT ON ITS OWN
+  // A report's Detail sheet holds every ZSCPRG01 line it was built from, so the SAP layout can be rebuilt from it: the rows go
+  // back to their SAP columns (WBS splits repeated, the SAP grand total from Notes as the footer), ZSCSRV1 comes from the hidden
+  // _Serv sheet (reports from before it existed get one built from Detail). analyse() then runs unchanged.
+  function fromReport(by) {
+    const dt = by['Detail']; if (!dt || !dt.length) throw new Error('This report has no Detail sheet, so it cannot be opened without the SAP files.');
+    const prev = readPrevious(by), warnings = [];
+    const H = dt[0].map((x) => str(x).trim()), ix = (n) => { const i = H.indexOf(n); if (i < 0) throw new Error(`The report's Detail sheet has no "${n}" column.`); return i; };
+    const C = {}; for (const n of ['Row key', 'Cert. date', 'Approved (Character 1)', 'Initial invoice (Flag)', 'Cert. serial', 'PO', 'Supplier code', 'Supplier name', 'Invoice doc.', 'Entry sheet',
+      'Doc type', 'PO item', 'Service', 'Service text', 'Contract type', 'Tax code', 'Gross price', 'Total qty', 'Previous qty', 'Current qty', 'Paid % (Progress %)', 'Cost (excl VAT)',
+      'VAT current', 'G/L acct', 'WBS element (ref. only)', 'WBS description (ref. only)', 'PO line ref', 'Material group', 'Material group description', 'Profit centre', 'Line ID',
+      'WBS rows (split)', 'First seen (load)']) C[n] = ix(n);
+    const opt = (n) => H.indexOf(n);
+    const cFlag = opt('Reported-month flag'), cInc = opt('Include in this report');
+    const serial = (v) => v instanceof Date ? (Date.UTC(v.getUTCFullYear(), v.getUTCMonth(), v.getUTCDate()) - Date.UTC(1899, 11, 30)) / 86400000 : num(v);
+    const rows = dt.slice(1).filter((r) => !blank(r[C['PO']]));
+    const plant = prev.project || (rows.map((r) => /^(.*)-\d{5}$/.exec(str(r[C['Row key']]))).find(Boolean) || [])[1] || 'REPORT';
+    const width = Math.max(...Object.values(P)) + 1, head = new Array(width).fill(''); for (const k in P) head[P[k]] = P_NAMES[k];
+    const prog = [head], first = new Map(), late = new Map(), include = new Map(); let sum = 0;
+    for (const r of rows) {
+      const lid = str(r[C['Line ID']]), parts = lid.split('|'), o = new Array(width).fill('');
+      const v = { plant, pc: r[C['Profit centre']], serial: r[C['Cert. serial']], date: serial(r[C['Cert. date']]), po: r[C['PO']], supName: r[C['Supplier name']], supCode: r[C['Supplier code']],
+        appr: r[C['Approved (Character 1)']], flag: r[C['Initial invoice (Flag)']], docno: r[C['Invoice doc.']], item: r[C['PO item']], pkg: parts[3] || '', line: parts[4] || '',
+        price: r[C['Gross price']], svc: r[C['Service']], text: r[C['Service text']], tax: r[C['Tax code']], ctype: r[C['Contract type']], totq: r[C['Total qty']], prevq: r[C['Previous qty']],
+        qty: r[C['Current qty']], paid: num(r[C['Paid % (Progress %)']]) * 100, vat: r[C['VAT current']], amt: r[C['Cost (excl VAT)']], es: r[C['Entry sheet']], esText: '',
+        doctype: r[C['Doc type']], gl: r[C['G/L acct']], wbs: r[C['WBS element (ref. only)']], wbsDesc: r[C['WBS description (ref. only)']] };
+      for (const k in P) o[P[k]] = v[k] == null ? '' : v[k];
+      const n = Math.max(1, num(r[C['WBS rows (split)']]) || 1);          // SAP repeats a split line on every WBS row
+      for (let i = 0; i < n; i++) { prog.push(o.slice()); sum += num(v.amt); }
+      if (!blank(r[C['First seen (load)']])) first.set(lid, num(r[C['First seen (load)']]));
+      if (cFlag >= 0 && !blank(r[cFlag])) late.set(lid, str(r[cFlag]).trim());
+      if (cInc >= 0 && str(r[cInc]).trim() === 'Include') include.set(lid, 'Include');
+    }
+    const nt = by['Notes'] || []; const gtRow = nt.find((r) => str(r[0]).startsWith('SAP grand total'));
+    const gt = gtRow && typeof gtRow[1] === 'number' ? gtRow[1] : sum;
+    const foot = new Array(width).fill(''); foot[0] = `${plant} (${rows.length})`; foot[P.amt] = gt; prog.push(foot);
+    // ZSCSRV1: the copy kept in the report, else rebuilt from Detail (PO line, service, price, unit, material group)
+    let serv = by['_Serv'] && by['_Serv'].length > 1 ? by['_Serv'] : null;
+    if (!serv) {
+      const unit = new Map(); for (const [k, e] of prev.coding) unit.set(k, e.unit);
+      const seen = new Set(); serv = [SERV_NEEDS.slice()];
+      const at = (n) => SERV_NEEDS.indexOf(n);
+      for (const r of rows) { const m = /^PO(.+)_I(.+)_L(.+)$/.exec(str(r[C['PO line ref']])); if (!m) continue;
+        const k = [m[1], m[2], m[3], str(r[C['Service']]), str(r[C['Service text']]), num(r[C['Gross price']])].join('\u0001'); if (seen.has(k)) continue; seen.add(k);
+        const o = new Array(SERV_NEEDS.length).fill('');
+        o[at('Purchase Order')] = m[1]; o[at('PO item')] = m[2]; o[at('PO Service Line no.')] = m[3]; o[at('PO Service Code')] = str(r[C['Service']]); o[at('Service Short Text')] = str(r[C['Service text']]);
+        o[at('Service Unit Price')] = num(r[C['Gross price']]); o[at('PO Service UOM')] = unit.get(codingKey(str(r[C['Service']]).trim(), str(r[C['Service text']]).trim())) || '';
+        o[at('PO Service Material Group')] = str(r[C['Material group']]); o[at('PO Service Material Group Description')] = str(r[C['Material group description']]);
+        o[at('Subcontractor')] = str(r[C['Supplier code']]); o[at('Subcontractor Name')] = str(r[C['Supplier name']]);
+        serv.push(o); }
+      warnings.push('This report was made before reports kept their ZSCSRV1 data, so contract quantities and values (Qty Reconciliation, PO Register) are blank. Load the ZSCSRV1 export with it to fill them.');
+    }
+    // history: the loads before this one, and the lines of the load before (kept in _LinesPrev) so Changes come out as they did
+    const loads = prev.loads.slice(0, -1), own = prev.loads[prev.loads.length - 1] || null;
+    const history = Object.assign({}, prev, { loads, lines: prev.prevLines || new Map() });
+    if (!prev.prevLines && loads.length) warnings.push('This report was made before reports kept the previous load\'s lines, so the Changes sheet cannot list what changed in it. The figures are not affected.');
+    const cutMonth = own && own.dataDate instanceof Date ? own.dataDate.getUTCFullYear() * 100 + own.dataDate.getUTCMonth() + 1 : null;
+    return { prog, serv, history, reopen: { first, late, include, fromLines: !!prev.prevLines }, plant, cutMonth, warnings, project: prev.project };
   }
 
   // ================================================================== WORKBOOK
@@ -334,7 +408,7 @@
   const BRAND = '1F3E6B';   // single-series charts
   const GOLDLINE = { style: 'thin', color: { argb: 'FFC8A45C' } };
   // tab groups: log / file history & transactions / reports
-  const TAB_GROUPS = [['0F2A52', ['Dashboard', 'Invoice Matrix', 'Service Monthly', 'Service Quarterly', 'Package Monthly', 'Service Coding']], ['C8A45C', ['Changes', 'Detail']],
+  const TAB_GROUPS = [['0F2A52', ['Dashboard', 'Invoice Matrix', 'Service Monthly', 'Service Quarterly', 'DIV Monthly', 'Service Coding', 'Lists']], ['C8A45C', ['Changes', 'Detail']],
     ['4A6FA5', ['PO Register', 'By Supplier', 'Subcontractor x Trade', 'Subcontractors over time', 'Qty Reconciliation', 'Coding', 'Notes']]];
   const NOTES_RECON_ROW = 32;   // fixed so the Dashboard control strip can point at it
   const PAL = ['2A78D6', 'EB6834', '1BAF7A', 'EDA100', 'E87BA4', '008300', '4A3AA7', 'A6A6A0'];
@@ -465,9 +539,9 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     const { ExcelJS, JSZip } = libs; const say = progress || (() => {});
     const det = A.det, MAINPC = A.MAINPC, months = A.months, omonths = A.omonths;
     const wb = new ExcelJS.Workbook(); wb.creator = TOOL.author; wb.title = TOOL.name; wb.description = SIG; wb.calcProperties.fullCalcOnLoad = true;
-    const ORDER = ['Dashboard', 'Invoice Matrix', 'Service Monthly', 'Service Quarterly', 'Package Monthly', 'Service Coding', 'Changes', 'Detail', 'PO Register', 'By Supplier', 'Subcontractor x Trade',
-      'Subcontractors over time', 'Qty Reconciliation', 'Coding', 'Notes', '_History', '_Lines', '_Rows', '_Chart'];
-    const S = {}; for (const n of ORDER) S[n] = makeSheetApi(wb.addWorksheet(n, n === 'Dashboard' || n === 'Subcontractor x Trade' || n === 'Subcontractors over time' || n === 'Changes' || n === 'Package Monthly' || n === 'Invoice Matrix' ? { views: [{ showGridLines: false }] } : {}));
+    const ORDER = ['Dashboard', 'Invoice Matrix', 'Service Monthly', 'Service Quarterly', 'DIV Monthly', 'Service Coding', 'Lists', 'Changes', 'Detail', 'PO Register', 'By Supplier', 'Subcontractor x Trade',
+      'Subcontractors over time', 'Qty Reconciliation', 'Coding', 'Notes', '_History', '_Lines', '_LinesPrev', '_Rows', '_Serv', '_Chart'];
+    const S = {}; for (const n of ORDER) S[n] = makeSheetApi(wb.addWorksheet(n, n === 'Dashboard' || n === 'Subcontractor x Trade' || n === 'Subcontractors over time' || n === 'Changes' || n === 'DIV Monthly' || n === 'Invoice Matrix' ? { views: [{ showGridLines: false }] } : {}));
     const charts = [];
     for (const [color, names] of TAB_GROUPS) for (const n of names) S[n].ws.properties.tabColor = { argb: 'FF' + color };
 
@@ -494,24 +568,40 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     pkgs.forEach((p, i) => { cd.set(i + 2, 16, p.code, { font: st.F }); cd.set(i + 2, 17, `${p.icon ? p.icon + ' ' : ''}${p.label}`, { font: st.F }); cd.set(i + 2, 18, p.group, { font: st.F }); });
     cd.hdr(1, 20, 'MNL'); cd.hdr(1, 21, 'MNL name'); mnls.forEach((m, i) => { cd.set(i + 2, 20, m.code, { font: st.F }); cd.set(i + 2, 21, m.label, { font: st.F }); });
     [11, 30, 10].forEach((w, j) => cd.width(16 + j, w)); cd.width(20, 8); cd.width(21, 16);
-    cd.ws.getCell('P1').note = 'Work package catalogue (from the work package master). Edit it in the master, not here.';
+    cd.ws.getCell('P1').note = 'DIV list (CSI divisions, from the work package master). Edit it in the web tool, not here.';
 
     // ---------------- Service Coding
     await say('Service Coding'); const sc = S['Service Coding'];
-    ['Svc ID', 'Service', 'Service text', 'Unit', 'Unit source', 'Package', 'MNL', 'Cost Element Code', 'Lines', 'Total amount'].forEach((v, j) => {
-      const y = ['Unit', 'Package', 'MNL', 'Cost Element Code'].includes(v); sc.hdr(1, j + 1, v, y ? FILL.YF : FILL.HF, y ? st.HB : st.H); });
+    ['Svc ID', 'Service', 'Service text', 'Unit', 'Unit source', 'DIV', 'Package', 'MNL', 'Cost Element Code', 'Lines', 'Total amount'].forEach((v, j) => {
+      const y = ['Unit', 'DIV', 'Package', 'MNL', 'Cost Element Code'].includes(v); sc.hdr(1, j + 1, v, y ? FILL.YF : FILL.HF, y ? st.HB : st.H); });
     const linesBy = countBy(det, (r) => r.sid); const NSC = A.services.length + 1;
     for (const s of A.services) {
       const i = s.id + 1;
-      [s.id, s.svc, s.text, s.unit || null, s.unitSrc, s.csi || null, s.mnl || null, s.cec || null, linesBy.get(s.id) || 0].forEach((v, j) => sc.set(i, j + 1, v, { font: st.F }));
-      for (const j of [4, 6, 7, 8]) sc.set(i, j, undefined, { fill: FILL.YF, font: st.BLUE });
+      [s.id, s.svc, s.text, s.unit || null, s.unitSrc, s.csi || null, s.wp || null, s.mnl || null, s.cec || null, linesBy.get(s.id) || 0].forEach((v, j) => sc.set(i, j + 1, v, { font: st.F }));
+      for (const j of [4, 6, 7, 8, 9]) sc.set(i, j, undefined, { fill: FILL.YF, font: st.BLUE });
+      if (s.divAuto) sc.set(i, 6, undefined, { font: { ...st.F, color: { argb: 'FF66748C' } } });     // grey = automatic from the service code
       sc.set(i, 2, undefined, { fmt: '@' });
       if (!s.unit) sc.set(i, 5, undefined, { font: st.RED });
     }
-    [7, 11, 46, 8, 26, 12, 12, 18, 7, 15].forEach((w, j) => sc.width(j + 1, w));
-    sc.ws.views = [{ state: 'frozen', xSplit: 3, ySplit: 1 }]; sc.ws.autoFilter = `A1:J${NSC}`;
+    [7, 11, 46, 8, 26, 11, 16, 9, 18, 7, 15].forEach((w, j) => sc.width(j + 1, w));
+    sc.ws.views = [{ state: 'frozen', xSplit: 3, ySplit: 1 }]; sc.ws.autoFilter = `A1:K${NSC}`;
     sc.ws.getCell('D1').note = 'Filled from the shared coding when someone has entered it, otherwise from ZSCSRV1 (PO Service UOM). Editable.';
-    sc.ws.getCell('F1').note = 'Package (CSI division), MNL and Cost Element for this project, one row per Service + Service text, from the work package master. Blank = not coded.';
+    sc.ws.getCell('F1').note = 'DIV (CSI division): automatic from the service code (grey) – S0303 → DIV 03; S01, S02, S34, labour and plant → INDIRECT. Type another DIV to override it.';
+    sc.ws.getCell('G1').note = 'Package, MNL and Cost Element: your team codes them (blank = not coded yet). Pick from the list, or add a package on the Lists sheet first – the web tool reads them back from this sheet.';
+    { // the lists travel with the report: a row added on Lists joins the web tool's list when this report is loaded
+      const pk = S['Lists'], cat = (A.opts.master && A.opts.master.packages) || PACKAGES, mn = (A.opts.master && A.opts.master.mnl) || MNLS, wl = (A.opts.master && A.opts.master.wpList) || [];
+      ['DIV code', 'DIV label', 'Group', 'Icon'].forEach((h, j) => pk.hdr(1, 1 + j, h)); ['Package code', 'Package label'].forEach((h, j) => pk.hdr(1, 6 + j, h, fill('7A5C1E')));
+      ['MNL code', 'MNL label'].forEach((h, j) => pk.hdr(1, 9 + j, h, FILL.H2));
+      cat.forEach((p, n) => { [p.code, p.label, p.group, p.icon || null].forEach((v, j) => pk.set(n + 2, 1 + j, v, { font: j ? st.F : { ...st.F, name: 'Consolas' } })); });
+      wl.forEach((x, n) => { pk.set(n + 2, 6, x.code, { font: { ...st.F, name: 'Consolas' } }); pk.set(n + 2, 7, x.label || null, { font: st.F }); });
+      mn.forEach((x, n) => { pk.set(n + 2, 9, x.code, { font: { ...st.F, name: 'Consolas' } }); pk.set(n + 2, 10, x.label, { font: st.F }); });
+      [12, 32, 10, 6, 3, 16, 32, 3, 10, 22].forEach((w, j) => pk.width(1 + j, w));
+      pk.set(1, 12, 'Package = your team\'s own work packages: add a row (code and name) and it can be picked on Service Coding → Package. DIV is the CSI division list (automatic from the service code). '
+        + 'Load this report in the web tool and rows added here join its lists. Renaming or deleting is done in the web tool (✎ Edit list).', { font: st.IT, align: { wrapText: true, vertical: 'top' } });
+      pk.width(12, 60); pk.ws.getRow(1).height = 20; pk.ws.views = [{ state: 'frozen', ySplit: 1 }];
+      const listDV = (col, ref, what) => sc.ws.dataValidations.add(`${col}2:${col}${NSC}`, { type: 'list', allowBlank: true, formulae: [ref], showErrorMessage: true, errorStyle: 'information',
+        errorTitle: `Not in the ${what} list`, error: `This code is not on the Lists sheet. It is kept, and the web tool adds it as a new ${what} when it reads this report.` });
+      listDV('F', `Lists!$A$2:$A$${cat.length + 100}`, 'DIV'); listDV('G', `Lists!$F$2:$F$${wl.length + 300}`, 'package'); listDV('H', `Lists!$I$2:$I$${mn.length + 100}`, 'MNL'); }
 
     // ---------------- Detail
     await say('Detail'); const dt = S['Detail'];
@@ -527,7 +617,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     dt.ws.getCell(1, cols.length).note = 'Added to a reported month = a line dated in a month the last report already showed, but not among its lines (late / back-dated). Approved after the month was reported = it was in the last report as not approved.';
     dt.ws.getCell('R1').note = 'Adjustment = amount with zero quantity, or a ≤ 0.01 placeholder quantity that does not explain the amount: payment-% changes, re-pricing, reversals. Qty only (excluded) = quantity with zero amount – no row key, never in Service Monthly or the Dashboard.';
     const sorted = det.slice().sort((a, b) => cmpTuple([a.dateKey, a.po, a.serial, a.svc], [b.dateKey, b.po, b.serial, b.svc]));
-    const dtRows = [];
+    const dtRows = [], inc = (A.opts.reopen && A.opts.reopen.include) || new Map();     // Include picks survive when a report is reopened
     sorted.forEach((r, n) => {
       const i = n + 2;
       const eq = `AND(X${i}<>0,ABS(AC${i}-AA${i}*X${i})>1)`;
@@ -542,12 +632,12 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
         { formula: `IF(R${i}="Adjustment",IF(X${i}<>0,"Adjustment (amount ÷ net rate)","Adjustment – no net rate"),IF(R${i}<>"Normal","",IF(${eq},"Equivalent (amount ÷ net rate)","SAP qty")))` },
         (r.initial && !r.approved) ? 'Opening – not approved' : null, r.lid, r.split || null, r.first, r.qcheck,
         { formula: `IF(F${i}<>"X","Not approved",IF(D${i}>Coding!$N$3,IF(${INC}${i}="Include","","After cut date"),""))` }, r.late || null,
-        r.approved && r.month > A.CUT ? 'Not included' : null]);
+        r.approved && r.month > A.CUT ? (inc.get(r.lid) === 'Include' ? 'Include' : 'Not included') : null]);
     });
     dt.ws.addRows(dtRows);
     { // after-cut lines: a drop-down lets the user count the line in this report, in its own month (Service Monthly adapts live)
       const ic = cols.length;
-      dt.ws.getCell(1, ic).note = `Lines dated after the cut date (${A.cutDate.toISOString().slice(0, 10)}) are Pending. Pick "Include" to count one in this report: it leaves Pending and joins its month on Service Monthly, Service Quarterly, Package Monthly and the Dashboard at once. Not-approved lines stay Pending.`;
+      dt.ws.getCell(1, ic).note = `Lines dated after the cut date (${A.cutDate.toISOString().slice(0, 10)}) are Pending. Pick "Include" to count one in this report: it leaves Pending and joins its month on Service Monthly, Service Quarterly, DIV Monthly and the Dashboard at once. Not-approved lines stay Pending.`;
       sorted.forEach((r, n) => { if (!(r.approved && r.month > A.CUT)) return; const x = dt.ws.getCell(n + 2, ic);
         x.dataValidation = { type: 'list', allowBlank: true, formulae: ['"Include,Not included"'] }; }); }
     { const qc = cols.indexOf('Qty check') + 1; dt.ws.getCell(1, qc).note = 'Adjustment lines only. The report qty (amount ÷ net rate) is kept; "Check" means the PO service line has no normal qty to net it against, or the adjustment takes that line\'s qty below zero – usually a deduction booked on a placeholder-priced line. Review the qty before using it.';
@@ -565,7 +655,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
 
     let SM_ORDER, SM_TOTAL, SM_PEND, SM_COLS; const supName = new Map(); for (const r of det) supName.set(r.supCode, r.supName);   // also used by By Supplier
     const IM = {};                                              // Invoice Matrix check range, read by Notes
-    const PM = {};                                              // Package Monthly layout, read by the Dashboard
+    const PM = {};                                              // DIV Monthly layout, read by the Dashboard
     { // own scope: the sheet's local names stay apart from the other sheets'
     // ---------------- Service Monthly / Service Quarterly: one flat table each (same rows, same order), laid out like Material Monthly.
     //   rows 1 TOTAL (SUBTOTAL, follows filters) · 2 check against Detail · 3 year · 4 month / quarter · 5 column names · data from 6
@@ -580,12 +670,13 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     const all = A.keyTuples.map((_, i) => i);
     // build order: work package (catalogue order, UNALLOCATED last) → service → text → PO. No header or blank rows, so sort / filter / copy never break.
     const cod = A.opts.coding || new Map(), cat = (A.opts.master && A.opts.master.packages) || PACKAGES;
-    const pkgOf = (i) => { const c = normPkg((cod.get(codingKey(A.keyTuples[i][0], A.keyTuples[i][1])) || {}).csi || ''); return cat.some((p) => p.code === c) ? c : ''; };
+    const pkgOf = (i) => { const sv = A.services[(A.svcId.get(codingKey(A.keyTuples[i][0], A.keyTuples[i][1])) || 0) - 1], c = normPkg((sv || {}).csi || ''); return cat.some((p) => p.code === c) ? c : ''; };   // DIV, automatic or typed
     SM_ORDER = [...cat.map((p) => p.code), ''].flatMap((code) => all.filter((i) => pkgOf(i) === code).sort(grouped));
     const agg = new Map();                                     // Row ID -> bucket -> [report qty, amount]
     for (const r of det) { if (r.isqo || !r.rk) continue; let m = agg.get(r.rk); if (!m) agg.set(r.rk, (m = new Map()));
       const x = m.get(r.bucket) || [0, 0]; x[0] += r.repq; x[1] += r.amt; m.set(r.bucket, x); }
-    const ID = ['Row ID', 'Package', 'MNL', 'Cost element', 'Service', 'Description', 'PO', 'Supplier code', 'Supplier', 'Line type', 'Unit', 'Trade'];
+    const ID = ['Row ID', 'DIV', 'Package', 'MNL', 'Cost element', 'Service', 'Description', 'PO', 'Supplier code', 'Supplier', 'Line type', 'Unit', 'Trade'];
+    const ic = (n) => ID.indexOf(n) + 1;                       // ID column number by name
     const REF = ['Rate check', 'First seen (load)', 'Svc ID', 'Contract type', 'Tax code', 'Gross price', 'Resource', 'Material group', 'Material group description', 'Profit centre'];
     const AMTF = '#,##0;[Red]-#,##0;;@', QTYF = '#,##0.00;[Red]-#,##0.00;;@', R1 = 6, RN = R1 + SM_ORDER.length - 1;
     const DTR = (n) => `Detail!$${C[n]}$2:$${C[n]}$${NR}`;
@@ -613,10 +704,11 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
         const sid = A.svcId.get(codingKey(svc, text)), mg = [...(mgrp.get(id) || new Map()).values()], a = agg.get(id) || new Map();
         const SIDc = `$${L(rc('Svc ID'))}${i}`, code = (col) => `${lk('Service Coding', 'A', col, SIDc, '""', NSC)}&""`;   // &"" keeps an empty code blank, not 0
         const dig = (v) => (/^\d{1,15}$/.test(v) ? Number(v) : v), row = [];
-        row[0] = id; row[1] = { formula: `IF(${code('F')}="","UNALLOCATED",${code('F')})` }; row[2] = { formula: code('G') }; row[3] = { formula: code('H') };
-        row[4] = svc; row[5] = text; row[6] = dig(po); row[7] = dig(sup); row[8] = supName.get(sup);
-        row[9] = adj ? (chk.has(id) ? '⚠ Adjustment – check' : 'Adjustment') : 'Normal'; row[10] = { formula: code('D') };
-        row[11] = { formula: lk('Coding', 'D', 'E', `"${trade(svc)}"`) };                                     // trade name from the service code (Coding → trades)
+        const put0 = (n, v) => { row[ic(n) - 1] = v; };
+        put0('Row ID', id); put0('DIV', { formula: `IF(${code('F')}="","UNALLOCATED",${code('F')})` }); put0('Package', { formula: code('G') }); put0('MNL', { formula: code('H') }); put0('Cost element', { formula: code('I') });
+        put0('Service', svc); put0('Description', text); put0('PO', dig(po)); put0('Supplier code', dig(sup)); put0('Supplier', supName.get(sup));
+        put0('Line type', adj ? (chk.has(id) ? '⚠ Adjustment – check' : 'Adjustment') : 'Normal'); put0('Unit', { formula: code('D') });
+        put0('Trade', { formula: lk('Coding', 'D', 'E', `"${trade(svc)}"`) });                                // trade name from the service code (Coding → trades)
         const put = (c, q, am) => { if (q) row[c - 1] = q; if (q) row[c] = am / q; if (am) row[c + 1] = am; };
         const sumifs = (col, b) => b.crit.map((cr) => `SUMIFS(${DTR(col)},${DTR('Row key')},$A${i},${DTR('Report bucket')},${cr})`).join('+');
         let tq = 0, ta = 0;
@@ -641,16 +733,16 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       sh.ws.addRows(rows.map((x) => x.row));
       rows.forEach((x, n) => { const xr = sh.ws.getRow(R1 + n); xr.height = 17;              // one height for every row: heights stay put when Excel sorts
         for (let c = 1; c <= LASTC; c++) xr.getCell(c).fill = x.look;
-        if (x.isNew) for (const c of [1, 5, 6, 7, 9, rc('First seen (load)')]) xr.getCell(c).fill = FILL.NEWF;
-        if (x.adj) xr.getCell(10).font = { ...st.F, size: 9.5, bold: true, color: { argb: x.check ? 'FFB4413C' : 'FFB0561F' } }; });
+        if (x.isNew) for (const c of [ic('Row ID'), ic('Service'), ic('Description'), ic('PO'), ic('Supplier'), rc('First seen (load)')]) xr.getCell(c).fill = FILL.NEWF;
+        if (x.adj) xr.getCell(ic('Line type')).font = { ...st.F, size: 9.5, bold: true, color: { argb: x.check ? 'FFB4413C' : 'FFB0561F' } }; });
       // column formats, fonts, widths
       const MONO = { ...st.F, name: 'Consolas', size: 9.5 };
-      [13, 11, 7, 11, 12, 44, 12, 11, 28, 13, 6, 17].forEach((w, j) => sh.width(1 + j, w));
+      [13, 11, 14, 7, 11, 12, 44, 12, 11, 28, 13, 6, 17].forEach((w, j) => sh.width(1 + j, w));
       for (let c = 1; c <= LASTC; c++) sh.ws.getColumn(c).font = { ...st.F, size: 9.5 };
-      for (const c of [1, 5, 7, 8]) { sh.ws.getColumn(c).font = MONO; sh.ws.getColumn(c).alignment = { horizontal: c === 5 || c === 1 ? 'left' : 'center' }; }
-      sh.ws.getColumn(6).alignment = { horizontal: 'right', indent: 1 }; sh.ws.getColumn(9).alignment = { horizontal: 'right', readingOrder: 'rtl', indent: 1 };
-      sh.ws.getColumn(10).alignment = { horizontal: 'left', indent: 1 };
-      for (const c of [1, 5]) sh.ws.getColumn(c).numFmt = '@'; for (const c of [7, 8]) sh.ws.getColumn(c).numFmt = '0';
+      for (const c of [ic('Row ID'), ic('Service'), ic('PO'), ic('Supplier code')]) { sh.ws.getColumn(c).font = MONO; sh.ws.getColumn(c).alignment = { horizontal: c === ic('Service') || c === 1 ? 'left' : 'center' }; }
+      sh.ws.getColumn(ic('Description')).alignment = { horizontal: 'right', indent: 1 }; sh.ws.getColumn(ic('Supplier')).alignment = { horizontal: 'right', readingOrder: 'rtl', indent: 1 };
+      sh.ws.getColumn(ic('Line type')).alignment = { horizontal: 'left', indent: 1 };
+      for (const c of [ic('Row ID'), ic('Service')]) sh.ws.getColumn(c).numFmt = '@'; for (const c of [ic('PO'), ic('Supplier code')]) sh.ws.getColumn(c).numFmt = '0';
       for (const b of blocks) { sh.width(b.col, 9); sh.width(b.col + 1, 8.5); sh.width(b.col + 2, 11.5);
         sh.ws.getColumn(b.col).numFmt = QTYF; sh.ws.getColumn(b.col + 1).numFmt = QTYF; sh.ws.getColumn(b.col + 2).numFmt = AMTF;
         sh.ws.getColumn(b.col).outlineLevel = 1; sh.ws.getColumn(b.col + 1).outlineLevel = 1; }        // Qty and Rate fold; "+" sits above the Amount
@@ -668,7 +760,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       const amtCols = [...blocks.map((b) => b.col + 2), T0 + 3];
       for (const r of [1, 2]) { sh.ws.getRow(r).height = 18; for (let c = 1; c <= LASTC; c++) { const x = sh.ws.getCell(r, c); x.fill = r === 1 ? FILL.TF : fill('F4F6F9'); x.numFmt = 'General';
         x.border = r === 1 ? { top: { style: 'medium', color: { argb: 'FFC8A45C' } }, bottom: { style: 'thin', color: { argb: 'FFC8A45C' } } } : { bottom: { style: 'medium', color: { argb: 'FFC8A45C' } } }; } }
-      sh.set(1, 6, `TOTAL · ${SM_ORDER.length} rows · follows the filter`, { font: { ...st.B, size: 9.5 }, align: { horizontal: 'right' } });
+      sh.set(1, ic('Description'), `TOTAL · ${SM_ORDER.length} rows · follows the filter`, { font: { ...st.B, size: 9.5 }, align: { horizontal: 'right' } });
       sh.set(2, 6, `CHECK · ${what} re-added from Detail – ✔ = ties`, { font: { ...st.SMALL, size: 9 }, align: { horizontal: 'right' } });
       const AMD = DTR('Cost (excl VAT)'), BKD = DTR('Report bucket');
       for (const c of amtCols) {
@@ -676,7 +768,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
         const b = blocks.find((x) => x.col + 2 === c), src = b ? b.crit.map((cr) => `SUMIFS(${AMD},${BKD},${cr})`).join('+') : `SUMIFS(${AMD},${BKD},"<>PENDING")`;
         const d = `ROUND(${src}-SUM(${L(c)}${R1}:${L(c)}${RN}),0)`;
         sh.set(2, c, `=IF(${d}=0,"✔",${d})`, { font: { ...st.B, size: 9.5, color: { argb: 'FF1B7A4A' } }, fmt: '#,##0;[Red]-#,##0', align: { horizontal: 'center' } }); }
-      sh.set(RN + 2, 6, 'Qty is not totalled across rows – units differ. Rate = Amount ÷ Qty. Orange = adjustment (qty = amount ÷ net rate), ⚠ = flagged in Detail → Qty check. Blue tint = other profit centre. Green = new row since the last report. Package / MNL / Cost element follow Service Coding live – re-coding changes the row where it stands; sort and filter freely. The Row ID matches a row across months. "+" above an Amount shows its Qty and Rate; "+" at the far right shows the reference columns.', { font: st.IT });
+      sh.set(RN + 2, ic('Description'), 'Qty is not totalled across rows – units differ. Rate = Amount ÷ Qty. Orange = adjustment (qty = amount ÷ net rate), ⚠ = flagged in Detail → Qty check. Blue tint = other profit centre. Green = new row since the last report. DIV / Package / MNL / Cost element follow Service Coding live – re-coding changes the row where it stands; sort and filter freely. The Row ID matches a row across months. "+" above an Amount shows its Qty and Rate; "+" at the far right shows the reference columns.', { font: st.IT });
       // the header look goes back on after the column-wide formats (they would otherwise paint over the white header text)
       for (const r of [3, 4, 5]) for (let c = 1; c <= LASTC; c++) { const x = sh.ws.getCell(r, c); x.font = { ...st.H, size: r === 3 ? 10 : 9.5 }; x.numFmt = 'General';
         x.alignment = { horizontal: x.alignment && x.alignment.horizontal === 'centerContinuous' ? 'centerContinuous' : 'center', vertical: 'middle', wrapText: !(x.alignment && x.alignment.horizontal === 'centerContinuous') }; }
@@ -702,13 +794,13 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       return { label: `Q${n}` + (ms.includes(A.CUT) ? ' ◂' : after ? ' · after cut' : ''), year: y, keys: ms, crit: [`">=${lo}",${DTR('Report bucket')},"<=${hi}"`], fill: after ? '8E3B37' : (i % 2 ? '1F3E6B' : '0F2A52') }; }), 'every quarter', true);
     PM.sq = `SUM('Service Quarterly'!${L(QS.T0 + 3)}${R1}:${L(QS.T0 + 3)}${RN})`;
 
-    // ---------------- Package Monthly: live – the amounts on Service Monthly summed by their current Package. The Dashboard reads this sheet.
-    await say('Package Monthly'); const pm = S['Package Monthly'];
+    // ---------------- DIV Monthly: live – the amounts on Service Monthly summed by their current Package. The Dashboard reads this sheet.
+    await say('DIV Monthly'); const pm = S['DIV Monthly'];
     const pcols = [MS.blocks[0], ...MS.blocks.slice(1, -1), null, MS.blocks[MS.blocks.length - 1]];   // Opening, months, Total, Pending
     const SMR = (c) => `'Service Monthly'!$${L(c)}$${R1}:$${L(c)}$${RN}`, SMB = SMR(2);
-    ['Code', 'Work package', 'Group'].forEach((h, j) => pm.hdr(2, 1 + j, h));
+    ['DIV', 'Division', 'Group'].forEach((h, j) => pm.hdr(2, 1 + j, h));
     pcols.forEach((b, j) => { const x = pm.hdr(2, 4 + j, b ? (b.keys[0] === 'OPENING' ? 'Opening' : b.keys[0] === 'PENDING' ? 'Pending (not in Total)' : mlabel(b.keys[0])) : 'Total', b ? undefined : fill('7A5C1E')); });
-    pm.set(1, 1, `Cost by work package and month · EGP excl. VAT · to ${A.cutDate.toISOString().slice(0, 10)} · live from Service Monthly (re-coding moves the amounts at once)`, { font: st.B });
+    pm.set(1, 1, `Cost by DIV (CSI division) and month · EGP excl. VAT · to ${A.cutDate.toISOString().slice(0, 10)} · live from Service Monthly (re-coding moves the amounts at once)`, { font: st.B });
     let r = 3; const pkRows = [];
     for (const p of cat) {
       const spell = /^DIV \d+$/.test(p.code) ? [p.code, p.code.replace(' ', '')] : [p.code];      // "DIV 03" and "DIV03" both count
@@ -716,7 +808,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       pcols.forEach((b, j) => { const c = 4 + j; pm.set(r, c, b ? '=' + spell.map((v) => `SUMIFS(${SMR(MS.amtCol(b))},${SMB},"${v}")`).join('+') : `=SUM(E${r}:${L(3 + pcols.length - 2)}${r})+D${r}`, { font: b ? st.F : st.B, fmt: NUM }); });
       pkRows.push(r); r++; }
     const PUN = r, PTR = r + 1; PM.un = PUN; PM.tot = PTR; PM.rows = pkRows; PM.cols = pcols; PM.first = 3;
-    pm.set(PUN, 1, 'UNALLOCATED', { font: { ...st.RED, bold: true } }); pm.set(PUN, 2, 'no work package yet, or a code not in the list', { font: st.IT });
+    pm.set(PUN, 1, 'UNALLOCATED', { font: { ...st.RED, bold: true } }); pm.set(PUN, 2, 'no DIV – a service code outside the list, or a code not in it', { font: st.IT });
     pm.set(PTR, 1, 'TOTAL', { font: st.B });
     pcols.forEach((b, j) => { const c = 4 + j, cl = L(c);
       pm.set(PTR, c, b ? `=SUM(${SMR(MS.amtCol(b))})` : `=SUM(E${PTR}:${L(3 + pcols.length - 2)}${PTR})+D${PTR}`, { font: st.B, fmt: NUM });
@@ -726,12 +818,12 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     pm.ws.views = [{ state: 'frozen', xSplit: 3, ySplit: 2, showGridLines: false }];
     PM.totCol = L(4 + pcols.length - 2); PM.pendCol = L(3 + pcols.length); PM.monthCol = (m) => L(4 + pcols.findIndex((b) => b && b.keys[0] === m));
     { // Service Coding: how re-coding reaches the report
-      sc.set(1, 12, 'Codes typed in the yellow columns update Service Monthly, Service Quarterly, Package Monthly and the Dashboard at once – no sorting needed.', { font: st.IT });
+      sc.set(1, 12, 'Codes typed in the yellow columns update Service Monthly, Service Quarterly, DIV Monthly and the Dashboard at once – no sorting needed.', { font: st.IT });
       sc.width(11, 3); sc.width(12, 60); }
     }
     { const bySvc = sumBy(det, (r) => r.sid, (r) => r.amt);     // per-item totals are values; the Dashboard checks them against Detail
-      for (const s of A.services) sc.set(s.id + 1, 10, Math.round((bySvc.get(s.id) || 0) * 100) / 100, { fmt: NUM, font: st.F });
-      sc.ws.getCell(1, 10).note = 'All certificate lines of the service (opening, months and pending), written as a value when the report was built. Dashboard → Final control checks the column against Detail.'; }
+      for (const s of A.services) sc.set(s.id + 1, 11, Math.round((bySvc.get(s.id) || 0) * 100) / 100, { fmt: NUM, font: st.F });
+      sc.ws.getCell(1, 11).note = 'All certificate lines of the service (opening, months and pending), written as a value when the report was built. Dashboard → Final control checks the column against Detail.'; }
 
     // ---------------- Invoice Matrix: one cell pair (invoice no. + amount) per invoice, by subcontractor / PO and month.
     // An invoice = PO + Invoice Serial; the colour is live (conditional format on Detail): red = not approved,
@@ -1000,7 +1092,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     const fmtD = (d) => MON[d.getUTCMonth()] + '-' + String(d.getUTCFullYear()).slice(2);
     const pk = (A.opts.master && A.opts.master.packages) || PACKAGES, mn = (A.opts.master && A.opts.master.mnl) || MNLS;
     // package × MNL reads Service Monthly (Total amount, live Package / MNL) – a few hundred rows, not every Detail line
-    const smr = (c) => `'Service Monthly'!$${L(c)}$${SM_COLS.R1}:$${L(c)}$${SM_COLS.RN}`, SMT = smr(SM_COLS.T0 + 3), SMP = smr(2), SMM = smr(3);
+    const smr = (c) => `'Service Monthly'!$${L(c)}$${SM_COLS.R1}:$${L(c)}$${SM_COLS.RN}`, SMT = smr(SM_COLS.T0 + 3), SMP = smr(2), SMK = smr(3), SMM = smr(4);    // DIV, the team's Package, MNL on Service Monthly
     const MCOL = ['2A78D6', 'EB6834', '1BAF7A', 'EDA100', 'E87BA4', '008300'], NOSET = 'A6A6A0';   // MNL series colours, fixed order
     // column grid: left block = package table, right block = 8 equal columns
     const nM = mn.length, cB = 2, cPk = 3, cM = 4, cNS = 4 + nM, cTot = cNS + 1, cSh = cTot + 1, DR0 = cSh + 2, DRE = DR0 + 7, DLAST = DRE + 1;
@@ -1040,7 +1132,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       [DR0, DR0 + 1, 'Pending – not in total', `=SUMIFS(${AM},${BK},"PENDING")`, 'share'],
       [DR0 + 2, DR0 + 3, `${mlabel(A.CUT)} (report month)`, `=SUMIFS(${AM},${BK},${A.CUT})`, 'share'],
       [DR0 + 4, DR0 + 5, 'Subcontractors', SUBTOT, 'count'],
-      [DR0 + 6, DR0 + 7, 'Cost with a package', null, 'coded']];
+      [DR0 + 6, DR0 + 7, 'Cost with a package', null, 'coded']];     // the team's Package (DIV is automatic)
     const MFMT = '#,##0.0,,"M";(#,##0.0,,"M");"–"';
     for (const [c1, c2, lab, f, kind] of tiles) {
       for (let r = 7; r <= 9; r++) { band(r, c1, c2, FILL.KF); merge(r, c1, r, c2); }
@@ -1052,9 +1144,9 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     }
 
     // ---- COST BY WORK PACKAGE (left) with its MNL split
-    const WT0 = 11; rowH(WT0, 28); section(WT0, cB, cSh, 'COST BY WORK PACKAGE', 'split by MNL · EGP', true);
+    const WT0 = 11; rowH(WT0, 28); section(WT0, cB, cSh, 'COST BY DIV', 'CSI division (automatic from the service code) · split by MNL · EGP', true);
     rowH(WT0 + 1, 18);
-    ['Code', 'Work package', ...mn.map((m) => m.code), 'MNL not set', 'Total', 'Share'].forEach((h, j) => db.hdr(WT0 + 1, cB + j, h));
+    ['DIV', 'Division', ...mn.map((m) => m.code), 'MNL not set', 'Total', 'Share'].forEach((h, j) => db.hdr(WT0 + 1, cB + j, h));
     // every package of the catalogue gets a live row (a template): coding in Service Coding fills it without a rebuild
     const listed = pk;
     const groups = [...new Set(pk.map((p) => p.group))];
@@ -1081,7 +1173,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       groupRows.push([gname, gi, gc]);
     }
     const DUN = r; rowH(DUN, 21); band(DUN, cB, cSh, FILL.AF); PKG_UN.r = DUN;
-    db.set(DUN, cB, 'UNALLOCATED', { font: { ...st.RED, bold: true } }); db.set(DUN, cPk, 'no work package yet', { font: st.IT });
+    db.set(DUN, cB, 'UNALLOCATED', { font: { ...st.RED, bold: true } }); db.set(DUN, cPk, 'no DIV (service code outside the list)', { font: st.IT });
     // unallocated = everything the package rows do not catch (no package, or a code not in the list)
     const coded = (c) => groupRows.length ? groupRows.map(([, gi]) => L(c) + gi).join('+') : '0';
     mn.forEach((m, j) => db.set(DUN, cM + j, `=SUMIFS(${SMT},${SMM},"${m.code}")-(${coded(cM + j)})`, { font: st.RED, fmt: NUM }));
@@ -1095,8 +1187,8 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     for (let c = cB; c <= cSh; c++) db.ws.getCell(DTR, c).border = { top: { style: 'thin', color: { argb: 'FF0F2A52' } }, bottom: { style: 'double', color: { argb: 'FF0F2A52' } } };
     if (pkgRows.length) db.ws.addConditionalFormatting({ ref: pkgRows.map((x) => L(cTot) + x).join(' '),
       rules: [{ type: 'dataBar', priority: 1, gradient: false, cfvo: [{ type: 'num', value: 0 }, { type: 'max' }], color: { argb: 'FF9DB7DE' } }] });
-    db.set(8, DR0 + 6, `=IFERROR(1-${L(cTot)}${DUN}/${DTOT},0)`, { font: st.BIG, fmt: '0.0%', align: { horizontal: 'left', indent: 1, vertical: 'middle' } });
-    db.set(9, DR0 + 6, `=${L(cTot)}${DUN}`, { font: st.KSUB, fmt: '#,##0.0,,"M unallocated";(#,##0.0,,"M");"nothing unallocated"', align: { horizontal: 'left', indent: 1, vertical: 'top' } });
+    db.set(8, DR0 + 6, `=IFERROR(SUMIFS(${SMT},${SMK},"?*")/${DTOT},0)`, { font: st.BIG, fmt: '0.0%', align: { horizontal: 'left', indent: 1, vertical: 'middle' } });
+    db.set(9, DR0 + 6, `=${DTOT}-SUMIFS(${SMT},${SMK},"?*")`, { font: st.KSUB, fmt: '#,##0.0,,"M without a package";(#,##0.0,,"M");"every service has a package"', align: { horizontal: 'left', indent: 1, vertical: 'top' } });
 
     // ---- COST BY MNL (right): one tile per MNL + not set, then work package groups split by MNL
     section(WT0, DR0, DRE, 'COST BY MNL', 'material · subcontract · equipment', true);
@@ -1119,10 +1211,10 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     cats.forEach(([g, gi], n) => { cx.set(3 + n, 1, g); mt.forEach((m, j) => cx.set(3 + n, 2 + j, `=Dashboard!${m.col}${gi}`, { fmt: NUM })); });
     const DG1 = 2 + cats.length;
     charts.push({ sheet: 'Dashboard', ...place(DR0, CH0, DRE, DTR), kind: 'bar', stacked: true, reverse: true, legend: 'b', gap: 45,
-      title: 'Work package groups by MNL', valFmt: '#,##0,,"M"',
+      title: 'DIV groups by MNL', valFmt: '#,##0,,"M"',
       series: mt.map((m, j) => ({ name: `'_Chart'!$${L(2 + j)}$2`, cat: `'_Chart'!$A$3:$A$${DG1}`, val: `'_Chart'!$${L(2 + j)}$3:$${L(2 + j)}$${DG1}`, color: m.color, gap: true })) });
     const DM0 = DG1 + 3; cx.set(DM0, 1, 'Month'); cx.set(DM0, 2, 'Approved cost');
-    A.allMonths.forEach((m, j) => { cx.set(DM0 + 1 + j, 1, mlabel(m) + (m > A.CUT ? ' (after cut)' : '')); cx.set(DM0 + 1 + j, 2, `='Package Monthly'!${PM.monthCol(m)}${PM.tot}`, { fmt: NUM }); });
+    A.allMonths.forEach((m, j) => { cx.set(DM0 + 1 + j, 1, mlabel(m) + (m > A.CUT ? ' (after cut)' : '')); cx.set(DM0 + 1 + j, 2, `='DIV Monthly'!${PM.monthCol(m)}${PM.tot}`, { fmt: NUM }); });
     const DM1 = DM0 + A.allMonths.length; cx.width(1, 16); for (let j = 2; j <= 8; j++) cx.width(j, 14);
 
     // ---- lower half: monthly cost (left) and top services (right)
@@ -1151,10 +1243,10 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     // ---- final control + control figures
     const DFC = DB0 + DNB + 3; rowH(DFC - 1, 10); rowH(DFC, 22); band(DFC, 1, DLAST, FILL.BAND);
     db.set(DFC, 2, 'FINAL CONTROL', { font: st.EYE, align: { vertical: 'middle' } });
-    db.set(DFC, 3, `="Total "&TEXT(${DTOT},"#,##0")&"  =  Opening "&TEXT(${L(cNS)}8,"#,##0")&"  +  Approved months "&TEXT(${L(cM)}8,"#,##0")&"     |     Pending, not in total "&TEXT(${L(DR0)}8,"#,##0")&"     |     Work package table vs total: "&TEXT(${L(cTot)}${DTR}-${DTOT},"#,##0")&"     |     Report vs SAP (after WBS splits): "&TEXT(Notes!B${NOTES_RECON_ROW + 8},"#,##0")&"     |     Per-service totals vs Detail: "&IF(ROUND(SUM('Service Coding'!$J$2:$J$${NSC})-SUM(Detail!$${C['Cost (excl VAT)']}:$${C['Cost (excl VAT)']}),0)=0,"✔",TEXT(SUM('Service Coding'!$J$2:$J$${NSC})-SUM(Detail!$${C['Cost (excl VAT)']}:$${C['Cost (excl VAT)']}),"#,##0"))`,
+    db.set(DFC, 3, `="Total "&TEXT(${DTOT},"#,##0")&"  =  Opening "&TEXT(${L(cNS)}8,"#,##0")&"  +  Approved months "&TEXT(${L(cM)}8,"#,##0")&"     |     Pending, not in total "&TEXT(${L(DR0)}8,"#,##0")&"     |     DIV table vs total: "&TEXT(${L(cTot)}${DTR}-${DTOT},"#,##0")&"     |     Report vs SAP (after WBS splits): "&TEXT(Notes!B${NOTES_RECON_ROW + 8},"#,##0")&"     |     Per-service totals vs Detail: "&IF(ROUND(SUM('Service Coding'!$K$2:$K$${NSC})-SUM(Detail!$${C['Cost (excl VAT)']}:$${C['Cost (excl VAT)']}),0)=0,"✔",TEXT(SUM('Service Coding'!$K$2:$K$${NSC})-SUM(Detail!$${C['Cost (excl VAT)']}:$${C['Cost (excl VAT)']}),"#,##0"))`,
       { font: st.CTRL, align: { vertical: 'middle' } });
     db.set(DFC + 1, 2, `="Also certified: VAT "&TEXT(SUM(Detail!$${C['VAT current']}:$${C['VAT current']}),"#,##0")&"  ·  adjustments "&TEXT(SUMIFS(${AM},${R('Line type')},"Adjustment"),"#,##0")&"  ·  other profit centres (not ${MAINPC}) "&TEXT(SUMIFS(${AM},${R('Other profit centre')},"X"),"#,##0")`, { font: st.SMALL });
-    db.set(DFC + 2, 2, `Cut date ${A.cutDate.toISOString().slice(0, 10)} (end of the report month). Months = approved certificates by certificate date · Opening = approved initial invoices (Flag X) · Pending = not approved or dated after the cut date – shown, not in the total. Work package and MNL come from Service Coding via Service Monthly / Package Monthly.`, { font: st.IT });
+    db.set(DFC + 2, 2, `Cut date ${A.cutDate.toISOString().slice(0, 10)} (end of the report month). Months = approved certificates by certificate date · Opening = approved initial invoices (Flag X) · Pending = not approved or dated after the cut date – shown, not in the total. DIV (automatic from the service code, or as typed), Package and MNL come from Service Coding via Service Monthly / DIV Monthly.`, { font: st.IT });
     const PEND = DFC + 2;
     // ---- MONTHLY ACTIVITY (below the printed page): what each certificate month holds, what is still pending, what arrived late,
     // and – for months the last report already showed – whether every change is explained by lines added since
@@ -1216,7 +1308,8 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     await say('Changes'); const chs = S['Changes'];
     const loads = histLoads(A, summarize(A).k);
     chs.set(1, 2, 'Changes and load history', { font: st.T1 });
-    chs.set(2, 2, A.hist && A.hist.loads.length ? `This load (${A.loadNo}) compared with load ${A.loadNo - 1}. Lines are matched by Line ID (PO | cert serial | PO item | package | line).`
+    chs.set(2, 2, A.opts.reopen && !A.opts.reopen.fromLines && A.hist && A.hist.loads.length ? `Reopened from a report saved before it kept the previous load's lines – the changes were listed in that report. Figures, Row IDs and late-line flags are kept.`
+      : A.hist && A.hist.loads.length ? `This load (${A.loadNo}) compared with load ${A.loadNo - 1}. Lines are matched by Line ID (PO | cert serial | PO item | package | line).`
       : 'First load – there is no previous report to compare with. Next month, give the web tool this workbook together with the new SAP files.', { font: st.SMALL });
     chs.set(4, 2, '1. Load history', { font: st.B });
     const lh = ['Load', 'Run on', 'Data date', 'ZSCPRG01 file', 'Lines', 'Certified cost', 'Approved', 'Opening', 'Not approved', 'Adjustments', 'Subcontractors', 'POs'];
@@ -1254,7 +1347,10 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     ls.ws.addRows(det.map((r) => [r.lid, r.amt, r.appr, r.flag, r.first, r.po, r.supName, r.svc, r.text, r.bucket, r.month]));
     const rs = S['_Rows']; rs.ws.addRow(['Row ID', 'Identity', 'First seen (load)', 'Order', 'Service', 'Service text', 'PO', 'Supplier']);
     SM_ORDER.forEach((idx, n) => { const t = A.keyTuples[idx]; rs.ws.addRow([A.rowIds[idx], JSON.stringify(t), A.rowFirst[idx], n + 1, t[0], t[1], t[8], t[3]]); });
-    hs.ws.state = 'hidden'; ls.ws.state = 'hidden'; rs.ws.state = 'hidden'; S['_Chart'].ws.state = 'hidden';
+    const lp = S['_LinesPrev']; lp.ws.addRow(['Line ID', 'Amount', 'Approved', 'Flag', 'First seen', 'PO', 'Supplier', 'Service', 'Service text', 'Report bucket', 'Month']);
+    if (A.hist && A.hist.lines) for (const [k, p] of A.hist.lines) lp.ws.addRow([k, p.amt, p.appr || null, p.flag || null, p.first || null, p.po || null, p.sup || null, p.svc || null, p.text || null, p.bucket ?? null, p.month || null]);
+    const sv = S['_Serv']; sv.ws.addRow(SERV_NEEDS); for (const x of A.sv) sv.ws.addRow(SERV_NEEDS.map((n) => { const v = A.g(x, n); return v === '' ? null : v; }));
+    for (const x of [hs, ls, lp, rs, sv, S['_Chart']]) x.ws.state = 'hidden';
 
     // ---------------- Notes
     await say('Notes'); const ws = S['Notes'];
@@ -1291,8 +1387,8 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     ws.set(n0 + 4, 1, 'Pending (not approved or after the cut date) – not in Total', { font: st.F }); ws.set(n0 + 4, 2, `=${SM_PEND}`);
     ws.set(n0 + 5, 1, 'Service Monthly Total + Pending', { font: st.F }); ws.set(n0 + 5, 2, `=${SM_TOTAL}+B${n0 + 4}`);
     ws.set(n0 + 6, 1, 'Service Quarterly Total + Pending', { font: st.F }); ws.set(n0 + 6, 2, `=${PM.sq}+B${n0 + 4}`);
-    ws.set(n0 + 7, 1, 'Dashboard work package table (= Package Monthly) + Pending', { font: st.F }); ws.set(n0 + 7, 2, `=${DASH_TOTAL}+B${n0 + 4}`);
-    ws.set(n0 + 8, 1, 'Largest difference (must be 0)', { font: st.B }); ws.set(n0 + 8, 2, `=MAX(ABS(B${n0 + 3}-B${n0 + 2}),ABS(B${n0 + 5}-B${n0 + 2}),ABS(B${n0 + 6}-B${n0 + 2}),ABS(B${n0 + 7}-B${n0 + 2}),ABS('Package Monthly'!${PM.totCol}${PM.tot}+'Package Monthly'!${PM.pendCol}${PM.tot}-B${n0 + 2}))`);
+    ws.set(n0 + 7, 1, 'Dashboard DIV table (= DIV Monthly) + Pending', { font: st.F }); ws.set(n0 + 7, 2, `=${DASH_TOTAL}+B${n0 + 4}`);
+    ws.set(n0 + 8, 1, 'Largest difference (must be 0)', { font: st.B }); ws.set(n0 + 8, 2, `=MAX(ABS(B${n0 + 3}-B${n0 + 2}),ABS(B${n0 + 5}-B${n0 + 2}),ABS(B${n0 + 6}-B${n0 + 2}),ABS(B${n0 + 7}-B${n0 + 2}),ABS('DIV Monthly'!${PM.totCol}${PM.tot}+'DIV Monthly'!${PM.pendCol}${PM.tot}-B${n0 + 2}))`);
     for (let r = n0; r <= n0 + 8; r++) ws.ws.getCell(r, 2).numFmt = NUM;
     ws.width(1, 130); ws.width(2, 18);
 
@@ -1381,34 +1477,48 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
   const CATALOGUE_VERSION = Math.max(...PACKAGES.map((p) => p.since));
   // lists saved into the tool itself (Save tool) replace the built-in ones; their version is a time stamp, so whichever
   // of tool and master was saved later decides the lists
-  let BASE_VER = CATALOGUE_VERSION, BASE_CE = [];
+  let BASE_VER = CATALOGUE_VERSION, BASE_CE = [], BASE_WP = [], BASE_REMOVED = { package: [], wp: [], mnl: [] };   // codes deleted in the tool: a merge never brings them back
   const listStamp = () => { const d = new Date(), p = (n) => String(n).padStart(2, '0');
     return +`${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`; };
   function setBase(b) {
     if (!b) return;
-    if (b.packages && b.packages.length) PACKAGES.splice(0, PACKAGES.length, ...b.packages.map((p, i) => ({ code: p.code, label: p.label || p.code, group: p.group || 'General',
+    if (b.packages && b.packages.length) PACKAGES.splice(0, PACKAGES.length, ...b.packages.filter((p) => !/^S\d{2}$/i.test(p.code)).map((p, i) => ({ code: p.code, label: p.label || p.code, group: p.group || 'General',
       icon: p.icon || '', color: p.color || GROUP_COLOR[p.group] || '6B7280', sort: i + 1, system: !!p.system, since: p.since || 1 })));
     if (b.mnl && b.mnl.length) MNLS.splice(0, MNLS.length, ...b.mnl.map((x) => ({ code: x.code, label: x.label || x.code, system: !!x.system })));
     BASE_CE = b.costElements || []; BASE_VER = Math.max(CATALOGUE_VERSION, +b.version || 0);
+    if (b.removed) BASE_REMOVED = { package: b.removed.package || [], wp: b.removed.wp || [], mnl: b.removed.mnl || [] };
+    BASE_WP = (b.wpList || []).filter((x) => x.code && !/^S\d{2}$/i.test(x.code));
   }
   function listsOf(master) {       // what Save tool writes into the page
     return { version: master.version || listStamp(), packages: master.packages.map(({ code, label, group, icon, color, system, since }) => ({ code, label, group, icon, color, system: !!system, since: since || 1 })),
-      mnl: master.mnl.map(({ code, label, system }) => ({ code, label, system: !!system })), costElements: [...master.costElements].map(([pr, m]) => [pr, [...m]]) };
+      mnl: master.mnl.map(({ code, label, system }) => ({ code, label, system: !!system })), costElements: [...master.costElements].map(([pr, m]) => [pr, [...m]]),
+      wpList: (master.wpList || []).map(({ code, label }) => ({ code, label })),
+      removed: { package: [...((master.removed || {}).package || [])], wp: [...((master.removed || {}).wp || [])], mnl: [...((master.removed || {}).mnl || [])] } };
   }
   const MNLS = [['MAT', 'Material'], ['SUB', 'Subcontract'], ['EQU', 'Equipment'], ['LAB', 'Labor'], ['OTHER', 'Others Resources']].map(([code, label]) => ({ code, label, system: true }));
-  const DIMS = { package: 'Package', mnl: 'MNL', cec: 'Cost element' };
+  const DIMS = { package: 'DIV', wp: 'Package', mnl: 'MNL', cec: 'Cost element' };   // package = the DIV (CSI division); wp = the team's own work package
   // service-code division (MasterFormat 2004 numbering in SAP) -> 16-division package
   // SAP service codes carry the same 2004 division digits (S0303 -> 03); divisions outside the catalogue suggest INDIRECT
   const DIV_FROM_SERVICE = { '03': 'DIV 03', '04': 'DIV 04', '05': 'DIV 05', '06': 'DIV 06', '07': 'DIV 07', '08': 'DIV 08', '09': 'DIV 09', '10': 'DIV 10',
     '21': 'DIV 21', '22': 'DIV 22', '23': 'DIV 23', '25': 'DIV 27', '26': 'DIV 26', '27': 'DIV 27', '28': 'DIV 27', '31': 'DIV 31', '32': 'DIV 32', '33': 'DIV 33',
     '01': 'INDIRECT', '02': 'INDIRECT', '34': 'INDIRECT' };
+  // DIV is automatic: the division in the service code (S0303 -> DIV 03); S01/S02/S34, labour (L) and plant (P) are INDIRECT.
+  // A DIV typed for a service overrides it. cat = the DIV list (a division deleted from it gives no automatic DIV).
+  function autoDiv(svc, cat) {
+    svc = str(svc).trim(); const pre = svc.slice(0, 1);
+    const c = pre === 'S' ? (DIV_FROM_SERVICE[svc.slice(1, 3)] || '') : (pre === 'L' || pre === 'P') ? 'INDIRECT' : '';
+    return c && (!cat || cat.some((p) => p.code === c)) ? c : '';
+  }
+  // a package typed as S03 / DIV 03 / INDIRECT means a DIV (the DIV list used to be the package list)
+  const divLike = (c) => /^S\d{2}$/i.test(c) ? (DIV_FROM_SERVICE[c.slice(1, 3)] || '') : (/^DIV\s*\d{1,4}$/i.test(c) || /^INDIRECT$/i.test(c) ? normPkg(c.toUpperCase()) : null);
   // codes from the first catalogue (1995 16-division numbering) and where they go now
   const OLD_PACKAGES = { 'DIV 01': 'INDIRECT', 'DIV 02': 'DIV 31', 'DIV 16': 'DIV 26', 'DIV 15': null, 'DIV 11': null, 'DIV 12': null, 'DIV 13': null, 'DIV 14': null };
   // package codes are written "DIV 03"; "DIV03" / "div 3" from older files or typing are read as the same code
   const normPkg = (c) => { const t = str(c).trim(), m = /^DIV\s*(\d{1,4})$/i.exec(t); return m ? 'DIV ' + m[1].padStart(m[1].length > 2 ? 4 : 2, '0') : t; };
   const mkey = (project, svc, text) => project + '\u0001' + svc + '\u0001' + text;
   function defaultMaster() {
-    return { packages: PACKAGES.map((p) => ({ ...p })), mnl: MNLS.map((m) => ({ ...m })), costElements: new Map(BASE_CE.map(([pr, l]) => [pr, new Map(l)])), mapping: new Map(), migrated: 0, version: BASE_VER };
+    return { packages: PACKAGES.map((p) => ({ ...p })), mnl: MNLS.map((m) => ({ ...m })), costElements: new Map(BASE_CE.map(([pr, l]) => [pr, new Map(l)])), mapping: new Map(), migrated: 0, version: BASE_VER,
+      wpList: BASE_WP.map((x) => ({ ...x })), removed: { package: new Set(BASE_REMOVED.package), wp: new Set(BASE_REMOVED.wp), mnl: new Set(BASE_REMOVED.mnl) } };
   }
   const asDateV = (v) => v instanceof Date ? v : (typeof v === 'number' && v > 0 ? new Date(Math.round((v - 25569) * 86400000)) : null);
   const sheetRows = (aoa) => { const H = (aoa[0] || []).map((x) => str(x).trim().toLowerCase()); const ix = (n) => H.indexOf(n.toLowerCase());
@@ -1416,10 +1526,12 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
   // sheets: { sheetName: aoa } of a master file (v2), or of the older single-sheet "Coding Master"
   function readMaster(sheets) {
     const m = defaultMaster();
+    sheets = Object.assign({}, sheets); const teamSheet = sheets['DIV'] ? sheets['Packages'] : null;
+    if (sheets['DIV']) sheets['Packages'] = sheets['DIV'];            // below, 'Packages' = the division list
     { const hv = Math.max(1, ...((sheets['Packages'] || [])[0] || []).map((h) => +((/^catalogue v(\d+)$/i.exec(str(h).trim()) || [])[1] || 0)));
       m.toolLists = BASE_VER > CATALOGUE_VERSION && hv < BASE_VER;          // the lists saved in this tool are newer than the master's
       m.version = Math.max(hv, BASE_VER);
-      if (m.toolLists) { const ce = sheets['Cost Elements'];
+      if (m.toolLists) { const ce = sheets['Cost Elements']; m.ownLists = { Packages: sheets['Packages'], MNL: sheets['MNL'] };
         sheets = Object.assign({}, sheets); delete sheets['Packages']; delete sheets['MNL']; delete sheets['Cost Elements'];
         if (ce) { const { ix, rows } = sheetRows(ce); for (const r of rows) { const pr = str(r[ix('Project')]).trim(), code = str(r[ix('Code')]).trim();   // projects the tool has no list for
           if (!pr || !code || BASE_CE.some((x) => x[0] === pr)) continue; if (!m.costElements.has(pr)) m.costElements.set(pr, new Map()); m.costElements.get(pr).set(code, str(r[ix('Label')]).trim()); } } } }
@@ -1438,10 +1550,27 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
         if (cur) Object.assign(cur, rec); else m.packages.push(rec); }
       m.packages.sort((a, b) => a.sort - b.sort); }
     if (listed && !oldCatalogue) m.packages = m.packages.filter((p) => listed.has(p.code) || (p.system && p.since > ver));
+    m.packages = m.packages.filter((p) => !/^S\d{2}$/i.test(p.code));      // S03-style rows were team packages typed into the old list – the DIV is automatic now
     if (listed) for (const p of m.packages) if (!listed.has(p.code) && p.since > ver) {        // newly predefined: place it after its neighbour in the default list
       const before = PACKAGES[PACKAGES.findIndex((q) => q.code === p.code) - 1], nb = before && m.packages.find((q) => q.code === before.code);
       p.sort = nb ? nb.sort + 0.5 : 0.5; }
     m.packages.sort((a, b) => a.sort - b.sort); m.packages.forEach((p, i) => { p.sort = i + 1; });
+    if (sheets['Removed']) { const { ix, rows } = sheetRows(sheets['Removed']);
+      for (const r of rows) { const c = str(r[ix('Code')]).trim(), t = str(r[ix('List')]), l = /mnl/i.test(t) ? 'mnl' : /div/i.test(t) ? 'package' : 'wp'; if (c) m.removed[l].add(l === 'package' ? normPkg(c) : c); } }
+    if (teamSheet) { const { ix, rows } = sheetRows(teamSheet);          // the team's own packages: rows added in Excel join, deleted-in-tool codes stay out
+      for (const r of rows) { const code = str(r[ix('Code')]).trim(); if (!code || divLike(code) != null || m.removed.wp.has(code)) continue;
+        const cur = m.wpList.find((x) => x.code === code), label = str(r[ix('Label')]).trim() || code; if (cur) { if (!m.toolLists) cur.label = label; } else m.wpList.push({ code, label }); } }
+    if (m.ownLists) {     // the tool's lists are newer, but a row added to the master in Excel is kept (a code deleted in the tool stays deleted)
+      m.addedFromMaster = [];
+      if (m.ownLists.Packages) { const { ix, rows } = sheetRows(m.ownLists.Packages);
+        for (const r of rows) { const code = normPkg(r[ix('Code')]); if (!code || m.removed.package.has(code) || m.packages.some((p) => p.code === code) || code in OLD_PACKAGES) continue;
+          const group = str(r[ix('Group')]).trim() || 'General';
+          m.packages.push({ code, label: str(r[ix('Label')]).trim() || code, group, icon: str(r[ix('Icon')]).trim(), color: str(r[ix('Color')]).trim().replace('#', '') || GROUP_COLOR[group] || '6B7280',
+            sort: m.packages.length + 1, system: false, since: 1 }); m.addedFromMaster.push(code); } }
+      if (m.ownLists.MNL) { const { ix, rows } = sheetRows(m.ownLists.MNL);
+        for (const r of rows) { const code = str(r[ix('Code')]).trim(); if (!code || m.removed.mnl.has(code) || m.mnl.some((x) => x.code === code)) continue;
+          m.mnl.push({ code, label: str(r[ix('Label')]).trim() || code, system: false }); m.addedFromMaster.push(code); } }
+      delete m.ownLists; }
     if (sheets['MNL']) { const { ix, rows } = sheetRows(sheets['MNL']);
       for (const r of rows) { const code = str(r[ix('Code')]).trim(); if (!code) continue; const cur = m.mnl.find((x) => x.code === code);
         if (cur) cur.label = str(r[ix('Label')]).trim() || cur.label; else m.mnl.push({ code, label: str(r[ix('Label')]).trim() || code, system: false }); }
@@ -1453,14 +1582,19 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
         if (!m.costElements.has(pr)) m.costElements.set(pr, new Map()); m.costElements.get(pr).set(code, str(r[ix('Label')]).trim()); } }
     if (sheets['Service Mapping']) { const { ix, rows } = sheetRows(sheets['Service Mapping']);
       for (const r of rows) { const pr = str(r[ix('Project')]).trim(), svc = str(r[ix('Service')]).trim(); if (!pr || !svc) continue;
-        const e = { package: normPkg(r[ix('Package')]), mnl: str(r[ix('MNL')]).trim(), cec: str(r[ix('Cost Element')]).trim(), unit: str(r[ix('Unit override')]).trim(), updated: asDateV(r[ix('Updated')]) };
-        if (e.package || e.mnl || e.cec || e.unit) m.mapping.set(mkey(pr, svc, str(r[ix('Service text')]).trim()), e); } }
+        const nf = ix('DIV') >= 0, raw = str(r[nf ? ix('DIV') : ix('Package')]).trim(), dl = raw ? divLike(raw) : '';
+        let pkg = nf ? (dl ?? normPkg(raw)) : (dl ?? (m.packages.some((p) => p.code === normPkg(raw)) ? normPkg(raw) : '')), wp = nf ? str(r[ix('Package')]).trim() : (dl == null && !pkg ? raw : '');
+        if (wp && divLike(wp) != null) { if (!pkg) pkg = divLike(wp); wp = ''; }
+        if (pkg && pkg === autoDiv(svc, m.packages)) pkg = '';           // the automatic DIV is not stored
+        const e = { package: pkg, wp, mnl: str(r[ix('MNL')]).trim(), cec: str(r[ix('Cost Element')]).trim(), unit: str(r[ix('Unit override')]).trim(), updated: asDateV(r[ix('Updated')]) };
+        if (e.wp && !m.wpList.some((x) => x.code === e.wp) && !m.removed.wp.has(e.wp)) m.wpList.push({ code: e.wp, label: e.wp });
+        if (e.package || e.wp || e.mnl || e.cec || e.unit) m.mapping.set(mkey(pr, svc, str(r[ix('Service text')]).trim()), e); } }
     m.remapped = 0;
     const inCat = (c) => m.packages.some((p) => p.code === c);
     for (const [k, v] of m.mapping) if (v.package && v.package in OLD_PACKAGES && !inCat(v.package)) {
       const svc = k.split('\u0001')[1]; const d = svc[0] === 'S' ? DIV_FROM_SERVICE[svc.slice(1, 3)] : null;
       v.package = OLD_PACKAGES[v.package] || (d && d !== 'INDIRECT' ? d : ''); m.remapped++;
-      if (!(v.package || v.mnl || v.cec || v.unit)) m.mapping.delete(k); }
+      if (!(v.package || v.wp || v.mnl || v.cec || v.unit)) m.mapping.delete(k); }
     if (sheets[MASTER_SHEET] && !sheets['Service Mapping']) {           // older master: bring its codes forward where they fit the catalogues
       const old = readCodingMaster(sheets[MASTER_SHEET]);
       for (const e of old.values()) {
@@ -1471,16 +1605,20 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
           if (rec.package || rec.mnl || rec.cec || rec.unit) { m.mapping.set(mkey(pr, e.svc, e.text), rec); m.migrated++; }
           if (e.cec) { if (!m.costElements.has(pr)) m.costElements.set(pr, new Map()); if (!m.costElements.get(pr).has(e.cec)) m.costElements.get(pr).set(e.cec, ''); }
         } } }
+    for (const [k, v] of m.mapping) { const svc = k.split('\u0001')[1];
+      if (v.package && /^S\d{2}$/i.test(v.package)) v.package = divLike(v.package) || '';
+      if (v.package && v.package === autoDiv(svc, m.packages)) v.package = '';
+      if (!(v.package || v.wp || v.mnl || v.cec || v.unit)) m.mapping.delete(k); }
     // codings on a package that is no longer in the catalogue go back to unallocated (the service keeps its MNL / cost element)
     m.dropped = 0;
-    for (const [k, v] of m.mapping) if (v.package && !inCat(v.package)) { v.package = ''; m.dropped++; if (!(v.mnl || v.cec || v.unit)) m.mapping.delete(k); }
-    for (const [k, v] of m.mapping) if (v.mnl && !m.mnl.some((x) => x.code === v.mnl)) { v.mnl = ''; m.dropped++; if (!(v.package || v.cec || v.unit)) m.mapping.delete(k); }
+    for (const [k, v] of m.mapping) if (v.package && !inCat(v.package)) { v.package = ''; m.dropped++; if (!(v.wp || v.mnl || v.cec || v.unit)) m.mapping.delete(k); }
+    for (const [k, v] of m.mapping) if (v.mnl && !m.mnl.some((x) => x.code === v.mnl)) { v.mnl = ''; m.dropped++; if (!(v.package || v.wp || v.cec || v.unit)) m.mapping.delete(k); }
     return m;
   }
   // coding map for one project, in the shape analyse() expects (csi = package)
   function codingFor(master, project) {
     const out = new Map(); const pre = project + '\u0001';
-    for (const [k, v] of master.mapping) if (k.startsWith(pre)) out.set(k.slice(pre.length), { csi: v.package || '', mnl: v.mnl || '', cec: v.cec || '', unit: v.unit || '' });
+    for (const [k, v] of master.mapping) if (k.startsWith(pre)) out.set(k.slice(pre.length), { csi: v.package || '', wp: v.wp || '', mnl: v.mnl || '', cec: v.cec || '', unit: v.unit || '' });
     return out;
   }
   // proposals for uncoded dimensions: same service coded in another project first, then the service code itself
@@ -1488,14 +1626,11 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     const out = new Map(); const other = new Map();   // codingKey -> {package, mnl, cec, from}
     for (const [k, v] of master.mapping) { const [pr, svc, text] = k.split('\u0001'); if (pr === A.PLANT) continue;
       const ck = codingKey(svc, text); const o = other.get(ck) || {};
-      for (const f of ['package', 'mnl']) if (v[f] && !o[f]) { o[f] = v[f]; o[f + 'From'] = pr; }
+      for (const f of ['wp', 'mnl']) if (v[f] && !o[f]) { o[f] = v[f]; o[f + 'From'] = pr; }
       other.set(ck, o); }
     for (const s of A.services) {
       const cur = master.mapping.get(mkey(A.PLANT, s.svc, s.text)) || {}; const o = other.get(s.key) || {}; const g = {};
-      if (!cur.package) { if (o.package) g.package = [o.package, 'coded in ' + o.packageFrom];
-        else { const pre = s.svc.slice(0, 1), d = s.svc.slice(1, 3);
-          if (pre === 'S' && DIV_FROM_SERVICE[d]) g.package = [DIV_FROM_SERVICE[d], 'from service code S' + d];
-          else if (pre === 'L' || pre === 'P') g.package = ['INDIRECT', pre === 'L' ? 'labour supply' : 'plant & logistics']; } }
+      if (!cur.wp && o.wp) g.wp = [o.wp, 'coded in ' + o.wpFrom];
       if (!cur.mnl) { if (o.mnl) g.mnl = [o.mnl, 'coded in ' + o.mnlFrom];
         else if (s.svc[0] === 'L') g.mnl = ['LAB', 'labour service code'];          // before the supply rule: "توريد عامل" is labour supply
         else if (/توريد/.test(s.text) && !/تركيب/.test(s.text)) g.mnl = ['MAT', 'text says supply (توريد)'];
@@ -1507,20 +1642,40 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
   }
   // bring the codes typed in last month's report (Service Coding sheet) into the work package coding of this project.
   // The report wins over the master unless the master's entry was changed after the report file was saved.
+  // a report's package / MNL lists, and codes typed into its Service Coding that no list has, join the tool's lists
+  // (a code deleted in the tool is not brought back); returns what was added
+  function adoptPackages(master, prev) {
+    const res = { packages: [], wp: [], mnl: [], skipped: [] }; if (!prev) return res;
+    const rm = Object.assign({ package: new Set(), wp: new Set(), mnl: new Set() }, master.removed || {});
+    if (!master.wpList) master.wpList = [];
+    const addWp = (x) => { if (!x.code || master.wpList.some((q) => q.code === x.code)) return; if (rm.wp.has(x.code)) { res.skipped.push(x.code); return; }
+      master.wpList.push({ code: x.code, label: x.label || x.code }); res.wp.push(x.code); };
+    const addPkg = (p) => { if (!p.code || master.packages.some((q) => q.code === p.code)) return; if (rm.package.has(p.code)) { res.skipped.push(p.code); return; }
+      const group = ['Civil', 'Arch', 'MEP', 'General'].find((g) => g.toLowerCase() === String(p.group || '').toLowerCase()) || 'General';
+      master.packages.push({ code: p.code, label: p.label || p.code, group, icon: p.icon || '', color: GROUP_COLOR[group], sort: master.packages.length + 1, system: false, since: 1 }); res.packages.push(p.code); };
+    const addMnl = (x) => { if (!x.code || master.mnl.some((q) => q.code === x.code)) return; if (rm.mnl.has(x.code)) { res.skipped.push(x.code); return; }
+      master.mnl.push({ code: x.code, label: x.label || x.code, system: false }); res.mnl.push(x.code); };
+    for (const p of prev.divList || []) addPkg(p);
+    for (const x of prev.wpList || []) addWp(x);
+    for (const x of prev.mnlList || []) addMnl(x);
+    for (const e of (prev.coding || new Map()).values()) { if (e.csi) addPkg({ code: e.csi }); if (e.wp) addWp({ code: e.wp }); if (e.mnl) addMnl({ code: e.mnl }); }
+    return res;
+  }
   function adoptPrevious(master, project, prevCoding, savedAt) {
     const res = { added: 0, changed: 0, keptNewer: 0, unknown: 0, unknownCodes: new Set() };
     if (!project || !prevCoding) return res;
-    const okPkg = (c) => master.packages.some((p) => p.code === c), okMnl = (c) => master.mnl.some((x) => x.code === c);
+    const okPkg = (c) => master.packages.some((p) => p.code === c), okMnl = (c) => master.mnl.some((x) => x.code === c), okWp = (c) => (master.wpList || []).some((x) => x.code === c);
     for (const [ck, v] of prevCoding) {
       const [svc, text] = ck.split('\u0001'); const k = mkey(project, svc, text);
-      const want = { package: v.csi || '', mnl: v.mnl || '', cec: v.cec || '' };
+      const want = { package: v.csi && v.csi !== autoDiv(svc, master.packages) ? v.csi : '', wp: v.wp || '', mnl: v.mnl || '', cec: v.cec || '' };
       if (want.package && !okPkg(want.package)) { res.unknown++; res.unknownCodes.add(want.package); want.package = ''; }
+      if (want.wp && !okWp(want.wp)) { res.unknown++; res.unknownCodes.add(want.wp); want.wp = ''; }
       if (want.mnl && !okMnl(want.mnl)) { res.unknown++; res.unknownCodes.add(want.mnl); want.mnl = ''; }
-      if (!(want.package || want.mnl || want.cec)) continue;
-      const cur = master.mapping.get(k); const e = Object.assign({ package: '', mnl: '', cec: '', unit: '' }, cur || {});
+      if (!(want.package || want.wp || want.mnl || want.cec)) continue;
+      const cur = master.mapping.get(k); const e = Object.assign({ package: '', wp: '', mnl: '', cec: '', unit: '' }, cur || {});
       const newer = cur && cur.updated instanceof Date && savedAt && cur.updated > savedAt;
       let touched = false;
-      for (const d of ['package', 'mnl', 'cec']) { if (!want[d] || want[d] === e[d]) continue;
+      for (const d of ['package', 'wp', 'mnl', 'cec']) { if (!want[d] || want[d] === e[d]) continue;
         if (!e[d]) { e[d] = want[d]; res.added++; touched = true; }
         else if (newer) res.keptNewer++;
         else { e[d] = want[d]; res.changed++; touched = true; } }
@@ -1534,30 +1689,36 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
   function assign(master, project, keys, dim, value) {
     let n = 0; const now = new Date();
     for (const ck of keys) { const [svc, text] = ck.split('\u0001'); const k = mkey(project, svc, text);
-      const e = Object.assign({ package: '', mnl: '', cec: '', unit: '' }, master.mapping.get(k) || {});
-      if ((e[dim] || '') === (value || '')) continue; e[dim] = value || ''; e.updated = now; n++;
-      if (e.package || e.mnl || e.cec || e.unit) master.mapping.set(k, e); else master.mapping.delete(k); }
+      const e = Object.assign({ package: '', wp: '', mnl: '', cec: '', unit: '' }, master.mapping.get(k) || {});
+      const v = dim === 'package' && value === autoDiv(svc, master.packages) ? '' : (value || '');      // the automatic DIV is not stored
+      if ((e[dim] || '') === v) continue; e[dim] = v; e.updated = now; n++;
+      if (e.package || e.wp || e.mnl || e.cec || e.unit) master.mapping.set(k, e); else master.mapping.delete(k); }
     return n;
   }
   async function buildMaster(master, libs) {
     const wb = new libs.ExcelJS.Workbook(); wb.creator = TOOL.author; wb.title = TOOL.name; wb.description = SIG;
     const head = (ws, cols, widths, edit) => { ws.addRow(cols); ws.getRow(1).eachCell((c, j) => { const y = edit.includes(j); c.font = y ? st.HB : st.H; c.fill = y ? FILL.YF : FILL.HF;
       c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }; }); widths.forEach((w, j) => { ws.getColumn(j + 1).width = w; }); ws.views = [{ state: 'frozen', ySplit: 1 }]; };
-    const pk = wb.addWorksheet('Packages'); head(pk, ['Code', 'Label', 'Group', 'Icon', 'Color', 'Sort', 'System', 'Catalogue v' + (master.version || CATALOGUE_VERSION)], [12, 32, 12, 7, 10, 7, 8, 13], [2, 3, 4, 5, 6]);
+    const pk = wb.addWorksheet('DIV'); head(pk, ['Code', 'Label', 'Group', 'Icon', 'Color', 'Sort', 'System', 'Catalogue v' + (master.version || CATALOGUE_VERSION)], [12, 32, 12, 7, 10, 7, 8, 13], [2, 3, 4, 5, 6]);
     for (const p of master.packages) pk.addRow([p.code, p.label, p.group, p.icon, '#' + p.color, p.sort, p.system ? 'yes' : '']);
+    const tp = wb.addWorksheet('Packages'); head(tp, ['Code', 'Label'], [16, 40], [1, 2]);           // the team's own work packages
+    for (const x of master.wpList || []) tp.addRow([x.code, x.label || null]);
     const mn = wb.addWorksheet('MNL'); head(mn, ['Code', 'Label', 'System'], [10, 24, 8], [2]);
     for (const x of master.mnl) mn.addRow([x.code, x.label, x.system ? 'yes' : '']);
     const ce = wb.addWorksheet('Cost Elements'); head(ce, ['Project', 'Code', 'Label'], [12, 16, 40], [2, 3]);
     for (const [pr, m] of [...master.costElements].sort()) for (const [code, label] of [...m].sort()) ce.addRow([pr, code, label || null]);
-    const sm = wb.addWorksheet('Service Mapping'); head(sm, ['Project', 'Service', 'Service text', 'Package', 'MNL', 'Cost Element', 'Unit override', 'Updated'], [10, 12, 50, 11, 8, 16, 10, 12], [4, 5, 6, 7]);
-    const rows = [...master.mapping].map(([k, v]) => { const [pr, svc, text] = k.split('\u0001'); return [pr, svc, text, v.package || null, v.mnl || null, v.cec || null, v.unit || null, v.updated || null]; })
+    const sm = wb.addWorksheet('Service Mapping'); head(sm, ['Project', 'Service', 'Service text', 'DIV', 'Package', 'MNL', 'Cost Element', 'Unit override', 'Updated'], [10, 12, 50, 11, 16, 8, 16, 10, 12], [4, 5, 6, 7, 8]);
+    const rows = [...master.mapping].map(([k, v]) => { const [pr, svc, text] = k.split('\u0001'); return [pr, svc, text, v.package || null, v.wp || null, v.mnl || null, v.cec || null, v.unit || null, v.updated || null]; })
       .sort((a, b) => cmpTuple(a.slice(0, 3), b.slice(0, 3)));
-    for (const r of rows) sm.addRow(r); sm.getColumn(8).numFmt = 'yyyy-mm-dd'; for (const j of [2, 4, 5, 6]) sm.getColumn(j).numFmt = '@';
+    for (const r of rows) sm.addRow(r); sm.getColumn(9).numFmt = 'yyyy-mm-dd'; for (const j of [2, 4, 5, 6, 7]) sm.getColumn(j).numFmt = '@';
+    sm.getCell('D1').note = 'Blank DIV = automatic from the service code (S0303 → DIV 03; S01, S02, S34, labour and plant → INDIRECT). Type a DIV only to override it.';
     sm.getRow(1).eachCell((c) => { c.numFmt = 'General'; });
+    const rv = wb.addWorksheet('Removed'); head(rv, ['Code', 'List'], [14, 10], []);
+    for (const l of ['package', 'wp', 'mnl']) for (const c of ((master.removed || {})[l] || [])) rv.addRow([c, { package: 'DIV', wp: 'Package', mnl: 'MNL' }[l]]);
     const rm = wb.addWorksheet('Read me');
     ['Work package master', '',
-      'Codes every subcontract service (SAP service code + service text) on three dimensions, per project: Package (CSI division), MNL (MAT / SUB / EQU) and Cost Element.',
-      'Packages and MNL are shared catalogues: add rows to extend them; system rows can be relabelled but should not be deleted.',
+      'Codes every subcontract service (SAP service code + service text) per project: DIV (CSI division – automatic from the service code), Package (your own work packages), MNL and Cost Element.',
+      'DIV, Packages and MNL are shared lists: add rows to extend them. Service Mapping → DIV is blank unless someone overrode the automatic division.',
       'Cost Elements are per project: each project keeps its own list (the report tool adds them when you create one on the coding page).',
       'Service Mapping holds one row per project + service + text. Blank means not coded. Keys match exactly – no patterns.',
       'Keep one copy on the shared drive. After coding in the tool, save the downloaded master over it.']
@@ -1566,7 +1727,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     return wb.xlsx.writeBuffer();
   }
 
-  const api = { TOOL, SIG, analyse, summarize, readPrevious, buildWorkbook, groupInvoices, detectKind, codingKey, tradeName, TRADES, mlabel, VATR,
+  const api = { TOOL, SIG, analyse, fromReport, adoptPackages, autoDiv, summarize, readPrevious, buildWorkbook, groupInvoices, detectKind, codingKey, tradeName, TRADES, mlabel, VATR,
     readCodingMaster, mergeCodingMaster, buildCodingMaster, MASTER_SHEET,
     PACKAGES, MNLS, DIMS, GROUP_COLOR, defaultMaster, readMaster, buildMaster, codingFor, suggest, assign, mkey, adoptPrevious, setBase, listsOf, listStamp };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.SubcontractEngine = api;

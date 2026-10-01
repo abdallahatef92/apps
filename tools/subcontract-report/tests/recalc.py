@@ -23,9 +23,9 @@ n = wb['Notes']
 for r in range(32, 41): print('  Notes', n.cell(r, 1).value, '=', n.cell(r, 2).value)
 d40 = n.cell(40, 2).value
 if d40 is None or abs(d40) > 0.5: fails.append('Notes reconciliation')
-pm = wb['Package Monthly']
+pm = wb['DIV Monthly'] if 'DIV Monthly' in wb.sheetnames else wb['Package Monthly']
 for r in pm.iter_rows(min_row=2, values_only=True):
-    if r[0] in ('Code', 'UNALLOCATED', 'TOTAL', 'DIV 03'): print('  PM', [v for v in r if v is not None][:6], '...', r[-2:])
+    if r[0] in ('Code', 'DIV', 'UNALLOCATED', 'TOTAL', 'DIV 03'): print('  PM', [v for v in r if v is not None][:6], '...', r[-2:])
 db = wb['Dashboard']
 for r in db.iter_rows(min_row=7, max_row=9, values_only=True): print('  tiles', [v for v in r if v not in (None, '')])
 for r in db.iter_rows(values_only=True):

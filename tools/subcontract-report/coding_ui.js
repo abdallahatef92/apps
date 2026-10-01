@@ -4,7 +4,7 @@
 //   po  – PO → its services;  sup – supplier → PO → services.
 // In the PO views coding a row still codes that service on every PO. Three dimensions share one picker.
 const CodingUI = (() => {
-  const ui = { view: 'svc', drill: new Set(), dim: 'package', g1: 'svcgroup', g2: 'none', sort: { col: 'amount', dir: -1 }, filter: '', onlyOpen: false,
+  const ui = { view: 'svc', drill: new Set(), dim: 'wp', g1: 'svcgroup', g2: 'none', sort: { col: 'amount', dir: -1 }, filter: '', onlyOpen: false,
     selected: new Set(), collapsed: new Set(), fold: 0, rows: [], byId: new Map(),
     lines: null, period: new Set(), from: 0, to: 0, sig: null };
   const DIMS = E.DIMS;
@@ -12,6 +12,7 @@ const CodingUI = (() => {
     const wp = state.wp, pr = state.plant || '';
     return {
       package: wp.packages.map((p) => ({ code: p.code, label: p.label, icon: p.icon, color: p.color, group: p.group })),
+      wp: (wp.wpList || []).map((x) => ({ code: x.code, label: x.label || x.code, icon: '', color: '7A5C1E' })),
       mnl: wp.mnl.map((m) => ({ code: m.code, label: m.label, icon: '', color: '4A6FA5' })),
       cec: [...(wp.costElements.get(pr) || new Map())].map(([code, label]) => ({ code, label: label || code, icon: '', color: '7A5C9E' })),
     };
@@ -65,7 +66,9 @@ const CodingUI = (() => {
     ui.total = ui.rows.reduce((a, r) => a + r.amount, 0);
     for (const id of [...ui.selected]) if (!m.has(id)) ui.selected.delete(id);
   }
-  const codeOf = (r, dim) => (current(r.svc, r.text)[dim] || '');
+  // DIV is automatic from the service code unless a DIV was typed for the service
+  const isAuto = (r, dim) => dim === 'package' && !current(r.svc, r.text).package && !!E.autoDiv(r.svc, state.wp.packages);
+  const codeOf = (r, dim) => (current(r.svc, r.text)[dim] || (dim === 'package' ? E.autoDiv(r.svc, state.wp.packages) : ''));
   const groupKey = (r, g) => {
     if (g === 'svcgroup') return r.svc.slice(0, 3);
     if (g === 'po') return r.po;
@@ -86,7 +89,7 @@ const CodingUI = (() => {
     if (g === 'month') return keys.sort();          // time always runs forward
     const byTotal = ui.sort.col === 'amount' || ui.sort.col === 'lines';
     if (byTotal) return keys.sort((a, b) => ui.sort.dir * ((totals.get(a)[ui.sort.col]) - (totals.get(b)[ui.sort.col])));
-    if (g === 'package' || g === 'mnl' || g === 'cec') { const order = cat()[g].map((c) => c.code); return keys.sort((a, b) => (order.indexOf(a) + 1 || 999) - (order.indexOf(b) + 1 || 999)); }
+    if (g === 'package' || g === 'wp' || g === 'mnl' || g === 'cec') { const order = cat()[g].map((c) => c.code); return keys.sort((a, b) => (order.indexOf(a) + 1 || 999) - (order.indexOf(b) + 1 || 999)); }
     return keys.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   };
   function visibleRows() {
@@ -102,6 +105,8 @@ const CodingUI = (() => {
   // ---------- badges
   function badge(r, dim) {
     const code = codeOf(r, dim);
+    if (code && isAuto(r, dim)) { const c = findCat(dim, code) || { code, label: code, icon: '', color: '6B7280' };
+      return `<span class="wpb auto" style="--c:#${c.color}" title="${esc('DIV ' + c.code + ' – ' + c.label + ' · automatic from the service code; pick another DIV to override')}">${c.icon ? `<i>${c.icon}</i>` : ''}${esc(c.code)}</span>`; }
     if (code) { const c = findCat(dim, code) || { code, label: code, icon: '', color: '6B7280' };
       return `<span class="wpb" style="--c:#${c.color}" title="${esc(DIMS[dim] + ': ' + c.code + ' – ' + c.label)}">${c.icon ? `<i>${c.icon}</i>` : ''}${esc(c.code)}</span><button class="wpx" data-undo="${esc(r.id)}" data-dim="${dim}" title="Remove this ${DIMS[dim]} code" aria-label="Remove ${DIMS[dim]} code">✕</button>`; }
     const s = (ui.sugg.get(r.key) || {})[dim];
@@ -146,8 +151,8 @@ const CodingUI = (() => {
       <th data-sort="svc">Service code${sortMark('svc')}</th><th data-sort="text">Description${sortMark('text')}</th><th>Unit</th>
       <th class="r" data-sort="npo">${ui.view === 'svc' ? 'POs' : 'Also on'}${sortMark('npo')}</th>
       <th class="r" data-sort="lines">Lines${sortMark('lines')}</th><th class="r" data-sort="qty">Qty${sortMark('qty')}</th><th class="r" data-sort="rate">Rate${sortMark('rate')}</th><th class="r" data-sort="amount">Amount${sortMark('amount')}</th>
-      <th${dim === 'package' ? ' class="on"' : ''}>Package</th><th${dim === 'mnl' ? ' class="on"' : ''}>MNL</th><th${dim === 'cec' ? ' class="on"' : ''}>Cost element</th></tr></thead>
-      <tbody>${html || `<tr><td colspan="12" class="muted">${ui.lines.length ? 'No rows match this filter or period.' : 'No rows.'}</td></tr>`}</tbody></table>`;
+      <th${dim === 'package' ? ' class="on"' : ''}>DIV</th><th${dim === 'wp' ? ' class="on"' : ''}>Package</th><th${dim === 'mnl' ? ' class="on"' : ''}>MNL</th><th${dim === 'cec' ? ' class="on"' : ''}>Cost element</th></tr></thead>
+      <tbody>${html || `<tr><td colspan="13" class="muted">${ui.lines.length ? 'No rows match this filter or period.' : 'No rows.'}</td></tr>`}</tbody></table>`;
     const allBox = $('wp-all'); if (allBox) allBox.indeterminate = selVis > 0 && selVis < visIds.length;
     host.querySelectorAll('input[data-grp]').forEach((b) => { b.indeterminate = b.dataset.state === 'some'; });
     renderBar(); foldButtons();
@@ -167,7 +172,7 @@ const CodingUI = (() => {
       <td colspan="4"><button class="wpc" data-toggle="${esc(cid)}" aria-expanded="${!ui.collapsed.has(cid)}">${ui.collapsed.has(cid) ? '▸' : '▾'}</button><b><bdi>${esc(groupLabel(g, k, list[0]))}</bdi></b>
       <span class="muted"> · ${n} items${poN(g, level, list)}${open ? ` · <span class="warnx">${open} unallocated</span>` : ''} · ${share.toFixed(1)}% of total</span></td>
       <td></td><td class="r num">${fmtN(list.reduce((a, r) => a + r.lines, 0))}</td><td></td><td></td><td class="r num">${fmtN(amt)}</td>
-      <td colspan="3"><span class="meter ${open ? 'part' : 'full'}" title="${DIMS[dim]}: ${n - open} of ${n} rows coded, ${amt ? (codedAmt / amt * 100).toFixed(0) : 0}% of this group's amount"><i style="width:${pct.toFixed(0)}%"></i></span> <span class="muted">${pct.toFixed(0)}% coded</span></td></tr>`;
+      <td colspan="4"><span class="meter ${open ? 'part' : 'full'}" title="${DIMS[dim]}: ${n - open} of ${n} rows coded, ${amt ? (codedAmt / amt * 100).toFixed(0) : 0}% of this group's amount"><i style="width:${pct.toFixed(0)}%"></i></span> <span class="muted">${pct.toFixed(0)}% coded</span></td></tr>`;
   }
   const fmtQ = (q) => (q ? fmtN(q, Math.abs(q % 1) > 1e-9 ? 2 : 0) : '');
   const fmtR = (r) => (r == null ? '' : fmtN(r, 2));
@@ -178,14 +183,14 @@ const CodingUI = (() => {
     return `<tr class="wpl${ui.selected.has(r.id) ? ' sel' : ''}" data-id="${esc(r.id)}"><td class="ck"><input type="checkbox" data-row="${esc(r.id)}" ${ui.selected.has(r.id) ? 'checked' : ''} aria-label="Select ${esc(r.svc)}"></td>
       <td class="num">${esc(r.svc)}</td><td class="ar">${esc(r.text)}</td><td class="muted">${esc(r.unit)}</td><td class="r">${poCell}</td>
       <td class="r num">${fmtN(r.lines)}</td><td class="r num">${fmtQ(r.qty)}</td><td class="r num">${fmtR(r.rate)}</td><td class="r num">${fmtN(r.amount)}</td>
-      <td class="bd">${badge(r, 'package')}</td><td class="bd">${badge(r, 'mnl')}</td><td class="bd">${badge(r, 'cec')}</td></tr>`;
+      <td class="bd">${badge(r, 'package')}</td><td class="bd">${badge(r, 'wp')}</td><td class="bd">${badge(r, 'mnl')}</td><td class="bd">${badge(r, 'cec')}</td></tr>`;
   }
   // read-only breakdown of one service across its POs
   function drillRows(r) {
     return [...r.pos.values()].sort((a, b) => b.amount - a.amount).map((p) => {
       const rate = p.qty ? p.amount / p.qty : null, off = rate != null && r.rate != null && Math.abs(rate - r.rate) > Math.max(0.01, Math.abs(r.rate) * 0.01);
       return `<tr class="wpsub"><td></td><td colspan="4"><span class="muted">PO</span> <b class="num">${esc(p.po)}</b> · <bdi>${esc(p.sup)}</bdi></td>
-        <td class="r num">${fmtN(p.lines)}</td><td class="r num">${fmtQ(p.qty)}</td><td class="r num${off ? ' rdiff' : ''}"${off ? ' title="Rate differs from the service average"' : ''}>${fmtR(rate)}</td><td class="r num">${fmtN(p.amount)}</td><td colspan="3"></td></tr>`;
+        <td class="r num">${fmtN(p.lines)}</td><td class="r num">${fmtQ(p.qty)}</td><td class="r num${off ? ' rdiff' : ''}"${off ? ' title="Rate differs from the service average"' : ''}>${fmtR(rate)}</td><td class="r num">${fmtN(p.amount)}</td><td colspan="4"></td></tr>`;
     }).join('');
   }
   function renderBar() {
@@ -266,7 +271,7 @@ const CodingUI = (() => {
   // Pivot-style fold levels: 0 = everything open, 1 = rows hidden under the 2nd-level groups,
   // 2 = only the 1st-level groups. Without a 2nd level, level 1 is skipped.
   const level2 = () => eff().g2;
-  const GNAME = { svcgroup: 'Service group', po: 'PO', supplier: 'Supplier', month: 'Month', package: 'Package', mnl: 'MNL', cec: 'Cost element' };
+  const GNAME = { svcgroup: 'Service group', po: 'PO', supplier: 'Supplier', month: 'Month', package: 'DIV', wp: 'Package', mnl: 'MNL', cec: 'Cost element' };
   function applyFold() {
     const { g1, g2 } = eff(); ui.collapsed = new Set();
     if (ui.fold === 0) return;
@@ -304,7 +309,7 @@ const CodingUI = (() => {
   function openEditor(dim) {
     const wp = state.wp, pr = state.plant || '';
     if (dim === 'cec' && !pr) { $('wp-status').textContent = 'Build a report first – cost elements belong to a project.'; return; }
-    const src = dim === 'package' ? wp.packages : dim === 'mnl' ? wp.mnl : [...(wp.costElements.get(pr) || new Map())].map(([code, label]) => ({ code, label }));
+    const src = dim === 'package' ? wp.packages : dim === 'wp' ? (wp.wpList || []) : dim === 'mnl' ? wp.mnl : [...(wp.costElements.get(pr) || new Map())].map(([code, label]) => ({ code, label }));
     ed = { dim, rows: src.map((x) => ({ orig: x.code, code: x.code, label: x.label || '', group: x.group || '', icon: x.icon || '', color: x.color || '', system: !!x.system, del: false, n: used(dim, x.code) })) };
     let dlg = $('wp-editor');
     if (!dlg) { dlg = document.createElement('dialog'); dlg.id = 'wp-editor'; dlg.className = 'wped'; document.body.appendChild(dlg);
@@ -351,16 +356,20 @@ const CodingUI = (() => {
     const seen = new Set(); for (const r of keep) { const k = r.code.toUpperCase(); if (seen.has(k)) return msg(`The code ${r.code} is used twice.`); seen.add(k); }
     const ren = new Map(), gone = new Set();
     for (const r of ed.rows) if (r.orig) { if (r.del) gone.add(r.orig); else { const nc = normCode(d, r.code); if (nc !== r.orig) ren.set(r.orig, nc); } }
+    // deleted (or renamed-away) codes are remembered, so a report or master that still lists them cannot bring them back
+    if (d !== 'cec') { if (!wp.removed) wp.removed = { package: new Set(), wp: new Set(), mnl: new Set() }; if (!wp.removed[d]) wp.removed[d] = new Set();
+      for (const c of [...gone, ...ren.keys()]) wp.removed[d].add(c); for (const r of keep) wp.removed[d].delete(r.code); }
     // catalogue
     if (d === 'package') wp.packages = keep.map((r, i) => ({ code: r.code, label: r.label || r.code, group: r.group || 'General', icon: r.icon.trim(),
       color: E.GROUP_COLOR[r.group] || (r.orig && r.color) || '6B7280', sort: i + 1, system: r.system }));
     else if (d === 'mnl') wp.mnl = keep.map((r) => ({ code: r.code, label: r.label || r.code, system: r.system }));
+    else if (d === 'wp') wp.wpList = keep.map((r) => ({ code: r.code, label: r.label || r.code }));
     else wp.costElements.set(pr, new Map(keep.map((r) => [r.code, r.label])));
     // codings: renamed codes follow, deleted codes are cleared (cost elements: this project only)
     let moved = 0, cleared = 0; const pre = pr + '\u0001';
     for (const [k, v] of [...wp.mapping]) { if (d === 'cec' && !k.startsWith(pre)) continue; const c = v[d]; if (!c) continue;
       if (ren.has(c)) { v[d] = ren.get(c); v.updated = new Date(); moved++; }
-      else if (gone.has(c)) { v[d] = ''; v.updated = new Date(); cleared++; if (!(v.package || v.mnl || v.cec || v.unit)) wp.mapping.delete(k); } }
+      else if (gone.has(c)) { v[d] = ''; v.updated = new Date(); cleared++; if (!(v.package || v.wp || v.mnl || v.cec || v.unit)) wp.mapping.delete(k); } }
     $('wp-editor').close(); ed = null; listsChanged();
     const added = keep.filter((r) => !r.orig).length;
     afterEdit(`${DIMS[d]} list saved: ${keep.length} codes` + (added ? `, ${added} added` : '') + (ren.size ? `, ${ren.size} renamed (${moved} codings moved)` : '') + (gone.size ? `, ${gone.size} deleted (${cleared} codings now unallocated)` : '') + '.');
