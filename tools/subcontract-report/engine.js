@@ -585,8 +585,8 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     const agg = new Map();                                     // Row ID -> bucket -> [report qty, amount]
     for (const r of det) { if (r.isqo || !r.rk) continue; let m = agg.get(r.rk); if (!m) agg.set(r.rk, (m = new Map()));
       const x = m.get(r.bucket) || [0, 0]; x[0] += r.repq; x[1] += r.amt; m.set(r.bucket, x); }
-    const ID = ['Row ID', 'Package', 'MNL', 'Cost element', 'Service', 'Description', 'PO', 'Supplier code', 'Supplier', 'Line type', 'Unit'];
-    const REF = ['Rate check', 'First seen (load)', 'Svc ID', 'Contract type', 'Tax code', 'Gross price', 'Resource', 'Trade', 'Material group', 'Material group description', 'Profit centre'];
+    const ID = ['Row ID', 'Package', 'MNL', 'Cost element', 'Service', 'Description', 'PO', 'Supplier code', 'Supplier', 'Line type', 'Unit', 'Trade'];
+    const REF = ['Rate check', 'First seen (load)', 'Svc ID', 'Contract type', 'Tax code', 'Gross price', 'Resource', 'Material group', 'Material group description', 'Profit centre'];
     const AMTF = '#,##0;[Red]-#,##0;;@', QTYF = '#,##0.00;[Red]-#,##0.00;;@', R1 = 6, RN = R1 + SM_ORDER.length - 1;
     const DTR = (n) => `Detail!$${C[n]}$2:$${C[n]}$${NR}`;
     // periods: [{ label, year, fill, keys: [buckets], crit: SUMIFS criteria on Detail → Report bucket }]
@@ -616,6 +616,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
         row[0] = id; row[1] = { formula: `IF(${code('F')}="","UNALLOCATED",${code('F')})` }; row[2] = { formula: code('G') }; row[3] = { formula: code('H') };
         row[4] = svc; row[5] = text; row[6] = dig(po); row[7] = dig(sup); row[8] = supName.get(sup);
         row[9] = adj ? (chk.has(id) ? '⚠ Adjustment – check' : 'Adjustment') : 'Normal'; row[10] = { formula: code('D') };
+        row[11] = { formula: lk('Coding', 'D', 'E', `"${trade(svc)}"`) };                                     // trade name from the service code (Coding → trades)
         const put = (c, q, am) => { if (q) row[c - 1] = q; if (q) row[c] = am / q; if (am) row[c + 1] = am; };
         const sumifs = (col, b) => b.crit.map((cr) => `SUMIFS(${DTR(col)},${DTR('Row key')},$A${i},${DTR('Report bucket')},${cr})`).join('+');
         let tq = 0, ta = 0;
@@ -630,7 +631,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
           row[T0 + 1] = { formula: `IF(${L(T0 + 1)}${i}=0,"",${L(T0 + 3)}${i}/${L(T0 + 1)}${i})` }; }
         else { if (tq) { row[T0] = tq; row[T0 + 1] = ta / tq; } if (ta) row[T0 + 2] = ta; }
         const refv = { 'Rate check': live ? { formula: `ROUND(${L(T0 + 3)}${i}-${L(T0 + 1)}${i}*${L(T0)}${i},0)` } : (Math.round(ta - tq * net) || null), 'First seen (load)': A.rowFirst[idx], 'Svc ID': sid, 'Contract type': ctype, 'Tax code': tax, 'Gross price': price,
-          Resource: { formula: lk('Coding', 'A', 'B', `"${svc.slice(0, 1)}"`) }, Trade: { formula: lk('Coding', 'D', 'E', `"${trade(svc)}"`) },
+          Resource: { formula: lk('Coding', 'A', 'B', `"${svc.slice(0, 1)}"`) },
           'Material group': mg.map((x) => x[0]).sort().join(' / ') || null, 'Material group description': mg.map((x) => x[1]).sort().join(' / ') || null, 'Profit centre': pc };
         REF.forEach((h, j) => { row[RF - 1 + j] = refv[h]; });
         if (svc + '\u0001' + text !== prevSvc) { band ^= 1; prevSvc = svc + '\u0001' + text; }
@@ -644,7 +645,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
         if (x.adj) xr.getCell(10).font = { ...st.F, size: 9.5, bold: true, color: { argb: x.check ? 'FFB4413C' : 'FFB0561F' } }; });
       // column formats, fonts, widths
       const MONO = { ...st.F, name: 'Consolas', size: 9.5 };
-      [13, 11, 7, 11, 12, 44, 12, 11, 28, 13, 6].forEach((w, j) => sh.width(1 + j, w));
+      [13, 11, 7, 11, 12, 44, 12, 11, 28, 13, 6, 17].forEach((w, j) => sh.width(1 + j, w));
       for (let c = 1; c <= LASTC; c++) sh.ws.getColumn(c).font = { ...st.F, size: 9.5 };
       for (const c of [1, 5, 7, 8]) { sh.ws.getColumn(c).font = MONO; sh.ws.getColumn(c).alignment = { horizontal: c === 5 || c === 1 ? 'left' : 'center' }; }
       sh.ws.getColumn(6).alignment = { horizontal: 'right', indent: 1 }; sh.ws.getColumn(9).alignment = { horizontal: 'right', readingOrder: 'rtl', indent: 1 };
@@ -656,7 +657,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       [10, 11, 10, 13].forEach((w, j) => { sh.width(T0 + j, w); sh.ws.getColumn(T0 + j).numFmt = j === 3 ? AMTF : QTYF; });
       for (let j = 0; j < 3; j++) sh.ws.getColumn(T0 + j).outlineLevel = 1;
       sh.ws.getColumn(T0 + 3).font = { ...st.B, size: 9.5 };
-      REF.forEach((h, j) => { const col = sh.ws.getColumn(RF + j); col.width = [10, 8, 7, 8, 7, 10, 12, 18, 12, 26, 10][j]; col.outlineLevel = 1; col.hidden = true; });
+      REF.forEach((h, j) => { const col = sh.ws.getColumn(RF + j); col.width = [10, 8, 7, 8, 7, 10, 12, 12, 26, 10][j]; col.outlineLevel = 1; col.hidden = true; });
       sh.ws.getColumn(rc('Rate check')).numFmt = AMTF; sh.ws.getColumn(rc('Gross price')).numFmt = QTYF;
       for (const n of ['Svc ID', 'First seen (load)', 'Contract type', 'Tax code']) sh.ws.getColumn(rc(n)).alignment = { horizontal: 'center' };
       sh.ws.getColumn(rc('Material group')).numFmt = '@'; sh.ws.getColumn(rc('Tax code')).numFmt = '@';

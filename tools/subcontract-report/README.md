@@ -30,6 +30,7 @@ and downloads the Excel report. Nothing is uploaded; the libraries are embedded 
   row 5 column names. Identity (11) → Opening → Qty / Rate / Amount per period → Total → Pending → reference columns.
   Service Monthly and Service Quarterly figures are live SUMIFS on Detail; row 2 re-adds every block from Detail.
   Package / MNL / Cost element / Unit are live lookups on Service Coding on both.
+  **Trade** (after Unit) is the trade name from the service code, a live lookup on Coding → trades.
 - **Per-service totals** (Service Coding → Total amount) are values; Dashboard → Final control checks them against Detail.
 - **Package Monthly** sums Service Monthly by current package (live); the Dashboard reads it.
 - **Tool screen**: the **Overview** tab is a dashboard – total to the cut date (opening / approved months / pending),

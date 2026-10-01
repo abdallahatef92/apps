@@ -12,6 +12,13 @@ for name in ['Service Monthly', 'Service Quarterly']:
     bad = [v for v in checks if v != '✔']
     print(f'{name}: {len(checks)} checks, not ✔: {bad[:8]} | header row4: {[v for v in r4 if v][:16]}')
     if bad or not checks: fails.append(name)
+for name in ['Service Monthly', 'Service Quarterly']:
+    ws = wb[name]; h = [c.value for c in ws[5]]
+    if 'Trade' not in h: fails.append(name + ' has no Trade column'); continue
+    tc = h.index('Trade') + 1; rows = [r for r in range(6, ws.max_row + 1) if ws.cell(r, 1).value]
+    bad = [ws.cell(r, tc).value for r in rows if ws.cell(r, tc).value in (None, '', 'UNMAPPED')]
+    print(f'  {name} Trade: {len(rows)} rows, {len(set(ws.cell(r, tc).value for r in rows))} trades, unmapped {len(bad)}')
+    if bad: fails.append(name + ' Trade unmapped')
 n = wb['Notes']
 for r in range(32, 41): print('  Notes', n.cell(r, 1).value, '=', n.cell(r, 2).value)
 d40 = n.cell(40, 2).value
