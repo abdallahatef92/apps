@@ -18,7 +18,7 @@ def agg(keycol):
         if b == 'PENDING': x[4] += a
     return out
 bad = 0
-for name, keycol, r0 in [('DIV', 'DIV (live)', 7), ('service', 'Statement key', None)]:
+for name, keycol, r0 in [('type of works', 'Type key', 7), ('service', 'Statement key', None)]:
     if r0 is None: r0 = next(r for r in range(8, 400) if cs.cell(r, 1).value == 'Key') + 1
     exp = agg(keycol); keys = sorted(exp, key=str.upper); got = []
     r = r0
@@ -30,5 +30,5 @@ for name, keycol, r0 in [('DIV', 'DIV (live)', 7), ('service', 'Statement key', 
         if any(abs((g or 0) - w) > 0.01 for g, w in zip(row, want)): bad += 1; print(name, k, row, want) if bad < 5 else None
     tot = [sum(exp[k][j] for k in keys) for j in range(5)]
     print(f'{name}: {len(keys)} rows · month {tot[0]:,.0f} · prev {tot[1]:,.0f} · YTD {tot[2]:,.0f} · ITD {tot[3]:,.0f} · pending {tot[4]:,.0f}')
-print('DIV (live) blanks:', sum(1 for r in dt.iter_rows(min_row=2, values_only=True) if r[ix['Statement key']] and not r[ix['DIV (live)']]))
+print('lines without a type of works:', sum(1 for r in dt.iter_rows(min_row=2, values_only=True) if r[ix['Statement key']] and r[ix['Type of works']] == '(no type)'))
 sys.exit(1 if bad else 0)

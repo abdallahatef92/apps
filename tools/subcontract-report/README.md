@@ -32,8 +32,9 @@ and downloads the Excel report. Nothing is uploaded; the libraries are embedded 
   DIV / Package / MNL / Cost element / Unit are live lookups on Service Coding on both.
   **Trade** (after Unit) is the trade name from the service code, a live lookup on Coding → trades.
 - **Per-service totals** (Service Coding → Total amount) are values; Dashboard → Final control checks them against Detail.
-- **Cost Statement** (3rd tab): pick any month in B3 – This month | Previous | Change | Change % | YTD | ITD | Pending, by DIV
-  and by service. Rows are dynamic arrays (SORT / UNIQUE / FILTER over Detail → DIV (live) / Statement key), so new services,
+- **Cost Statement** (3rd tab): pick any month in B3 – This month | Previous | Change | Change % | YTD | ITD | Pending, by
+  type of works and by service (grouped by type). Rows are dynamic arrays (SORT / UNIQUE / FILTER over Detail → Type key /
+  Statement key; Type key = Lists order + type of works of the line's PO), so new services,
   new DIVs and codes changed on Service Coding appear without a rebuild – needs Microsoft 365 or Excel 2021. The engine
   marks the anchors as dynamic (cm="1" + xl/metadata.xml) and writes cached results for the report month;
   `tests/stmtcheck.py` checks them against the recalculated Detail.
@@ -47,6 +48,8 @@ and downloads the Excel report. Nothing is uploaded; the libraries are embedded 
   carrying most of its amount (others under *Also under*); the order comes from Lists → Type of works / Order
   (alphabetical, rentals and transport – cars, trailers, jumbo … – last). Every formula finds a service by its Svc ID, so
   the sheet can be re-sorted freely. DIV is not yellow: it is already filled (grey = automatic, blue = typed).
+- **Dashboard → Cost by type of works** (page 2): month, YTD, to date, pending and share per type in the Lists order,
+  with a bar chart; the tool's Overview offers the same split (Cost by → Type of works).
 - **Coding dimensions**: **DIV** (CSI division) is automatic from the service code (S0303 → DIV 03; S01/S02/S34, labour L
   and plant P → INDIRECT); a DIV typed for a service overrides it and only overrides are stored. **Package** is the team's
   own work package list (starts empty), **MNL** and **Cost Element** as before. Older masters and reports migrate on load:

@@ -360,7 +360,7 @@ footer.sig::before{content:'';display:block;width:60px;height:2px;background:var
             <div class="card"><div class="hd"><h3 id="ov-rm-h">Report month – top subcontractors</h3><span class="muted" style="font-size:12px" id="ov-rm-note"></span></div><div class="bd"><div class="blist" id="ov-rm"></div></div></div>
           </div>
           <div class="ovgrid even">
-            <div class="card"><div class="hd"><h3>Cost by <span class="ovseg" role="group" aria-label="Show cost by"><button data-ovpk="package" aria-pressed="true">DIV</button><button data-ovpk="wp" aria-pressed="false">Package</button></span></h3><span class="muted" style="font-size:12px" id="ov-pkg-note"></span></div><div class="bd"><div class="blist" id="ov-pkg"></div></div></div>
+            <div class="card"><div class="hd"><h3>Cost by <span class="ovseg" role="group" aria-label="Show cost by"><button data-ovpk="package" aria-pressed="true">DIV</button><button data-ovpk="wp" aria-pressed="false">Package</button><button data-ovpk="type" aria-pressed="false">Type of works</button></span></h3><span class="muted" style="font-size:12px" id="ov-pkg-note"></span></div><div class="bd"><div class="blist" id="ov-pkg"></div></div></div>
             <div class="card"><div class="hd"><h3>Top 10 subcontractors</h3><span class="muted" style="font-size:12px">to the cut date · opening + months</span></div><div class="bd"><div class="blist" id="ov-subs"></div></div></div>
           </div>
           <details class="more" id="ov-more"><summary>More detail – trades, active subcontractors, top services, all figures</summary>
@@ -787,8 +787,9 @@ function renderOverviewDash() {
   // codes as they are now (the Coding tab changes them after the build): DIV automatic unless typed, Package = the team's own
   const master = (typeof state !== 'undefined' && state.wp) || (A.opts && A.opts.master) || null;
   const divList = (master && master.packages) || [], wpList = (master && master.wpList) || [], live = mergedCoding();
-  const listOf = ovUI.pk === 'wp' ? wpList : divList, byCode = new Map(listOf.map((p) => [normCode(p.code), p]));
-  const codeNow = (r, d) => { const c = live.get(E.codingKey(r.svc, r.text)) || {}; return d === 'wp' ? (c.wp || '') : (c.csi || E.autoDiv(r.svc, divList)); };
+  const poT = E.poTypes(A), typeList = E.sortTypes([...poT.values()].concat(det.some((r) => !poT.get(r.po)) ? ['(no type)'] : [])).map((t) => ({ code: t, label: t }));
+  const listOf = ovUI.pk === 'wp' ? wpList : ovUI.pk === 'type' ? typeList : divList, byCode = new Map(listOf.map((p) => [normCode(p.code), p]));
+  const codeNow = (r, d) => { if (d === 'type') return poT.get(r.po) || '(no type)'; const c = live.get(E.codingKey(r.svc, r.text)) || {}; return d === 'wp' ? (c.wp || '') : (c.csi || E.autoDiv(r.svc, divList)); };
   const inRep = det.filter((r) => r.bucket !== 'PENDING');
   const pkAmt = new Map(); let un = 0, wpCoded = 0;
   for (const r of inRep) { const p = byCode.get(normCode(codeNow(r, ovUI.pk))); if (p) pkAmt.set(p.code, (pkAmt.get(p.code) || 0) + r.amt); else un += r.amt;
@@ -823,10 +824,11 @@ function renderOverviewDash() {
     : '<div class="muted">No approved cost in the report month.</div>';
   // work packages
   const pkRows = listOf.filter((p) => pkAmt.get(p.code)).map((p) => [p, pkAmt.get(p.code)]).sort((a, b) => b[1] - a[1]);
-  const pmx = Math.max(un, ...pkRows.map(([, v]) => v), 1), isDiv = ovUI.pk !== 'wp';
+  const pmx = Math.max(un, ...pkRows.map(([, v]) => v), 1), isDiv = ovUI.pk === 'package', isType = ovUI.pk === 'type';
+  if (isType) pkRows.sort((a, b) => listOf.indexOf(a[0]) - listOf.indexOf(b[0]));          // the Lists order: rentals and transport last
   document.querySelectorAll('[data-ovpk]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.ovpk === ovUI.pk)));
-  $('ov-pkg-note').textContent = isDiv ? `automatic from the service code · ${fmtM(tot)}` : `${(coded * 100).toFixed(0)}% of ${fmtM(tot)} has a Package`;
-  $('ov-pkg').innerHTML = pkRows.map(([p, v]) => blistRow(p.label && p.label !== p.code ? `${p.code} · ${p.label}` : p.code, v, v / pmx, isDiv ? '#' + (p.color || E.GROUP_COLOR[p.group] || '6B7280') : 'var(--gold)', { pre: isDiv ? `<span class="pkic" aria-hidden="true">${p.icon || ''}</span>` : '', small: pct(v, tot) })).join('') +
+  $('ov-pkg-note').textContent = isDiv ? `automatic from the service code · ${fmtM(tot)}` : isType ? `type of works of the PO (ZSCSRV1) · ${fmtM(tot)}` : `${(coded * 100).toFixed(0)}% of ${fmtM(tot)} has a Package`;
+  $('ov-pkg').innerHTML = pkRows.map(([p, v]) => blistRow(p.label && p.label !== p.code ? `${p.code} · ${p.label}` : p.code, v, v / pmx, isDiv ? '#' + (p.color || E.GROUP_COLOR[p.group] || '6B7280') : isType ? 'var(--bar)' : 'var(--gold)', { pre: isDiv ? `<span class="pkic" aria-hidden="true">${p.icon || ''}</span>` : '', small: pct(v, tot), ar: isType })).join('') +
     (un ? blistRow(isDiv ? 'No DIV – service code outside the list' : 'No Package yet', un, un / pmx, 'repeating-linear-gradient(135deg,var(--line-2) 0 4px,transparent 4px 7px)', { un: true, pre: '<span class="pkic" aria-hidden="true">◌</span>', small: pct(un, tot) }) +
       `<div style="margin-top:4px"><button class="linkbtn" data-go="coding">Code the services on the Coding tab →</button></div>` : '');
   // top subcontractors to date, with their excluded invoices flagged

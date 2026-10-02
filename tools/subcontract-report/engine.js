@@ -583,18 +583,13 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     cd.ws.getCell('P1').note = 'DIV list (CSI divisions, from the work package master). Edit it in the web tool, not here.';
 
     // ZSCSRV1 "Type of Works for PO", one per PO (several are joined)
-    const poType = new Map(); for (const x of A.sv) { const k = str(A.g(x, 'Purchase Order')).trim(), t = str(A.g(x, 'Type of Works for PO')).trim(); if (!k || !t) continue;
-      if (!poType.has(k)) poType.set(k, new Set()); poType.get(k).add(t); }
-    const typeOf = (k) => [...(poType.get(str(k).trim()) || [])].join(' / ') || null;
+    const poType = poTypes(A), typeOf = (k) => poType.get(str(k).trim()) || null;
     // a service's type of works = the type of the POs carrying most of its amount; the others are listed in "Also under".
     // Order: alphabetical, with rentals / transport (cars, trucks, trailers, jumbo …) at the bottom – renumber on Lists to change it
     const svcTypes = new Map(); for (const r of det) { const t = typeOf(r.po) || '(no type)', m = svcTypes.get(r.sid) || new Map(); m.set(t, (m.get(t) || 0) + Math.abs(r.amt)); svcTypes.set(r.sid, m); }
     const mainType = (sid) => { const m = svcTypes.get(sid); return m ? [...m].sort((a, b) => b[1] - a[1])[0][0] : '(no type)'; };
     const alsoTypes = (sid) => { const m = svcTypes.get(sid); return m && m.size > 1 ? [...m].sort((a, b) => b[1] - a[1]).slice(1).map((x) => x[0]).join(' / ') : null; };
-    const isTransport = (t) => /سيار|جامبو|تريلا|دباب|ميكروباص|نقل ثقيل|إيجار|ايجار/.test(t);
-    const bare = (t) => t.replace(/^\s*مقاولين\s*-\s*/, '');
-    const typeList = [...new Set([...poType.values()].flatMap((x) => [...x]).concat(det.some((r) => !typeOf(r.po)) ? ['(no type)'] : []))]
-      .sort((a, b) => (isTransport(a) - isTransport(b)) || (a === '(no type)') - (b === '(no type)') || bare(a).localeCompare(bare(b), 'ar'));
+    const typeList = sortTypes([...poType.values()].concat(det.some((r) => !typeOf(r.po)) ? ['(no type)'] : []));
     const typeRank = new Map(typeList.map((t, i) => [t, i + 1]));
     // Service Coding rows: type of works → service → text → unit; formulas find a service by its Svc ID (column A), never by row
     const scOrder = A.services.slice().sort((a, b) => (typeRank.get(mainType(a.id)) || 999) - (typeRank.get(mainType(b.id)) || 999) || cmp(a.svc, b.svc) || cmp(a.text, b.text) || cmp(a.unit || '', b.unit || ''));
@@ -648,7 +643,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       'Invoice doc.', 'Entry sheet', 'Doc type', 'PO item', 'Service', 'Service text', 'Line type', 'Unit', 'Contract type', 'Tax code', 'VAT rate', 'Gross price', 'Net rate',
       'Total qty', 'Previous qty', 'Current qty', 'Paid % (Progress %)', 'Cost (excl VAT)', 'VAT current', 'Resource', 'Trade', 'Resource name', 'Trade name',
       'G/L acct', 'WBS element (ref. only)', 'WBS description (ref. only)', 'PO line ref', 'PO line match', 'Material group', 'Material group description', 'Profit centre',
-      'Other profit centre', 'Report qty', 'Qty basis', 'Approval note', 'Line ID', 'WBS rows (split)', 'First seen (load)', 'Qty check', 'DIV (live)', 'Package (live)', 'Statement key', 'Pending reason', 'Reported-month flag', 'Include in this report'];
+      'Other profit centre', 'Report qty', 'Qty basis', 'Approval note', 'Line ID', 'WBS rows (split)', 'First seen (load)', 'Qty check', 'DIV (live)', 'Package (live)', 'Type of works', 'Type order', 'Type key', 'Statement key', 'Pending reason', 'Reported-month flag', 'Include in this report'];
     const C = {}; cols.forEach((n, j) => { C[n] = L(j + 1); dt.hdr(1, j + 1, n); }); const INC = C['Include in this report'];
     dt.ws.getCell(C['Report qty'] + '1').note = 'Quantity used in the report. Equals SAP Current qty unless the line was not paid at qty × net rate (paid % below 100, a catch-up, a re-price): then amount ÷ net rate, so the rate stays the contract rate. Adjustment lines also get amount ÷ net rate (negative for a deduction), so the service quantity accumulates correctly. SAP qty stays in Current qty and feeds Qty Reconciliation.';
     dt.ws.getCell(C['Other profit centre'] + '1').note = `X = charged to a profit centre other than the project's main one (${MAINPC}).`;
@@ -671,7 +666,9 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
         { formula: `IF(R${i}="Adjustment",IF(X${i}<>0,"Adjustment (amount ÷ net rate)","Adjustment – no net rate"),IF(R${i}<>"Normal","",IF(${eq},"Equivalent (amount ÷ net rate)","SAP qty")))` },
         (r.initial && !r.approved) ? 'Opening – not approved' : null, r.lid, r.split || null, r.first, r.qcheck,
         { formula: `IF(${lk('Service Coding', 'A', 'G', `B${i}`, '""', NSC)}&""="","UNALLOCATED",${lk('Service Coding', 'A', 'G', `B${i}`, '""', NSC)}&"")` }, { formula: `${lk('Service Coding', 'A', 'H', `B${i}`, '""', NSC)}&""` },
-        { formula: `IF(B${i}="","",${C['DIV (live)']}${i}&" | "&TEXT(B${i},"0000"))` },
+        typeOf(r.po) || '(no type)', { formula: `IFERROR(INDEX(Lists!$M$2:$M$500,MATCH(${C['Type of works']}${i},Lists!$L$2:$L$500,0)),999)` },
+        { formula: `TEXT(${C['Type order']}${i},"000")&" "&${C['Type of works']}${i}` },
+        { formula: `IF(B${i}="","",${C['Type key']}${i}&" | "&TEXT(B${i},"0000"))` },
         { formula: `IF(F${i}<>"X","Not approved",IF(D${i}>Coding!$N$3,IF(${INC}${i}="Include","","After cut date"),""))` }, r.late || null,
         r.approved && r.month > A.CUT ? (inc.get(r.lid) === 'Include' ? 'Include' : 'Not included') : null]);
     });
@@ -689,7 +686,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     cols.forEach((_, j) => { const col = dt.ws.getColumn(j + 1); col.font = st.F; if (colFmt[j + 1]) col.numFmt = colFmt[j + 1]; if (textCols.includes(j + 1)) col.numFmt = '@'; });
     dt.ws.getRow(1).eachCell((c) => { c.font = st.H; });
     sorted.forEach((r, n) => { if (r.othpc) { dt.ws.getCell(n + 2, 42).fill = FILL.PCF; dt.ws.getCell(n + 2, 43).fill = FILL.PCF; } });
-    [13, 6, 11, 8, 10, 9, 9, 7, 12, 11, 28, 12, 12, 8, 6, 10, 38, 10, 6, 8, 6, 6, 10, 10, 10, 10, 10, 8, 13, 11, 6, 6, 16, 22, 10, 20, 26, 22, 16, 10, 22, 10, 8, 11, 26, 20, 30, 9, 9, 30, 10, 14, 18, 14, 30, 16].forEach((w, j) => dt.width(j + 1, w));
+    [13, 6, 11, 8, 10, 9, 9, 7, 12, 11, 28, 12, 12, 8, 6, 10, 38, 10, 6, 8, 6, 6, 10, 10, 10, 10, 10, 8, 13, 11, 6, 6, 16, 22, 10, 20, 26, 22, 16, 10, 22, 10, 8, 11, 26, 20, 30, 9, 9, 30, 10, 14, 18, 30, 8, 34, 40, 14, 30, 16].forEach((w, j) => dt.width(j + 1, w));
     const NR = det.length + 1;
     dt.ws.views = [{ state: 'frozen', xSplit: 6, ySplit: 1 }];                     // Row key … Approved stay in view dt.ws.autoFilter = `A1:${L(cols.length)}${NR}`;
     const R = (n) => `Detail!$${C[n]}$2:$${C[n]}$${NR}`;
@@ -847,14 +844,15 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     // report month, so the sheet reads right before Excel recalculates.
     await say('Cost Statement');
     { const cs = S['Cost Statement'], ws = cs.ws, AN = (c) => `_xlfn.ANCHORARRAY(${c})`;
-      const DIVc = DTR('DIV (live)'), KEYc = DTR('Statement key'), AMc = DTR('Cost (excl VAT)'), BKc = DTR('Report bucket');
-      const pad = (n) => String(n).padStart(4, '0'), divOf = (r) => (A.services[r.sid - 1] || {}).csi || 'UNALLOCATED', keyOf = (r) => `${divOf(r)} | ${pad(r.sid)}`;
+      const TKc = DTR('Type key'), KEYc = DTR('Statement key'), AMc = DTR('Cost (excl VAT)'), BKc = DTR('Report bucket');
+      const pad = (n, w) => String(n).padStart(w || 4, '0'), divOf = (r) => (A.services[r.sid - 1] || {}).csi || 'UNALLOCATED';
+      const tyOf = (r) => typeOf(r.po) || '(no type)', tkOf = (r) => `${pad(typeRank.get(tyOf(r)) || 999, 3)} ${tyOf(r)}`, keyOf = (r) => `${tkOf(r)} | ${pad(r.sid)}`;
       const M = A.CUT, PMo = M % 100 === 1 ? M - 89 : M - 1, YS = Math.floor(M / 100) * 100 + 1;
       const vals = (pick) => { const m = new Map(); for (const r of det) { if (!r.sid) continue; const k = pick(r), b = r.bucket; let x = m.get(k); if (!x) m.set(k, (x = [0, 0, 0, 0, 0])); 
         if (b === M) x[0] += r.amt; if (b === PMo) x[1] += r.amt; if (typeof b === 'number' && b >= YS && b <= M) x[2] += r.amt;
         if ((typeof b === 'number' && b > 0 && b <= M) || b === 'OPENING') x[3] += r.amt; if (b === 'PENDING') x[4] += r.amt; } return m; };
       const cmpX = (a, b) => (a.toUpperCase() < b.toUpperCase() ? -1 : a.toUpperCase() > b.toUpperCase() ? 1 : 0);      // Excel SORT: text, case-insensitive
-      const byDiv = vals(divOf), byKey = vals(keyOf), divs = [...byDiv.keys()].sort(cmpX), keys = [...byKey.keys()].sort(cmpX);
+      const byDiv = vals(tkOf), byKey = vals(keyOf), divs = [...byDiv.keys()].sort(cmpX), keys = [...byKey.keys()].sort(cmpX);   // first section: by type of works
       const first = new Map(); for (const r of det) if (r.sid && !first.has(keyOf(r))) first.set(keyOf(r), r);
       const AMT = ['This month', 'Previous month', 'Change', 'Change %', 'YTD', 'ITD (to date)', 'Pending – not in ITD'], AC = 7;   // amounts in G … M
       const NUMF = '#,##0;[Red]-#,##0;"–"', CHG = '"▲ "#,##0;"▼ "#,##0;"–"', PCTF = '0%;-0%;"–"';
@@ -882,26 +880,25 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       const tv = (x, j) => (j === 2 ? x[0] - x[1] : j === 3 ? (x[1] ? (x[0] - x[1]) / Math.abs(x[1]) : '') : x[[0, 1, null, null, 2, 3, 4][j]]);
       // ---- by DIV
       const D0 = 7, DRES = Math.max(divs.length + 12, 30);
-      cs.set(5, 1, 'BY DIV', { font: { ...st.B, size: 11 } }); hdr(D0 - 1, ['DIV', 'Division', '', '', '', '', ...AMT]);
-      const af = amtF(DIVc, AN('A' + D0));
-      block(D0, divs.length, ['=' + `_xlfn._xlws.SORT(_xlfn.UNIQUE(_xlfn._xlws.FILTER(${DIVc},${KEYc}<>"")))`,
-        `=IFERROR(INDEX(Lists!$B$2:$B$400,MATCH(${AN('A' + D0)},Lists!$A$2:$A$400,0)),"")`, null, null, null, null,
+      cs.set(5, 1, 'BY TYPE OF WORKS', { font: { ...st.B, size: 11 } }); hdr(D0 - 1, ['Order', 'Type of works', '', '', '', '', ...AMT]);
+      const af = amtF(TKc, AN('A' + D0));
+      block(D0, divs.length, ['=' + `_xlfn._xlws.SORT(_xlfn.UNIQUE(_xlfn._xlws.FILTER(${TKc},${KEYc}<>"")))`,
+        `=INDEX(${DTR('Type of works')},MATCH(${AN('A' + D0)},${TKc},0))&""`, null, null, null, null,
         af[0], af[1], `=${AN('G' + D0)}-${AN('H' + D0)}`, `=IFERROR(${AN('I' + D0)}/ABS(${AN('H' + D0)}),"")`, af[4], af[5], af[6]],
-        (k, j) => { const d = divs[k]; if (j === 0) return d; if (j === 1) { const p = ((A.opts.master && A.opts.master.packages) || PACKAGES).find((q) => q.code === d); return p ? p.label : ''; }
-          return tv(byDiv.get(d), j - (AC - 1)); });
+        (k, j) => { const d = divs[k]; if (j === 0) return d; if (j === 1) return d.slice(4); return tv(byDiv.get(d), j - (AC - 1)); });
+      for (let k = 0; k < DRES; k++) { ws.getCell(D0 + k, 1).font = { ...st.SMALL, name: 'Consolas' }; ws.getCell(D0 + k, 2).alignment = { horizontal: 'right', readingOrder: 'rtl' }; ws.getCell(D0 + k, 2).font = st.B; }
       fmtRows(D0, DRES);
       // ---- by service (DIV · service · text · package)
       const S0 = D0 + DRES + 4;
-      cs.set(S0 - 2, 1, 'BY SERVICE', { font: { ...st.B, size: 11 } }); hdr(S0 - 1, ['Key', 'DIV', 'Service', 'Service text', 'Package', 'Type of works', ...AMT]);
+      cs.set(S0 - 2, 1, 'BY SERVICE', { font: { ...st.B, size: 11 } }); hdr(S0 - 1, ['Key', 'Type of works', 'Service', 'Service text', 'DIV', 'Package', ...AMT]);
       const sf = amtF(KEYc, AN('A' + S0)), at = (col) => `=INDEX(${DTR(col)},MATCH(${AN('A' + S0)},${KEYc},0))&""`;
-      const typeF = `=IFERROR(INDEX('Service Coding'!$B$2:$B$${NSC},MATCH(INDEX(${DTR('Svc ID')},MATCH(${AN('A' + S0)},${KEYc},0)),'Service Coding'!$A$2:$A$${NSC},0))&"","")`;
-      block(S0, keys.length, ['=' + `_xlfn._xlws.SORT(_xlfn.UNIQUE(_xlfn._xlws.FILTER(${KEYc},${KEYc}<>"")))`, at('DIV (live)'), at('Service'), at('Service text'), at('Package (live)'), typeF,
+      block(S0, keys.length, ['=' + `_xlfn._xlws.SORT(_xlfn.UNIQUE(_xlfn._xlws.FILTER(${KEYc},${KEYc}<>"")))`, at('Type of works'), at('Service'), at('Service text'), at('DIV (live)'), at('Package (live)'),
         sf[0], sf[1], `=${AN('G' + S0)}-${AN('H' + S0)}`, `=IFERROR(${AN('I' + S0)}/ABS(${AN('H' + S0)}),"")`, sf[4], sf[5], sf[6]],
-        (k, j) => { const key = keys[k], r = first.get(key); if (j === 0) return key; if (j === 1) return divOf(r); if (j === 2) return r.svc; if (j === 3) return r.text;
-          if (j === 4) return (A.services[r.sid - 1] || {}).wp || ''; if (j === 5) return mainType(r.sid); return tv(byKey.get(key), j - (AC - 1)); });
+        (k, j) => { const key = keys[k], r = first.get(key); if (j === 0) return key; if (j === 1) return tyOf(r); if (j === 2) return r.svc; if (j === 3) return r.text;
+          if (j === 4) return divOf(r); if (j === 5) return (A.services[r.sid - 1] || {}).wp || ''; return tv(byKey.get(key), j - (AC - 1)); });
       fmtRows(S0, keys.length + 200);
       for (let k = 0; k < keys.length + 200; k++) { ws.getCell(S0 + k, 1).font = { ...st.SMALL, name: 'Consolas' }; ws.getCell(S0 + k, 3).font = { ...st.F, name: 'Consolas', size: 9.5 };
-        ws.getCell(S0 + k, 4).alignment = { horizontal: 'right', readingOrder: 'rtl' }; ws.getCell(S0 + k, 6).alignment = { horizontal: 'right', readingOrder: 'rtl' }; }
+        ws.getCell(S0 + k, 4).alignment = { horizontal: 'right', readingOrder: 'rtl' }; ws.getCell(S0 + k, 2).alignment = { horizontal: 'right', readingOrder: 'rtl' }; }
       // ---- totals and checks (rows 5 and S0 - 2): spill sums; both must equal Detail for the picked month
       const tot = (r, a0) => { for (let j = 0; j < AMT.length; j++) { if (j === 3) continue; const c = AC + j;
           cs.set(r, c, undefined, { font: st.B, fmt: j === 2 ? CHG : NUMF, fill: FILL.TF });
@@ -914,7 +911,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
         { font: { ...st.B, color: { argb: 'FF1B7A4A' } }, align: { horizontal: 'right' } });
       cs.set(4, AC + 6, `=IF(ROUND(${L(AC + 6)}5+${L(AC + 5)}5-SUM(${AMc})+SUMIFS(${AMc},${BKc},">"&$C$3,${BKc},"<>PENDING"),0)=0,"✔","≠")`, { font: { ...st.B, color: { argb: 'FF1B7A4A' } }, align: { horizontal: 'center' } });
       ws.getCell(4, AC + 6).note = 'ITD + Pending + anything dated after the picked month = everything certified.';
-      [10, 30, 11, 40, 14, 28, 14, 14, 13, 9, 15, 16, 15].forEach((w, j) => cs.width(1 + j, w));
+      [12, 34, 11, 40, 10, 14, 14, 14, 13, 9, 15, 16, 15].forEach((w, j) => cs.width(1 + j, w));
       ws.views = [{ state: 'frozen', ySplit: 4, xSplit: 0, showGridLines: false, zoomScale: 95 }];     // month picker stays in view (a frozen pane needs a split, or Excel repairs the view)
       STMT.rows = { D0, S0, divs: divs.length, keys: keys.length }; }
 
@@ -1469,11 +1466,34 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     for (const x of [TOTR, AVGR]) for (const c of acols) db.ws.getCell(x, c).fill = FILL.TF;
     db.set(AVGR + 1, cB, `Lines = certificate lines dated in the month (initial invoices are Opening, not counted). Approved cost to the cut is the month on Service Monthly; after the cut it is Pending. Added late = dated in a month the last report already showed but not among its lines, or approved since (Detail → Reported-month flag). Check (months reported before): the change since the last report must equal the late lines – ✔, or the unexplained amount (a changed or removed line).`, { font: st.IT });
     db.ws.getRow(AVGR + 1).height = 30; db.ws.getCell(AVGR + 1, cB).alignment = { wrapText: true, vertical: 'top' }; merge(AVGR + 1, cB, AVGR + 1, DRE);
+    // ---- COST BY TYPE OF WORKS (page 2, after Monthly activity): the type of works of each line's PO, in the Lists order; chart on the right
+    const TW0 = AVGR + 3, TYc = R('Type of works'), twN = typeList.length, TW1 = TW0 + 2, TWE = TW1 + twN - 1, TWT = TWE + 1;
+    rowH(TW0 - 1, 10); rowH(TW0, 24); section(TW0, cB, DRE, 'COST BY TYPE OF WORKS', `type of works of the PO (ZSCSRV1) · report month ${mlabel(A.CUT)} · EGP`);
+    const twC = [cB, cPk, cM, cM + 1, cM + 2, cM + 3, cM + 4], YS2 = Math.floor(A.CUT / 100) * 100 + 1;
+    rowH(TW0 + 1, 28); ['#', 'Type of works', `${mlabel(A.CUT)}`, `YTD ${Math.floor(A.CUT / 100)}`, 'To date (ITD)', 'Pending', 'Share'].forEach((h, j) => db.hdr(TW0 + 1, twC[j], h));
+    typeList.forEach((t, n) => { const r = TW1 + n, k = `$${L(cPk)}${r}`; rowH(r, 19);
+      db.set(r, cB, n + 1, { font: st.SMALL, align: { horizontal: 'center' } });
+      db.set(r, cPk, t, { font: st.F, align: { horizontal: 'right', readingOrder: 'rtl', indent: 1 } });
+      db.set(r, twC[2], `=SUMIFS(${AM},${TYc},${k},${BK},${A.CUT})`, { font: st.F, fmt: NUM });
+      db.set(r, twC[3], `=SUMIFS(${AM},${TYc},${k},${BK},">=${YS2}",${BK},"<=${A.CUT}")`, { font: st.F, fmt: NUM });
+      db.set(r, twC[4], `=SUMIFS(${AM},${TYc},${k},${BK},"<>PENDING")`, { font: st.B, fmt: NUM });
+      db.set(r, twC[5], `=SUMIFS(${AM},${TYc},${k},${BK},"PENDING")`, { font: st.F, fmt: NUM });
+      db.set(r, twC[6], `=IFERROR(${L(twC[4])}${r}/${DTOT},0)`, { font: st.F, fmt: PCT });
+      for (const c of twC) db.ws.getCell(r, c).border = { bottom: { style: 'hair', color: { argb: 'FFD9DEE7' } } };
+      if (isTransportType(t)) for (const c of twC) db.ws.getCell(r, c).fill = fill('F4F6F9'); });
+    rowH(TWT, 21); db.set(TWT, cPk, 'TOTAL', { font: st.B, align: { horizontal: 'right', indent: 1 } });
+    for (let j = 2; j <= 6; j++) db.set(TWT, twC[j], j === 6 ? `=IFERROR(${L(twC[4])}${TWT}/${DTOT},0)` : `=SUM(${L(twC[j])}${TW1}:${L(twC[j])}${TWE})`, { font: st.B, fmt: j === 6 ? PCT : NUM });
+    for (const c of twC) db.ws.getCell(TWT, c).fill = FILL.TF;
+    db.set(TWT + 1, cPk, `=IF(ROUND(${L(twC[4])}${TWT}-${DTOT},0)=0,"✔ To date ties to the total","≠ "&TEXT(${L(twC[4])}${TWT}-${DTOT},"#,##0"))`, { font: { ...st.B, color: { argb: 'FF1B7A4A' } }, align: { horizontal: 'right', indent: 1 } });
+    db.set(TWT + 1, twC[2], 'Rentals and transport are shaded; the order follows Lists → Type of works.', { font: st.IT });
+    charts.push({ sheet: 'Dashboard', ...place(DR0, TW0 + 1, DRE, TWT + 1), kind: 'bar', reverse: true, title: 'To date by type of works', labels: true, labelFmt: '#,##0.0,,"M"', valFmt: '#,##0,,"M"', gap: 40,
+      series: [{ cat: `'Dashboard'!$${L(cPk)}$${TW1}:$${L(cPk)}$${TWE}`, val: `'Dashboard'!$${L(twC[4])}$${TW1}:$${L(twC[4])}$${TWE}`, color: BRAND }] });
+    const DEND = TWT + 2;
     // page 1 = the dashboard, page 2 on = Monthly activity (it grows by a row a month); one page wide, manual break between them
     db.ws.pageSetup = { paperSize: 8, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, horizontalCentered: true,
-      margins: { left: 0.3, right: 0.3, top: 0.35, bottom: 0.35, header: 0.15, footer: 0.15 }, printArea: `A1:${L(DLAST)}${AVGR + 2}` };
+      margins: { left: 0.3, right: 0.3, top: 0.35, bottom: 0.35, header: 0.15, footer: 0.15 }, printArea: `A1:${L(DLAST)}${DEND}` };
     db.ws.getRow(MA0 - 1).addPageBreak();
-    db.set(AVGR + 2, DRE, SIG, { font: st.IT, align: { horizontal: 'right' } });
+    db.set(DEND, DRE, SIG, { font: st.IT, align: { horizontal: 'right' } });
     db.ws.headerFooter = { oddFooter: `&L&8${A.PLANT} · Subcontract cost dashboard&C&8${SIG}&R&8Page &P of &N` };
     for (const n of ORDER) if (!n.startsWith('_') && n !== 'Dashboard') S[n].ws.headerFooter = { oddFooter: `&L&8${A.PLANT} · ${n}&C&8${SIG}&R&8Page &P of &N` };
     db.ws.views = [{ showGridLines: false, zoomScale: 90 }];
@@ -1678,6 +1698,13 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
   const DIV_FROM_SERVICE = { '03': 'DIV 03', '04': 'DIV 04', '05': 'DIV 05', '06': 'DIV 06', '07': 'DIV 07', '08': 'DIV 08', '09': 'DIV 09', '10': 'DIV 10',
     '21': 'DIV 21', '22': 'DIV 22', '23': 'DIV 23', '25': 'DIV 27', '26': 'DIV 26', '27': 'DIV 27', '28': 'DIV 27', '31': 'DIV 31', '32': 'DIV 32', '33': 'DIV 33',
     '01': 'INDIRECT', '02': 'INDIRECT', '34': 'INDIRECT' };
+  // Type of works (ZSCSRV1 "Type of Works for PO"): one per PO. Default order: alphabetical (ignoring the "مقاولين -" prefix),
+  // with rentals / transport (cars, trucks, trailers, jumbo …) last and "(no type)" at the very end
+  function poTypes(A) { const m = new Map(); for (const x of A.sv) { const k = str(A.g(x, 'Purchase Order')).trim(), t = str(A.g(x, 'Type of Works for PO')).trim(); if (!k || !t) continue;
+      if (!m.has(k)) m.set(k, new Set()); m.get(k).add(t); } return new Map([...m].map(([k, v]) => [k, [...v].join(' / ')])); }
+  const isTransportType = (t) => /سيار|جامبو|تريلا|دباب|ميكروباص|نقل ثقيل|إيجار|ايجار/.test(t);
+  function sortTypes(list) { const bare = (t) => t.replace(/^\s*مقاولين\s*-\s*/, '');
+    return [...new Set(list)].sort((a, b) => (isTransportType(a) - isTransportType(b)) || (a === '(no type)') - (b === '(no type)') || bare(a).localeCompare(bare(b), 'ar')); }
   // DIV is automatic: the division in the service code (S0303 -> DIV 03); S01/S02/S34, labour (L) and plant (P) are INDIRECT.
   // A DIV typed for a service overrides it. cat = the DIV list (a division deleted from it gives no automatic DIV).
   function autoDiv(svc, cat) {
@@ -1903,7 +1930,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     return wb.xlsx.writeBuffer();
   }
 
-  const api = { TOOL, SIG, analyse, fromReport, adoptPackages, autoDiv, summarize, readPrevious, buildWorkbook, groupInvoices, detectKind, codingKey, tradeName, TRADES, mlabel, VATR,
+  const api = { TOOL, SIG, analyse, fromReport, adoptPackages, autoDiv, poTypes, sortTypes, summarize, readPrevious, buildWorkbook, groupInvoices, detectKind, codingKey, tradeName, TRADES, mlabel, VATR,
     readCodingMaster, mergeCodingMaster, buildCodingMaster, MASTER_SHEET,
     PACKAGES, MNLS, DIMS, GROUP_COLOR, defaultMaster, readMaster, buildMaster, codingFor, suggest, assign, mkey, adoptPrevious, setBase, listsOf, listStamp };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.SubcontractEngine = api;
