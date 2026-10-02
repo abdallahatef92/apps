@@ -25,7 +25,7 @@ for name, keycol, r0 in [('DIV', 'DIV (live)', 7), ('service', 'Statement key', 
     while cs.cell(r, 1).value not in (None, ''): got.append(cs.cell(r, 1).value); r += 1
     if got != keys: print(name, 'row list differs', got[:5], keys[:5]); bad += 1
     for n, k in enumerate(keys):
-        row = [cs.cell(r0 + n, c).value for c in (6, 7, 10, 11, 12)]; e = exp[k]
+        row = [cs.cell(r0 + n, c).value for c in (7, 8, 11, 12, 13)]; e = exp[k]
         want = [e[0], e[1], e[2], e[3], e[4]]
         if any(abs((g or 0) - w) > 0.01 for g, w in zip(row, want)): bad += 1; print(name, k, row, want) if bad < 5 else None
     tot = [sum(exp[k][j] for k in keys) for j in range(5)]

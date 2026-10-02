@@ -582,24 +582,49 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     [11, 30, 10].forEach((w, j) => cd.width(16 + j, w)); cd.width(20, 8); cd.width(21, 16);
     cd.ws.getCell('P1').note = 'DIV list (CSI divisions, from the work package master). Edit it in the web tool, not here.';
 
+    // ZSCSRV1 "Type of Works for PO", one per PO (several are joined)
+    const poType = new Map(); for (const x of A.sv) { const k = str(A.g(x, 'Purchase Order')).trim(), t = str(A.g(x, 'Type of Works for PO')).trim(); if (!k || !t) continue;
+      if (!poType.has(k)) poType.set(k, new Set()); poType.get(k).add(t); }
+    const typeOf = (k) => [...(poType.get(str(k).trim()) || [])].join(' / ') || null;
+    // a service's type of works = the type of the POs carrying most of its amount; the others are listed in "Also under".
+    // Order: alphabetical, with rentals / transport (cars, trucks, trailers, jumbo …) at the bottom – renumber on Lists to change it
+    const svcTypes = new Map(); for (const r of det) { const t = typeOf(r.po) || '(no type)', m = svcTypes.get(r.sid) || new Map(); m.set(t, (m.get(t) || 0) + Math.abs(r.amt)); svcTypes.set(r.sid, m); }
+    const mainType = (sid) => { const m = svcTypes.get(sid); return m ? [...m].sort((a, b) => b[1] - a[1])[0][0] : '(no type)'; };
+    const alsoTypes = (sid) => { const m = svcTypes.get(sid); return m && m.size > 1 ? [...m].sort((a, b) => b[1] - a[1]).slice(1).map((x) => x[0]).join(' / ') : null; };
+    const isTransport = (t) => /سيار|جامبو|تريلا|دباب|ميكروباص|نقل ثقيل|إيجار|ايجار/.test(t);
+    const bare = (t) => t.replace(/^\s*مقاولين\s*-\s*/, '');
+    const typeList = [...new Set([...poType.values()].flatMap((x) => [...x]).concat(det.some((r) => !typeOf(r.po)) ? ['(no type)'] : []))]
+      .sort((a, b) => (isTransport(a) - isTransport(b)) || (a === '(no type)') - (b === '(no type)') || bare(a).localeCompare(bare(b), 'ar'));
+    const typeRank = new Map(typeList.map((t, i) => [t, i + 1]));
+    // Service Coding rows: type of works → service → text → unit; formulas find a service by its Svc ID (column A), never by row
+    const scOrder = A.services.slice().sort((a, b) => (typeRank.get(mainType(a.id)) || 999) - (typeRank.get(mainType(b.id)) || 999) || cmp(a.svc, b.svc) || cmp(a.text, b.text) || cmp(a.unit || '', b.unit || ''));
+    const scRow = new Map(scOrder.map((sv, n) => [sv.id, n + 2]));
     // ---------------- Service Coding
     await say('Service Coding'); const sc = S['Service Coding'];
-    ['Svc ID', 'Service', 'Service text', 'Unit', 'Unit source', 'DIV', 'Package', 'MNL', 'Cost Element Code', 'Lines', 'Total amount'].forEach((v, j) => {
-      const y = ['Unit', 'DIV', 'Package', 'MNL', 'Cost Element Code'].includes(v); sc.hdr(1, j + 1, v, y ? FILL.YF : FILL.HF, y ? st.HB : st.H); });
+    ['Svc ID', 'Type of works', 'Service', 'Service text', 'Unit', 'Unit source', 'DIV', 'Package', 'MNL', 'Cost Element Code', 'Lines', 'Total amount', 'Type order', 'Also under'].forEach((v, j) => {
+      const y = ['Unit', 'Package', 'MNL', 'Cost Element Code'].includes(v); sc.hdr(1, j + 1, v, y ? FILL.YF : FILL.HF, y ? st.HB : st.H); });
     const linesBy = countBy(det, (r) => r.sid); const NSC = A.services.length + 1;
-    for (const s of A.services) {
-      const i = s.id + 1;
-      [s.id, s.svc, s.text, s.unit || null, s.unitSrc, s.csi || null, s.wp || null, s.mnl || null, s.cec || null, linesBy.get(s.id) || 0].forEach((v, j) => sc.set(i, j + 1, v, { font: st.F }));
-      for (const j of [4, 6, 7, 8, 9]) sc.set(i, j, undefined, { fill: FILL.YF, font: st.BLUE });
-      if (s.divAuto) sc.set(i, 6, undefined, { font: { ...st.F, color: { argb: 'FF66748C' } } });     // grey = automatic from the service code
-      sc.set(i, 2, undefined, { fmt: '@' });
-      if (!s.unit) sc.set(i, 5, undefined, { font: st.RED });
+    let prevType = null;
+    for (const s of scOrder) {
+      const i = scRow.get(s.id), t = mainType(s.id);
+      [s.id, t, s.svc, s.text, s.unit || null, s.unitSrc, s.csi || null, s.wp || null, s.mnl || null, s.cec || null, linesBy.get(s.id) || 0].forEach((v, j) => sc.set(i, j + 1, v, { font: st.F }));
+      for (const j of [5, 8, 9, 10]) sc.set(i, j, undefined, { fill: FILL.YF, font: st.BLUE });                         // yellow = to be coded / checked
+      sc.set(i, 7, undefined, { font: s.divAuto ? { ...st.F, color: { argb: 'FF66748C' } } : st.BLUE });                  // DIV: grey = automatic, blue = typed
+      sc.set(i, 2, undefined, { font: t === prevType ? { ...st.F, color: { argb: 'FFA0A8B8' } } : st.B, align: { horizontal: 'right', readingOrder: 'rtl' } });
+      sc.set(i, 13, `=IFERROR(INDEX(Lists!$M$2:$M$500,MATCH(B${i},Lists!$L$2:$L$500,0)),999)`, { font: st.SMALL, align: { horizontal: 'center' } });
+      sc.set(i, 14, alsoTypes(s.id), { font: st.SMALL, align: { horizontal: 'right', readingOrder: 'rtl' } });
+      if (t !== prevType && prevType !== null) for (let c = 1; c <= 14; c++) sc.ws.getCell(i, c).border = { top: { style: 'thin', color: { argb: 'FF9AA7BD' } } };
+      sc.set(i, 3, undefined, { fmt: '@' });
+      if (!s.unit) sc.set(i, 6, undefined, { font: st.RED });
+      prevType = t;
     }
-    [7, 11, 46, 8, 26, 11, 16, 9, 18, 7, 15].forEach((w, j) => sc.width(j + 1, w));
-    sc.ws.views = [{ state: 'frozen', xSplit: 3, ySplit: 1 }]; sc.ws.autoFilter = `A1:K${NSC}`;
-    sc.ws.getCell('D1').note = 'Filled from the shared coding when someone has entered it, otherwise from ZSCSRV1 (PO Service UOM). Editable.';
-    sc.ws.getCell('F1').note = 'DIV (CSI division): automatic from the service code (grey) – S0303 → DIV 03; S01, S02, S34, labour and plant → INDIRECT. Type another DIV to override it.';
-    sc.ws.getCell('G1').note = 'Package, MNL and Cost Element: your team codes them (blank = not coded yet). Pick from the list, or add a package on the Lists sheet first – the web tool reads them back from this sheet.';
+    [7, 30, 11, 46, 8, 26, 11, 16, 9, 18, 7, 15, 8, 30].forEach((w, j) => sc.width(j + 1, w));
+    sc.ws.views = [{ state: 'frozen', xSplit: 4, ySplit: 1 }]; sc.ws.autoFilter = `A1:N${NSC}`;
+    sc.ws.getCell('B1').note = 'Type of Works for PO (ZSCSRV1) of the POs that carry most of this service; other types are in "Also under". Rows run type of works → service → text → unit. To change the order, renumber Lists → Type order, then sort by Type order, Service, Service text.';
+    sc.ws.getCell('M1').note = 'From Lists → Type of works / Order. Sorting this sheet is safe: every formula finds a service by its Svc ID.';
+    sc.ws.getCell('E1').note = 'Filled from the shared coding when someone has entered it, otherwise from ZSCSRV1 (PO Service UOM). Editable.';
+    sc.ws.getCell('G1').note = 'DIV (CSI division): already filled – automatic from the service code (grey) – S0303 → DIV 03; S01, S02, S34, labour and plant → INDIRECT. Type another DIV to override it.';
+    sc.ws.getCell('H1').note = 'Package, MNL and Cost Element: your team codes them (blank = not coded yet). Pick from the list, or add a package on the Lists sheet first – the web tool reads them back from this sheet.';
     { // the lists travel with the report: a row added on Lists joins the web tool's list when this report is loaded
       const pk = S['Lists'], cat = (A.opts.master && A.opts.master.packages) || PACKAGES, mn = (A.opts.master && A.opts.master.mnl) || MNLS, wl = (A.opts.master && A.opts.master.wpList) || [];
       ['DIV code', 'DIV label', 'Group', 'Icon'].forEach((h, j) => pk.hdr(1, 1 + j, h)); ['Package code', 'Package label'].forEach((h, j) => pk.hdr(1, 6 + j, h, fill('7A5C1E')));
@@ -608,12 +633,14 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       wl.forEach((x, n) => { pk.set(n + 2, 6, x.code, { font: { ...st.F, name: 'Consolas' } }); pk.set(n + 2, 7, x.label || null, { font: st.F }); });
       mn.forEach((x, n) => { pk.set(n + 2, 9, x.code, { font: { ...st.F, name: 'Consolas' } }); pk.set(n + 2, 10, x.label, { font: st.F }); });
       [12, 32, 10, 6, 3, 16, 32, 3, 10, 22].forEach((w, j) => pk.width(1 + j, w));
-      pk.set(1, 12, 'Package = your team\'s own work packages: add a row (code and name) and it can be picked on Service Coding → Package. DIV is the CSI division list (automatic from the service code). '
+      pk.set(1, 15, 'Package = your team\'s own work packages: add a row (code and name) and it can be picked on Service Coding → Package. DIV is the CSI division list (automatic from the service code). '
         + 'Load this report in the web tool and rows added here join its lists. Renaming or deleting is done in the web tool (✎ Edit list).', { font: st.IT, align: { wrapText: true, vertical: 'top' } });
-      pk.width(12, 60); pk.ws.getRow(1).height = 20; pk.ws.views = [{ state: 'frozen', ySplit: 1 }];
+      pk.width(15, 60); pk.ws.getRow(1).height = 20; pk.ws.views = [{ state: 'frozen', ySplit: 1 }];
       const listDV = (col, ref, what) => sc.ws.dataValidations.add(`${col}2:${col}${NSC}`, { type: 'list', allowBlank: true, formulae: [ref], showErrorMessage: true, errorStyle: 'information',
         errorTitle: `Not in the ${what} list`, error: `This code is not on the Lists sheet. It is kept, and the web tool adds it as a new ${what} when it reads this report.` });
-      listDV('F', `Lists!$A$2:$A$${cat.length + 100}`, 'DIV'); listDV('G', `Lists!$F$2:$F$${wl.length + 300}`, 'package'); listDV('H', `Lists!$I$2:$I$${mn.length + 100}`, 'MNL'); }
+      listDV('G', `Lists!$A$2:$A$${cat.length + 100}`, 'DIV'); listDV('H', `Lists!$F$2:$F$${wl.length + 300}`, 'package'); listDV('I', `Lists!$I$2:$I$${mn.length + 100}`, 'MNL');
+      ['Type of works', 'Order'].forEach((h, j) => pk.hdr(1, 12 + j, h, fill('4A5568'))); typeList.forEach((t, n) => { pk.set(n + 2, 12, t, { font: st.F, align: { horizontal: 'right', readingOrder: 'rtl' } }); pk.set(n + 2, 13, n + 1, { font: st.BLUE, fill: FILL.YF }); });
+      pk.width(12, 40); pk.width(13, 7); pk.ws.getCell(1, 13).note = 'Order of the type of works on Service Coding. Rentals and transport come last by default; renumber to change, then sort Service Coding by Type order.'; }
 
     // ---------------- Detail
     await say('Detail'); const dt = S['Detail'];
@@ -636,14 +663,14 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       dtRows.push([r.isqo ? null : r.rk, r.sid, r.dateObj, { formula: `YEAR(C${i})*100+MONTH(C${i})` },
         { formula: `IF(OR(F${i}<>"X",AND(D${i}>Coding!$N$3,${INC}${i}<>"Include")),"PENDING",IF(G${i}="X","OPENING",D${i}))` }, r.appr || null, r.flag || null,
         r.serial, r.po, r.supCode, r.supName, str(r.docno).trim() || null, str(r.es).trim() || null, str(r.doctype).trim(), r.item, r.svc, r.text, r.lt,
-        { formula: lk('Service Coding', 'A', 'D', `B${i}`, '""', NSC) }, r.ctype, r.tax, { formula: lk('Coding', 'G', 'H', `U${i}`, '0') }, r.price, { formula: `IF(T${i}="A2",W${i}/(1+V${i}),W${i})` },
+        { formula: lk('Service Coding', 'A', 'E', `B${i}`, '""', NSC) }, r.ctype, r.tax, { formula: lk('Coding', 'G', 'H', `U${i}`, '0') }, r.price, { formula: `IF(T${i}="A2",W${i}/(1+V${i}),W${i})` },
         r.totq, r.prevq, r.qty, r.paid / 100, r.amt, r.vat, r.res, r.trade,
         { formula: lk('Coding', 'A', 'B', `AE${i}`) }, { formula: lk('Coding', 'D', 'E', `AF${i}`) }, str(r.gl).trim(), str(r.wbs).trim(), str(r.wbsDesc).trim(),
         r.poref, r.matchLvl, r.mg || null, r.mgd || null, r.pc, r.othpc ? 'X' : null,
         { formula: `IF(R${i}="Normal",IF(${eq},AC${i}/X${i},AA${i}),IF(AND(R${i}="Adjustment",X${i}<>0),AC${i}/X${i},0))` },
         { formula: `IF(R${i}="Adjustment",IF(X${i}<>0,"Adjustment (amount ÷ net rate)","Adjustment – no net rate"),IF(R${i}<>"Normal","",IF(${eq},"Equivalent (amount ÷ net rate)","SAP qty")))` },
         (r.initial && !r.approved) ? 'Opening – not approved' : null, r.lid, r.split || null, r.first, r.qcheck,
-        { formula: `IF(${lk('Service Coding', 'A', 'F', `B${i}`, '""', NSC)}&""="","UNALLOCATED",${lk('Service Coding', 'A', 'F', `B${i}`, '""', NSC)}&"")` }, { formula: `${lk('Service Coding', 'A', 'G', `B${i}`, '""', NSC)}&""` },
+        { formula: `IF(${lk('Service Coding', 'A', 'G', `B${i}`, '""', NSC)}&""="","UNALLOCATED",${lk('Service Coding', 'A', 'G', `B${i}`, '""', NSC)}&"")` }, { formula: `${lk('Service Coding', 'A', 'H', `B${i}`, '""', NSC)}&""` },
         { formula: `IF(B${i}="","",${C['DIV (live)']}${i}&" | "&TEXT(B${i},"0000"))` },
         { formula: `IF(F${i}<>"X","Not approved",IF(D${i}>Coding!$N$3,IF(${INC}${i}="Include","","After cut date"),""))` }, r.late || null,
         r.approved && r.month > A.CUT ? (inc.get(r.lid) === 'Include' ? 'Include' : 'Not included') : null]);
@@ -669,10 +696,6 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
 
     let SM_ORDER, SM_TOTAL, SM_PEND, SM_COLS; const supName = new Map(); for (const r of det) supName.set(r.supCode, r.supName);   // also used by By Supplier
     const IM = {}, PO_CHECK = {}, STMT = {};                               // Invoice Matrix / PO Register check ranges
-    // ZSCSRV1 "Type of Works for PO", one per PO (several are joined)
-    const poType = new Map(); for (const x of A.sv) { const k = str(A.g(x, 'Purchase Order')).trim(), t = str(A.g(x, 'Type of Works for PO')).trim(); if (!k || !t) continue;
-      if (!poType.has(k)) poType.set(k, new Set()); poType.get(k).add(t); }
-    const typeOf = (k) => [...(poType.get(str(k).trim()) || [])].join(' / ') || null;
     const PM = {};                                              // DIV Monthly layout, read by the Dashboard
     { // own scope: the sheet's local names stay apart from the other sheets'
     // ---------------- Service Monthly / Service Quarterly: one flat table each (same rows, same order), laid out like Material Monthly.
@@ -723,9 +746,9 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
         const SIDc = `$${L(rc('Svc ID'))}${i}`, code = (col) => `${lk('Service Coding', 'A', col, SIDc, '""', NSC)}&""`;   // &"" keeps an empty code blank, not 0
         const dig = (v) => (/^\d{1,15}$/.test(v) ? Number(v) : v), row = [];
         const put0 = (n, v) => { row[ic(n) - 1] = v; };
-        put0('Row ID', id); put0('DIV', { formula: `IF(${code('F')}="","UNALLOCATED",${code('F')})` }); put0('Package', { formula: code('G') }); put0('MNL', { formula: code('H') }); put0('Cost element', { formula: code('I') });
+        put0('Row ID', id); put0('DIV', { formula: `IF(${code('G')}="","UNALLOCATED",${code('G')})` }); put0('Package', { formula: code('H') }); put0('MNL', { formula: code('I') }); put0('Cost element', { formula: code('J') });
         put0('Service', svc); put0('Description', text); put0('PO', dig(po)); put0('Supplier code', dig(sup)); put0('Supplier', supName.get(sup)); put0('Type of works', typeOf(po));
-        put0('Line type', adj ? (chk.has(id) ? '⚠ Adjustment – check' : 'Adjustment') : 'Normal'); put0('Unit', { formula: code('D') });
+        put0('Line type', adj ? (chk.has(id) ? '⚠ Adjustment – check' : 'Adjustment') : 'Normal'); put0('Unit', { formula: code('E') });
         put0('Trade', { formula: lk('Coding', 'D', 'E', `"${trade(svc)}"`) });                                // trade name from the service code (Coding → trades)
         const put = (c, q, am) => { if (q) row[c - 1] = q; if (q) row[c] = am / q; if (am) row[c + 1] = am; };
         const sumifs = (col, b) => b.crit.map((cr) => `SUMIFS(${DTR(col)},${DTR('Row key')},$A${i},${DTR('Report bucket')},${cr})`).join('+');
@@ -833,7 +856,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       const cmpX = (a, b) => (a.toUpperCase() < b.toUpperCase() ? -1 : a.toUpperCase() > b.toUpperCase() ? 1 : 0);      // Excel SORT: text, case-insensitive
       const byDiv = vals(divOf), byKey = vals(keyOf), divs = [...byDiv.keys()].sort(cmpX), keys = [...byKey.keys()].sort(cmpX);
       const first = new Map(); for (const r of det) if (r.sid && !first.has(keyOf(r))) first.set(keyOf(r), r);
-      const AMT = ['This month', 'Previous month', 'Change', 'Change %', 'YTD', 'ITD (to date)', 'Pending – not in ITD'], AC = 6;   // amounts in F … L
+      const AMT = ['This month', 'Previous month', 'Change', 'Change %', 'YTD', 'ITD (to date)', 'Pending – not in ITD'], AC = 7;   // amounts in G … M
       const NUMF = '#,##0;[Red]-#,##0;"–"', CHG = '"▲ "#,##0;"▼ "#,##0;"–"', PCTF = '0%;-0%;"–"';
       // the month picker: a month end, any month of the project; C3..E3 derive the buckets
       cs.set(1, 1, 'Cost statement · pick a month', { font: st.T1 });
@@ -859,25 +882,26 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       const tv = (x, j) => (j === 2 ? x[0] - x[1] : j === 3 ? (x[1] ? (x[0] - x[1]) / Math.abs(x[1]) : '') : x[[0, 1, null, null, 2, 3, 4][j]]);
       // ---- by DIV
       const D0 = 7, DRES = Math.max(divs.length + 12, 30);
-      cs.set(5, 1, 'BY DIV', { font: { ...st.B, size: 11 } }); hdr(D0 - 1, ['DIV', 'Division', '', '', '', ...AMT]);
+      cs.set(5, 1, 'BY DIV', { font: { ...st.B, size: 11 } }); hdr(D0 - 1, ['DIV', 'Division', '', '', '', '', ...AMT]);
       const af = amtF(DIVc, AN('A' + D0));
       block(D0, divs.length, ['=' + `_xlfn._xlws.SORT(_xlfn.UNIQUE(_xlfn._xlws.FILTER(${DIVc},${KEYc}<>"")))`,
-        `=IFERROR(INDEX(Lists!$B$2:$B$400,MATCH(${AN('A' + D0)},Lists!$A$2:$A$400,0)),"")`, null, null, null,
-        af[0], af[1], `=${AN('F' + D0)}-${AN('G' + D0)}`, `=IFERROR(${AN('H' + D0)}/ABS(${AN('G' + D0)}),"")`, af[4], af[5], af[6]],
+        `=IFERROR(INDEX(Lists!$B$2:$B$400,MATCH(${AN('A' + D0)},Lists!$A$2:$A$400,0)),"")`, null, null, null, null,
+        af[0], af[1], `=${AN('G' + D0)}-${AN('H' + D0)}`, `=IFERROR(${AN('I' + D0)}/ABS(${AN('H' + D0)}),"")`, af[4], af[5], af[6]],
         (k, j) => { const d = divs[k]; if (j === 0) return d; if (j === 1) { const p = ((A.opts.master && A.opts.master.packages) || PACKAGES).find((q) => q.code === d); return p ? p.label : ''; }
           return tv(byDiv.get(d), j - (AC - 1)); });
       fmtRows(D0, DRES);
       // ---- by service (DIV · service · text · package)
       const S0 = D0 + DRES + 4;
-      cs.set(S0 - 2, 1, 'BY SERVICE', { font: { ...st.B, size: 11 } }); hdr(S0 - 1, ['Key', 'DIV', 'Service', 'Service text', 'Package', ...AMT]);
+      cs.set(S0 - 2, 1, 'BY SERVICE', { font: { ...st.B, size: 11 } }); hdr(S0 - 1, ['Key', 'DIV', 'Service', 'Service text', 'Package', 'Type of works', ...AMT]);
       const sf = amtF(KEYc, AN('A' + S0)), at = (col) => `=INDEX(${DTR(col)},MATCH(${AN('A' + S0)},${KEYc},0))&""`;
-      block(S0, keys.length, ['=' + `_xlfn._xlws.SORT(_xlfn.UNIQUE(_xlfn._xlws.FILTER(${KEYc},${KEYc}<>"")))`, at('DIV (live)'), at('Service'), at('Service text'), at('Package (live)'),
-        sf[0], sf[1], `=${AN('F' + S0)}-${AN('G' + S0)}`, `=IFERROR(${AN('H' + S0)}/ABS(${AN('G' + S0)}),"")`, sf[4], sf[5], sf[6]],
+      const typeF = `=IFERROR(INDEX('Service Coding'!$B$2:$B$${NSC},MATCH(INDEX(${DTR('Svc ID')},MATCH(${AN('A' + S0)},${KEYc},0)),'Service Coding'!$A$2:$A$${NSC},0))&"","")`;
+      block(S0, keys.length, ['=' + `_xlfn._xlws.SORT(_xlfn.UNIQUE(_xlfn._xlws.FILTER(${KEYc},${KEYc}<>"")))`, at('DIV (live)'), at('Service'), at('Service text'), at('Package (live)'), typeF,
+        sf[0], sf[1], `=${AN('G' + S0)}-${AN('H' + S0)}`, `=IFERROR(${AN('I' + S0)}/ABS(${AN('H' + S0)}),"")`, sf[4], sf[5], sf[6]],
         (k, j) => { const key = keys[k], r = first.get(key); if (j === 0) return key; if (j === 1) return divOf(r); if (j === 2) return r.svc; if (j === 3) return r.text;
-          if (j === 4) return (A.services[r.sid - 1] || {}).wp || ''; return tv(byKey.get(key), j - (AC - 1)); });
+          if (j === 4) return (A.services[r.sid - 1] || {}).wp || ''; if (j === 5) return mainType(r.sid); return tv(byKey.get(key), j - (AC - 1)); });
       fmtRows(S0, keys.length + 200);
       for (let k = 0; k < keys.length + 200; k++) { ws.getCell(S0 + k, 1).font = { ...st.SMALL, name: 'Consolas' }; ws.getCell(S0 + k, 3).font = { ...st.F, name: 'Consolas', size: 9.5 };
-        ws.getCell(S0 + k, 4).alignment = { horizontal: 'right', readingOrder: 'rtl' }; }
+        ws.getCell(S0 + k, 4).alignment = { horizontal: 'right', readingOrder: 'rtl' }; ws.getCell(S0 + k, 6).alignment = { horizontal: 'right', readingOrder: 'rtl' }; }
       // ---- totals and checks (rows 5 and S0 - 2): spill sums; both must equal Detail for the picked month
       const tot = (r, a0) => { for (let j = 0; j < AMT.length; j++) { if (j === 3) continue; const c = AC + j;
           cs.set(r, c, undefined, { font: st.B, fmt: j === 2 ? CHG : NUMF, fill: FILL.TF });
@@ -890,7 +914,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
         { font: { ...st.B, color: { argb: 'FF1B7A4A' } }, align: { horizontal: 'right' } });
       cs.set(4, AC + 6, `=IF(ROUND(${L(AC + 6)}5+${L(AC + 5)}5-SUM(${AMc})+SUMIFS(${AMc},${BKc},">"&$C$3,${BKc},"<>PENDING"),0)=0,"✔","≠")`, { font: { ...st.B, color: { argb: 'FF1B7A4A' } }, align: { horizontal: 'center' } });
       ws.getCell(4, AC + 6).note = 'ITD + Pending + anything dated after the picked month = everything certified.';
-      [10, 30, 11, 40, 14, 14, 14, 13, 9, 15, 16, 15].forEach((w, j) => cs.width(1 + j, w));
+      [10, 30, 11, 40, 14, 28, 14, 14, 13, 9, 15, 16, 15].forEach((w, j) => cs.width(1 + j, w));
       ws.views = [{ state: 'frozen', ySplit: 4, xSplit: 0, showGridLines: false, zoomScale: 95 }];     // month picker stays in view (a frozen pane needs a split, or Excel repairs the view)
       STMT.rows = { D0, S0, divs: divs.length, keys: keys.length }; }
 
@@ -926,12 +950,12 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     pm.ws.views = [{ state: 'frozen', xSplit: 3, ySplit: 2, showGridLines: false }];
     PM.totCol = L(4 + pcols.length - 2); PM.pendCol = L(3 + pcols.length); PM.monthCol = (m) => L(4 + pcols.findIndex((b) => b && b.keys[0] === m));
     { // Service Coding: how re-coding reaches the report
-      sc.set(1, 12, 'Codes typed in the yellow columns update Service Monthly, Service Quarterly, DIV Monthly and the Dashboard at once – no sorting needed.', { font: st.IT });
-      sc.width(11, 3); sc.width(12, 60); }
+      sc.set(1, 16, 'Codes typed in the yellow columns update Service Monthly, Service Quarterly, DIV Monthly and the Dashboard at once – no sorting needed.', { font: st.IT });
+      sc.width(15, 3); sc.width(16, 60); }
     }
     { const bySvc = sumBy(det, (r) => r.sid, (r) => r.amt);     // per-item totals are values; the Dashboard checks them against Detail
-      for (const s of A.services) sc.set(s.id + 1, 11, Math.round((bySvc.get(s.id) || 0) * 100) / 100, { fmt: NUM, font: st.F });
-      sc.ws.getCell(1, 11).note = 'All certificate lines of the service (opening, months and pending), written as a value when the report was built. Dashboard → Final control checks the column against Detail.'; }
+      for (const s of A.services) sc.set(scRow.get(s.id), 12, Math.round((bySvc.get(s.id) || 0) * 100) / 100, { fmt: NUM, font: st.F });
+      sc.ws.getCell(1, 12).note = 'All certificate lines of the service (opening, months and pending), written as a value when the report was built. Dashboard → Final control checks the column against Detail.'; }
 
     // ---------------- Invoice Matrix: one cell pair (invoice no. + amount) per invoice, by subcontractor / PO and month.
     // An invoice = PO + Invoice Serial; the colour is live (conditional format on Detail): red = not approved,
@@ -1078,8 +1102,8 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
         po.set(i, pc('PO'), k, { fmt: '@', font: { ...st.F, color: { argb: 'FFA0A8B8' } } }); po.set(i, pc('Row'), 'Service', { font: st.SMALL });
         po.set(i, pc('Supplier code'), p.s, { fmt: '@', font: { ...st.F, color: { argb: 'FFA0A8B8' } } }); po.set(i, pc('Type of works'), typeOf(k), { font: { ...st.F, color: { argb: 'FFA0A8B8' } }, align: { horizontal: 'right', readingOrder: 'rtl' } });
         po.set(i, pc('Service'), sv.svc, { fmt: '@', font: MONO9 }); po.set(i, pc('Service text'), sv.text, { font: st.F, align: { horizontal: 'right', readingOrder: 'rtl' } });
-        po.set(i, pc('Unit'), code(i, 'D'), { font: st.F, align: { horizontal: 'center' } });
-        [['DIV', 'F'], ['Package', 'G'], ['MNL', 'H'], ['Cost element', 'I']].forEach(([n, col]) => po.set(i, pc(n), code(i, col), { font: st.F }));
+        po.set(i, pc('Unit'), code(i, 'E'), { font: st.F, align: { horizontal: 'center' } });
+        [['DIV', 'G'], ['Package', 'H'], ['MNL', 'I'], ['Cost element', 'J']].forEach(([n, col]) => po.set(i, pc(n), code(i, col), { font: st.F }));
         po.set(i, pc('Lines'), `=COUNTIFS(${c2})`, { font: st.F }); po.set(i, pc('Certificates'), x.c.size, { font: st.F });
         po.set(i, pc('First cert.'), `=_xlfn.MINIFS(${R('Cert. date')},${c2})`, { fmt: 'yyyy-mm-dd', font: st.F }); po.set(i, pc('Last cert.'), `=_xlfn.MAXIFS(${R('Cert. date')},${c2})`, { fmt: 'yyyy-mm-dd', font: st.F });
         po.set(i, pc('Qty'), `=SUMIFS(${R('Report qty')},${c2})`, { fmt: QTY, font: st.F });
@@ -1381,10 +1405,10 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     [['Service', DR0, DR0], ['Description', DR0 + 1, DR0 + 3], ['Unit', DR0 + 4, DR0 + 4], ['Qty', DR0 + 5, DR0 + 5], ['Avg rate', DR0 + 6, DR0 + 6], ['Amount', DR0 + 7, DR0 + 7]]
       .forEach(([h, c1, c2]) => { db.hdr(DB0 + 1, c1, h); for (let c = c1 + 1; c <= c2; c++) db.ws.getCell(DB0 + 1, c).fill = FILL.HF; merge(DB0 + 1, c1, DB0 + 1, c2); });
     const top10 = mostCommon(sumBy(det.filter((x) => x.bucket !== 'PENDING'), (x) => x.sid, (x) => x.amt)).slice(0, DNB - 1).map((x) => x[0]); const SID = R('Svc ID');
-    top10.forEach((sid, n) => { const rr = DB0 + 2 + n, sr = sid + 1;
-      db.set(rr, DR0, `='Service Coding'!B${sr}`, { font: { ...st.F, name: 'Consolas', size: 9.5 } });
-      merge(rr, DR0 + 1, rr, DR0 + 3); db.set(rr, DR0 + 1, `='Service Coding'!C${sr}`, { font: st.F, align: { horizontal: 'right', readingOrder: 'rtl', shrinkToFit: true } });
-      db.set(rr, DR0 + 4, `='Service Coding'!D${sr}`, { font: st.SMALL, align: { horizontal: 'center' } });
+    top10.forEach((sid, n) => { const rr = DB0 + 2 + n, scv = (col) => `=${lk('Service Coding', 'A', col, sid, '""', NSC)}`;
+      db.set(rr, DR0, scv('C'), { font: { ...st.F, name: 'Consolas', size: 9.5 } });
+      merge(rr, DR0 + 1, rr, DR0 + 3); db.set(rr, DR0 + 1, scv('D'), { font: st.F, align: { horizontal: 'right', readingOrder: 'rtl', shrinkToFit: true } });
+      db.set(rr, DR0 + 4, scv('E'), { font: st.SMALL, align: { horizontal: 'center' } });
       db.set(rr, DR0 + 5, `=SUMIFS(${R('Report qty')},${SID},${sid},${BK},"<>PENDING")`, { font: st.F, fmt: '#,##0;[Red](#,##0);"–"' });
       db.set(rr, DR0 + 6, `=IFERROR(${L(DR0 + 7)}${rr}/${L(DR0 + 5)}${rr},"")`, { font: st.F, fmt: '#,##0.00' });
       db.set(rr, DR0 + 7, `=SUMIFS(${AM},${SID},${sid},${BK},"<>PENDING")`, { font: st.B, fmt: NUM });
@@ -1395,7 +1419,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     // ---- final control + control figures
     const DFC = DB0 + DNB + 3; rowH(DFC - 1, 10); rowH(DFC, 22); band(DFC, 1, DLAST, FILL.BAND);
     db.set(DFC, 2, 'FINAL CONTROL', { font: st.EYE, align: { vertical: 'middle' } });
-    db.set(DFC, 3, `="Total "&TEXT(${DTOT},"#,##0")&"  =  Opening "&TEXT(${L(cNS)}8,"#,##0")&"  +  Approved months "&TEXT(${L(cM)}8,"#,##0")&"     |     Pending, not in total "&TEXT(${L(DR0)}8,"#,##0")&"     |     DIV table vs total: "&TEXT(${L(cTot)}${DTR}-${DTOT},"#,##0")&"     |     Report vs SAP (after WBS splits): "&TEXT(Notes!B${NOTES_RECON_ROW + 8},"#,##0")&"     |     Per-service totals vs Detail: "&IF(ROUND(SUM('Service Coding'!$K$2:$K$${NSC})-SUM(Detail!$${C['Cost (excl VAT)']}:$${C['Cost (excl VAT)']}),0)=0,"✔",TEXT(SUM('Service Coding'!$K$2:$K$${NSC})-SUM(Detail!$${C['Cost (excl VAT)']}:$${C['Cost (excl VAT)']}),"#,##0"))`,
+    db.set(DFC, 3, `="Total "&TEXT(${DTOT},"#,##0")&"  =  Opening "&TEXT(${L(cNS)}8,"#,##0")&"  +  Approved months "&TEXT(${L(cM)}8,"#,##0")&"     |     Pending, not in total "&TEXT(${L(DR0)}8,"#,##0")&"     |     DIV table vs total: "&TEXT(${L(cTot)}${DTR}-${DTOT},"#,##0")&"     |     Report vs SAP (after WBS splits): "&TEXT(Notes!B${NOTES_RECON_ROW + 8},"#,##0")&"     |     Per-service totals vs Detail: "&IF(ROUND(SUM('Service Coding'!$L$2:$L$${NSC})-SUM(Detail!$${C['Cost (excl VAT)']}:$${C['Cost (excl VAT)']}),0)=0,"✔",TEXT(SUM('Service Coding'!$L$2:$L$${NSC})-SUM(Detail!$${C['Cost (excl VAT)']}:$${C['Cost (excl VAT)']}),"#,##0"))`,
       { font: st.CTRL, align: { vertical: 'middle' } });
     db.set(DFC + 1, 2, `="Also certified: VAT "&TEXT(SUM(Detail!$${C['VAT current']}:$${C['VAT current']}),"#,##0")&"  ·  adjustments "&TEXT(SUMIFS(${AM},${R('Line type')},"Adjustment"),"#,##0")&"  ·  other profit centres (not ${MAINPC}) "&TEXT(SUMIFS(${AM},${R('Other profit centre')},"X"),"#,##0")`, { font: st.SMALL });
     db.set(DFC + 2, 2, `Cut date ${A.cutDate.toISOString().slice(0, 10)} (end of the report month). Months = approved certificates by certificate date · Opening = approved initial invoices (Flag X) · Pending = not approved or dated after the cut date – shown, not in the total. DIV (automatic from the service code, or as typed), Package and MNL come from Service Coding via Service Monthly / DIV Monthly.`, { font: st.IT });
