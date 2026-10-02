@@ -891,7 +891,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       cs.set(4, AC + 6, `=IF(ROUND(${L(AC + 6)}5+${L(AC + 5)}5-SUM(${AMc})+SUMIFS(${AMc},${BKc},">"&$C$3,${BKc},"<>PENDING"),0)=0,"✔","≠")`, { font: { ...st.B, color: { argb: 'FF1B7A4A' } }, align: { horizontal: 'center' } });
       ws.getCell(4, AC + 6).note = 'ITD + Pending + anything dated after the picked month = everything certified.';
       [10, 30, 11, 40, 14, 14, 14, 13, 9, 15, 16, 15].forEach((w, j) => cs.width(1 + j, w));
-      ws.views = [{ state: 'frozen', ySplit: 0, xSplit: 0, showGridLines: false, zoomScale: 95 }];
+      ws.views = [{ state: 'frozen', ySplit: 4, xSplit: 0, showGridLines: false, zoomScale: 95 }];     // month picker stays in view (a frozen pane needs a split, or Excel repairs the view)
       STMT.rows = { D0, S0, divs: divs.length, keys: keys.length }; }
 
     // quarters (Q1 = Jan–Mar) from the same rows; live SUMIFS over the quarter's months, row 2 re-adds each quarter from Detail

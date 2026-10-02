@@ -28,4 +28,6 @@ for n in sorted(x for x in z.namelist() if re.match(r'xl/worksheets/sheet\d+\.xm
             if B[0] > A[2]: break
             if not (B[1] > A[3] or B[3] < A[1] or B[0] > A[2] or B[2] < A[0]): probs.append(f'{n}: overlapping merges {A} {B}')
     if len(re.findall(r'<autoFilter', x)) > 1: probs.append(f'{n}: more than one autoFilter')
+    for pane in re.findall(r'<pane\b[^>]*/>', x):     # a frozen pane without a split makes Excel repair the sheet view
+        if 'state="frozen"' in pane and not re.search(r'(xSplit|ySplit)="[1-9]', pane): probs.append(f'{n}: frozen pane without a split: {pane}')
 print('\n'.join(probs[:20]) if probs else 'OK – rows, cells, styles, merges, names')
