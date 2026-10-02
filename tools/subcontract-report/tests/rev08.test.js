@@ -86,6 +86,9 @@ const sum = (rs) => rs.reduce((s, r) => s + r.amt, 0);
     const tmp = require('path').join(require('os').tmpdir(), `rev08_${process.pid}.xlsx`); require('fs').writeFileSync(tmp, Buffer.from(buf));
     const res = require('child_process').spawnSync('python3', [require('path').join(__dirname, 'recalc.py'), tmp], { encoding: 'utf8', timeout: 900000 });
     assert.strictEqual(res.status, 0, 'recalculation checks: ' + res.stdout + res.stderr);
+    // Cost Statement: its cached spill rows and amounts equal the statement recomputed from the recalculated Detail
+    const cs = require('child_process').spawnSync('python3', [require('path').join(__dirname, 'stmtcheck.py'), tmp], { encoding: 'utf8', timeout: 900000 });
+    assert.strictEqual(cs.status, 0, 'cost statement: ' + cs.stdout + cs.stderr);
     // "Include in this report" on every after-cut line: they leave Pending for their month blocks, every check stays ✔
     const expMonth = sum(A8.det.filter((r) => r.approved && !r.initial && r.month > 202608));
     const inc = require('child_process').spawnSync('python3', [require('path').join(__dirname, 'include_check.py'), tmp, String(expMonth), String(k8.notApproved)], { encoding: 'utf8', timeout: 900000 });

@@ -32,6 +32,11 @@ and downloads the Excel report. Nothing is uploaded; the libraries are embedded 
   DIV / Package / MNL / Cost element / Unit are live lookups on Service Coding on both.
   **Trade** (after Unit) is the trade name from the service code, a live lookup on Coding → trades.
 - **Per-service totals** (Service Coding → Total amount) are values; Dashboard → Final control checks them against Detail.
+- **Cost Statement** (3rd tab): pick any month in B3 – This month | Previous | Change | Change % | YTD | ITD | Pending, by DIV
+  and by service. Rows are dynamic arrays (SORT / UNIQUE / FILTER over Detail → DIV (live) / Statement key), so new services,
+  new DIVs and codes changed on Service Coding appear without a rebuild – needs Microsoft 365 or Excel 2021. The engine
+  marks the anchors as dynamic (cm="1" + xl/metadata.xml) and writes cached results for the report month;
+  `tests/stmtcheck.py` checks them against the recalculated Detail.
 - **Rolling Monthly** (after Service Monthly): the same rows at a fixed width however long the project runs –
   Opening | B/F prior years | Jan … Dec of the report year | YTD | ITD (to date) | Pending, all live SUMIFS on Detail.
   In January the previous year folds into B/F by itself; checks: ITD = Opening + B/F + YTD, ITD + Pending = Detail.

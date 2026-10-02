@@ -408,7 +408,7 @@
   const BRAND = '1F3E6B';   // single-series charts
   const GOLDLINE = { style: 'thin', color: { argb: 'FFC8A45C' } };
   // tab groups: log / file history & transactions / reports
-  const TAB_GROUPS = [['0F2A52', ['Dashboard', 'Invoice Matrix', 'Service Monthly', 'Rolling Monthly', 'Service Quarterly', 'DIV Monthly', 'Service Coding', 'Lists']], ['C8A45C', ['Changes', 'Detail']],
+  const TAB_GROUPS = [['0F2A52', ['Dashboard', 'Invoice Matrix', 'Cost Statement', 'Service Monthly', 'Rolling Monthly', 'Service Quarterly', 'DIV Monthly', 'Service Coding', 'Lists']], ['C8A45C', ['Changes', 'Detail']],
     ['4A6FA5', ['PO Register', 'By Supplier', 'Subcontractor x Trade', 'Subcontractors over time', 'Qty Reconciliation', 'Coding', 'Notes']]];
   const NOTES_RECON_ROW = 32;   // fixed so the Dashboard control strip can point at it
   const PAL = ['2A78D6', 'EB6834', '1BAF7A', 'EDA100', 'E87BA4', '008300', '4A3AA7', 'A6A6A0'];
@@ -532,6 +532,18 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       if (f) { const st0 = await f.async('string');
         z.file('xl/styles.xml', st0.replace(/<dxfs[\s\S]*?<\/dxfs>/, (d) => d.replace(/<(left|right|top|bottom|diagonal)\/>/g, ''))); }
     }
+    if (extra && extra.dynamic) { // dynamic arrays (UNIQUE / SORT / FILTER spill): cm="1" on each anchor cell + the XLDAPR metadata part
+      const name = `xl/worksheets/sheet${sheetNames.indexOf(extra.dynamic) + 1}.xml`, f = z.file(name);
+      if (f) { const x = await f.async('string');
+        z.file(name, x.replace(/<c ([^>]*?)>(<f t="array")/g, (m, at, fa) => (/\bcm=/.test(at) ? m : `<c ${at} cm="1">${fa}`)));
+        z.file('xl/metadata.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<metadata xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:xda="http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray">'
+          + '<metadataTypes count="1"><metadataType name="XLDAPR" minSupportedVersion="120000" copy="1" pasteAll="1" pasteValues="1" merge="1" splitFirst="1" rowColShift="1" clearFormats="1" clearComments="1" assign="1" coerce="1" cellMeta="1"/></metadataTypes>'
+          + '<futureMetadata name="XLDAPR" count="1"><bk><extLst><ext uri="{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}"><xda:dynamicArrayProperties fDynamic="1" fCollapsed="0"/></ext></extLst></bk></futureMetadata>'
+          + '<cellMetadata count="1"><bk><rc t="1" v="0"/></bk></cellMetadata></metadata>');
+        let ct2 = await z.file('[Content_Types].xml').async('string');
+        if (!ct2.includes('/xl/metadata.xml')) z.file('[Content_Types].xml', ct2.replace('</Types>', '<Override PartName="/xl/metadata.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml"/></Types>'));
+        const rp = 'xl/_rels/workbook.xml.rels', rels = await z.file(rp).async('string');
+        if (!rels.includes('metadata.xml')) z.file(rp, rels.replace('</Relationships>', '<Relationship Id="rIdMeta1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata" Target="metadata.xml"/></Relationships>')); } }
     return z.generateAsync({ type: 'uint8array', compression: 'DEFLATE', compressionOptions: { level: 6 } });
   }
 
@@ -539,7 +551,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     const { ExcelJS, JSZip } = libs; const say = progress || (() => {});
     const det = A.det, MAINPC = A.MAINPC, months = A.months, omonths = A.omonths;
     const wb = new ExcelJS.Workbook(); wb.creator = TOOL.author; wb.title = TOOL.name; wb.description = SIG; wb.calcProperties.fullCalcOnLoad = true;
-    const ORDER = ['Dashboard', 'Invoice Matrix', 'Service Monthly', 'Rolling Monthly', 'Service Quarterly', 'DIV Monthly', 'Service Coding', 'Lists', 'Changes', 'Detail', 'PO Register', 'By Supplier', 'Subcontractor x Trade',
+    const ORDER = ['Dashboard', 'Invoice Matrix', 'Cost Statement', 'Service Monthly', 'Rolling Monthly', 'Service Quarterly', 'DIV Monthly', 'Service Coding', 'Lists', 'Changes', 'Detail', 'PO Register', 'By Supplier', 'Subcontractor x Trade',
       'Subcontractors over time', 'Qty Reconciliation', 'Coding', 'Notes', '_History', '_Lines', '_LinesPrev', '_Rows', '_Serv', '_Chart'];
     const S = {}; for (const n of ORDER) S[n] = makeSheetApi(wb.addWorksheet(n, n === 'Dashboard' || n === 'Subcontractor x Trade' || n === 'Subcontractors over time' || n === 'Changes' || n === 'DIV Monthly' || n === 'Invoice Matrix' ? { views: [{ showGridLines: false }] } : {}));
     const charts = [];
@@ -609,12 +621,12 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       'Invoice doc.', 'Entry sheet', 'Doc type', 'PO item', 'Service', 'Service text', 'Line type', 'Unit', 'Contract type', 'Tax code', 'VAT rate', 'Gross price', 'Net rate',
       'Total qty', 'Previous qty', 'Current qty', 'Paid % (Progress %)', 'Cost (excl VAT)', 'VAT current', 'Resource', 'Trade', 'Resource name', 'Trade name',
       'G/L acct', 'WBS element (ref. only)', 'WBS description (ref. only)', 'PO line ref', 'PO line match', 'Material group', 'Material group description', 'Profit centre',
-      'Other profit centre', 'Report qty', 'Qty basis', 'Approval note', 'Line ID', 'WBS rows (split)', 'First seen (load)', 'Qty check', 'Pending reason', 'Reported-month flag', 'Include in this report'];
+      'Other profit centre', 'Report qty', 'Qty basis', 'Approval note', 'Line ID', 'WBS rows (split)', 'First seen (load)', 'Qty check', 'DIV (live)', 'Package (live)', 'Statement key', 'Pending reason', 'Reported-month flag', 'Include in this report'];
     const C = {}; cols.forEach((n, j) => { C[n] = L(j + 1); dt.hdr(1, j + 1, n); }); const INC = C['Include in this report'];
     dt.ws.getCell(C['Report qty'] + '1').note = 'Quantity used in the report. Equals SAP Current qty unless the line was not paid at qty × net rate (paid % below 100, a catch-up, a re-price): then amount ÷ net rate, so the rate stays the contract rate. Adjustment lines also get amount ÷ net rate (negative for a deduction), so the service quantity accumulates correctly. SAP qty stays in Current qty and feeds Qty Reconciliation.';
     dt.ws.getCell(C['Other profit centre'] + '1').note = `X = charged to a profit centre other than the project's main one (${MAINPC}).`;
     dt.ws.getCell('E1').note = `PENDING = not approved (Character 1 blank) or dated after the cut date ${A.cutDate.toISOString().slice(0, 10)} (Coding!N2) – see Pending reason. OPENING = approved initial invoice (Flag X). Otherwise the certificate month.`;
-    dt.ws.getCell(1, cols.length).note = 'Added to a reported month = a line dated in a month the last report already showed, but not among its lines (late / back-dated). Approved after the month was reported = it was in the last report as not approved.';
+    dt.ws.getCell(1, cols.indexOf('Reported-month flag') + 1).note = 'Added to a reported month = a line dated in a month the last report already showed, but not among its lines (late / back-dated). Approved after the month was reported = it was in the last report as not approved.';
     dt.ws.getCell('R1').note = 'Adjustment = amount with zero quantity, or a ≤ 0.01 placeholder quantity that does not explain the amount: payment-% changes, re-pricing, reversals. Qty only (excluded) = quantity with zero amount – no row key, never in Service Monthly or the Dashboard.';
     const sorted = det.slice().sort((a, b) => cmpTuple([a.dateKey, a.po, a.serial, a.svc], [b.dateKey, b.po, b.serial, b.svc]));
     const dtRows = [], inc = (A.opts.reopen && A.opts.reopen.include) || new Map();     // Include picks survive when a report is reopened
@@ -631,6 +643,8 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
         { formula: `IF(R${i}="Normal",IF(${eq},AC${i}/X${i},AA${i}),IF(AND(R${i}="Adjustment",X${i}<>0),AC${i}/X${i},0))` },
         { formula: `IF(R${i}="Adjustment",IF(X${i}<>0,"Adjustment (amount ÷ net rate)","Adjustment – no net rate"),IF(R${i}<>"Normal","",IF(${eq},"Equivalent (amount ÷ net rate)","SAP qty")))` },
         (r.initial && !r.approved) ? 'Opening – not approved' : null, r.lid, r.split || null, r.first, r.qcheck,
+        { formula: `IF(${lk('Service Coding', 'A', 'F', `B${i}`, '""', NSC)}&""="","UNALLOCATED",${lk('Service Coding', 'A', 'F', `B${i}`, '""', NSC)}&"")` }, { formula: `${lk('Service Coding', 'A', 'G', `B${i}`, '""', NSC)}&""` },
+        { formula: `IF(B${i}="","",${C['DIV (live)']}${i}&" | "&TEXT(B${i},"0000"))` },
         { formula: `IF(F${i}<>"X","Not approved",IF(D${i}>Coding!$N$3,IF(${INC}${i}="Include","","After cut date"),""))` }, r.late || null,
         r.approved && r.month > A.CUT ? (inc.get(r.lid) === 'Include' ? 'Include' : 'Not included') : null]);
     });
@@ -648,13 +662,13 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     cols.forEach((_, j) => { const col = dt.ws.getColumn(j + 1); col.font = st.F; if (colFmt[j + 1]) col.numFmt = colFmt[j + 1]; if (textCols.includes(j + 1)) col.numFmt = '@'; });
     dt.ws.getRow(1).eachCell((c) => { c.font = st.H; });
     sorted.forEach((r, n) => { if (r.othpc) { dt.ws.getCell(n + 2, 42).fill = FILL.PCF; dt.ws.getCell(n + 2, 43).fill = FILL.PCF; } });
-    [13, 6, 11, 8, 10, 9, 9, 7, 12, 11, 28, 12, 12, 8, 6, 10, 38, 10, 6, 8, 6, 6, 10, 10, 10, 10, 10, 8, 13, 11, 6, 6, 16, 22, 10, 20, 26, 22, 16, 10, 22, 10, 8, 11, 26, 20, 30, 9, 9, 30, 14, 30, 16].forEach((w, j) => dt.width(j + 1, w));
+    [13, 6, 11, 8, 10, 9, 9, 7, 12, 11, 28, 12, 12, 8, 6, 10, 38, 10, 6, 8, 6, 6, 10, 10, 10, 10, 10, 8, 13, 11, 6, 6, 16, 22, 10, 20, 26, 22, 16, 10, 22, 10, 8, 11, 26, 20, 30, 9, 9, 30, 10, 14, 18, 14, 30, 16].forEach((w, j) => dt.width(j + 1, w));
     const NR = det.length + 1;
     dt.ws.views = [{ state: 'frozen', xSplit: 6, ySplit: 1 }];                     // Row key … Approved stay in view dt.ws.autoFilter = `A1:${L(cols.length)}${NR}`;
     const R = (n) => `Detail!$${C[n]}$2:$${C[n]}$${NR}`;
 
     let SM_ORDER, SM_TOTAL, SM_PEND, SM_COLS; const supName = new Map(); for (const r of det) supName.set(r.supCode, r.supName);   // also used by By Supplier
-    const IM = {}, PO_CHECK = {};                               // Invoice Matrix / PO Register check ranges
+    const IM = {}, PO_CHECK = {}, STMT = {};                               // Invoice Matrix / PO Register check ranges
     // ZSCSRV1 "Type of Works for PO", one per PO (several are joined)
     const poType = new Map(); for (const x of A.sv) { const k = str(A.g(x, 'Purchase Order')).trim(), t = str(A.g(x, 'Type of Works for PO')).trim(); if (!k || !t) continue;
       if (!poType.has(k)) poType.set(k, new Set()); poType.get(k).add(t); }
@@ -804,6 +818,81 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
       ws.getCell(4, RS.blocks.find((b) => b.label === 'B/F prior years').col).note = `Approved cost dated before 1 January ${Y} (opening invoices are in Opening). Next January this year folds in here.`;
       ws.getCell(4, RS.blocks.find((b) => b.inTotal === false).col).note = `Year to date: Jan–Dec ${Y} – months after the cut date count only lines picked as Include on Detail. Not added again to ITD.`;
       ws.getCell(4, RS.T0).note = 'ITD (inception to date) = Opening + B/F + the months of this year. ITD + Pending = everything certified.'; }
+
+    // ---------------- Cost Statement: pick any month; rows are dynamic (UNIQUE / SORT / FILTER on Detail – Microsoft 365 / Excel 2021),
+    // so a service or DIV that appears, or a code changed on Service Coding, shows without a rebuild. Cached results are written for the
+    // report month, so the sheet reads right before Excel recalculates.
+    await say('Cost Statement');
+    { const cs = S['Cost Statement'], ws = cs.ws, AN = (c) => `_xlfn.ANCHORARRAY(${c})`;
+      const DIVc = DTR('DIV (live)'), KEYc = DTR('Statement key'), AMc = DTR('Cost (excl VAT)'), BKc = DTR('Report bucket');
+      const pad = (n) => String(n).padStart(4, '0'), divOf = (r) => (A.services[r.sid - 1] || {}).csi || 'UNALLOCATED', keyOf = (r) => `${divOf(r)} | ${pad(r.sid)}`;
+      const M = A.CUT, PMo = M % 100 === 1 ? M - 89 : M - 1, YS = Math.floor(M / 100) * 100 + 1;
+      const vals = (pick) => { const m = new Map(); for (const r of det) { if (!r.sid) continue; const k = pick(r), b = r.bucket; let x = m.get(k); if (!x) m.set(k, (x = [0, 0, 0, 0, 0])); 
+        if (b === M) x[0] += r.amt; if (b === PMo) x[1] += r.amt; if (typeof b === 'number' && b >= YS && b <= M) x[2] += r.amt;
+        if ((typeof b === 'number' && b > 0 && b <= M) || b === 'OPENING') x[3] += r.amt; if (b === 'PENDING') x[4] += r.amt; } return m; };
+      const cmpX = (a, b) => (a.toUpperCase() < b.toUpperCase() ? -1 : a.toUpperCase() > b.toUpperCase() ? 1 : 0);      // Excel SORT: text, case-insensitive
+      const byDiv = vals(divOf), byKey = vals(keyOf), divs = [...byDiv.keys()].sort(cmpX), keys = [...byKey.keys()].sort(cmpX);
+      const first = new Map(); for (const r of det) if (r.sid && !first.has(keyOf(r))) first.set(keyOf(r), r);
+      const AMT = ['This month', 'Previous month', 'Change', 'Change %', 'YTD', 'ITD (to date)', 'Pending – not in ITD'], AC = 6;   // amounts in F … L
+      const NUMF = '#,##0;[Red]-#,##0;"–"', CHG = '"▲ "#,##0;"▼ "#,##0;"–"', PCTF = '0%;-0%;"–"';
+      // the month picker: a month end, any month of the project; C3..E3 derive the buckets
+      cs.set(1, 1, 'Cost statement · pick a month', { font: st.T1 });
+      cs.set(2, 1, 'Rows are formulas over Detail (UNIQUE / SORT / FILTER): new services and DIVs, and codes changed on Service Coding, appear without a rebuild. Needs Microsoft 365 or Excel 2021.', { font: st.IT });
+      cs.set(3, 1, 'Month', { font: st.B, align: { horizontal: 'right' } });
+      const months = []; for (let m = Math.min(...A.allMonths, M); m <= Math.max(...A.allMonths, M); m = m % 100 === 12 ? m + 89 : m + 1) months.push(m);
+      const ML = 26; months.slice().reverse().forEach((m, n) => cs.set(2 + n, ML, new Date(Date.UTC(Math.floor(m / 100), m % 100, 0)), { fmt: 'mmm-yy' }));
+      cs.set(1, ML, 'Months', { font: st.SMALL }); ws.getColumn(ML).hidden = true;
+      cs.set(3, 2, new Date(Date.UTC(Math.floor(M / 100), M % 100, 0)), { fmt: 'mmm-yy', fill: FILL.YF, font: { ...st.B, color: { argb: 'FF0000FF' } }, align: { horizontal: 'center' } });
+      ws.getCell(3, 2).dataValidation = { type: 'list', allowBlank: false, formulae: [`$${L(ML)}$2:$${L(ML)}$${months.length + 1}`], showErrorMessage: true, errorTitle: 'Pick a month', error: 'Pick a month from the list.' };
+      ws.getCell(3, 2).note = 'Pick the month to report. This month / Previous / YTD / ITD follow; Pending is everything not approved or dated after the cut date of this report.';
+      cs.set(3, 3, '=YEAR(B3)*100+MONTH(B3)', { font: st.SMALL }); cs.set(3, 4, '=IF(MOD(C3,100)=1,C3-89,C3-1)', { font: st.SMALL }); cs.set(3, 5, '=INT(C3/100)*100+1', { font: st.SMALL });
+      cs.set(4, 3, 'month', { font: st.SMALL }); cs.set(4, 4, 'previous', { font: st.SMALL }); cs.set(4, 5, 'year start', { font: st.SMALL });
+      const amtF = (crit, at) => [`=SUMIFS(${AMc},${crit},${at},${BKc},$C$3)`, `=SUMIFS(${AMc},${crit},${at},${BKc},$D$3)`, null, null,
+        `=SUMIFS(${AMc},${crit},${at},${BKc},">="&$E$3,${BKc},"<="&$C$3)`, `=SUMIFS(${AMc},${crit},${at},${BKc},">0",${BKc},"<="&$C$3)+SUMIFS(${AMc},${crit},${at},${BKc},"OPENING")`,
+        `=SUMIFS(${AMc},${crit},${at},${BKc},"PENDING")`];
+      const hdr = (r, labels) => labels.forEach((h, j) => cs.hdr(r, 1 + j, h, j >= AC - 1 ? (j === AC + 5 ? fill('8E3B37') : j >= AC + 3 ? fill('7A5C1E') : FILL.H2) : undefined));
+      // one spilled block: anchor formulas in row r0, cached values below; returns the anchor row
+      const block = (r0, n, colF, cached) => { colF.forEach((f, j) => { if (!f) return; const c = j + 1, ref = `${L(c)}${r0}:${L(c)}${r0 + Math.max(n, 1) - 1}`;
+          ws.getCell(r0, c).value = { formula: f.replace(/^=/, ''), shareType: 'array', ref, result: cached(0, j) };
+          for (let k = 1; k < n; k++) ws.getCell(r0 + k, c).value = cached(k, j); }); };
+      const fmtRows = (r0, n) => { for (let k = 0; k < n; k++) for (let j = 0; j < AMT.length; j++) { const x = ws.getCell(r0 + k, AC + j); x.numFmt = j === 2 ? CHG : j === 3 ? PCTF : NUMF; x.font = j === 5 ? st.B : st.F; } };
+      const tv = (x, j) => (j === 2 ? x[0] - x[1] : j === 3 ? (x[1] ? (x[0] - x[1]) / Math.abs(x[1]) : '') : x[[0, 1, null, null, 2, 3, 4][j]]);
+      // ---- by DIV
+      const D0 = 7, DRES = Math.max(divs.length + 12, 30);
+      cs.set(5, 1, 'BY DIV', { font: { ...st.B, size: 11 } }); hdr(D0 - 1, ['DIV', 'Division', '', '', '', ...AMT]);
+      const af = amtF(DIVc, AN('A' + D0));
+      block(D0, divs.length, ['=' + `_xlfn._xlws.SORT(_xlfn.UNIQUE(_xlfn._xlws.FILTER(${DIVc},${KEYc}<>"")))`,
+        `=IFERROR(INDEX(Lists!$B$2:$B$400,MATCH(${AN('A' + D0)},Lists!$A$2:$A$400,0)),"")`, null, null, null,
+        af[0], af[1], `=${AN('F' + D0)}-${AN('G' + D0)}`, `=IFERROR(${AN('H' + D0)}/ABS(${AN('G' + D0)}),"")`, af[4], af[5], af[6]],
+        (k, j) => { const d = divs[k]; if (j === 0) return d; if (j === 1) { const p = ((A.opts.master && A.opts.master.packages) || PACKAGES).find((q) => q.code === d); return p ? p.label : ''; }
+          return tv(byDiv.get(d), j - (AC - 1)); });
+      fmtRows(D0, DRES);
+      // ---- by service (DIV · service · text · package)
+      const S0 = D0 + DRES + 4;
+      cs.set(S0 - 2, 1, 'BY SERVICE', { font: { ...st.B, size: 11 } }); hdr(S0 - 1, ['Key', 'DIV', 'Service', 'Service text', 'Package', ...AMT]);
+      const sf = amtF(KEYc, AN('A' + S0)), at = (col) => `=INDEX(${DTR(col)},MATCH(${AN('A' + S0)},${KEYc},0))&""`;
+      block(S0, keys.length, ['=' + `_xlfn._xlws.SORT(_xlfn.UNIQUE(_xlfn._xlws.FILTER(${KEYc},${KEYc}<>"")))`, at('DIV (live)'), at('Service'), at('Service text'), at('Package (live)'),
+        sf[0], sf[1], `=${AN('F' + S0)}-${AN('G' + S0)}`, `=IFERROR(${AN('H' + S0)}/ABS(${AN('G' + S0)}),"")`, sf[4], sf[5], sf[6]],
+        (k, j) => { const key = keys[k], r = first.get(key); if (j === 0) return key; if (j === 1) return divOf(r); if (j === 2) return r.svc; if (j === 3) return r.text;
+          if (j === 4) return (A.services[r.sid - 1] || {}).wp || ''; return tv(byKey.get(key), j - (AC - 1)); });
+      fmtRows(S0, keys.length + 200);
+      for (let k = 0; k < keys.length + 200; k++) { ws.getCell(S0 + k, 1).font = { ...st.SMALL, name: 'Consolas' }; ws.getCell(S0 + k, 3).font = { ...st.F, name: 'Consolas', size: 9.5 };
+        ws.getCell(S0 + k, 4).alignment = { horizontal: 'right', readingOrder: 'rtl' }; }
+      // ---- totals and checks (rows 5 and S0 - 2): spill sums; both must equal Detail for the picked month
+      const tot = (r, a0) => { for (let j = 0; j < AMT.length; j++) { if (j === 3) continue; const c = AC + j;
+          cs.set(r, c, undefined, { font: st.B, fmt: j === 2 ? CHG : NUMF, fill: FILL.TF });
+          ws.getCell(r, c).value = j === 2 ? { formula: `${L(AC)}${r}-${L(AC + 1)}${r}` } : { formula: `SUM(${AN(L(c) + a0)})`, shareType: 'array', ref: `${L(c)}${r}` }; }   // a spill reference: written as a dynamic formula
+        cs.set(r, AC - 1, 'TOTAL', { font: st.B, fill: FILL.TF, align: { horizontal: 'right' } });
+        cs.set(r, AC + 3, `=IFERROR(${L(AC + 2)}${r}/ABS(${L(AC + 1)}${r}),"")`, { font: st.B, fmt: PCTF, fill: FILL.TF }); };
+      tot(5, D0); tot(S0 - 2, S0);
+      const dITD = `SUMIFS(${AMc},${BKc},">0",${BKc},"<="&$C$3)+SUMIFS(${AMc},${BKc},"OPENING")`;
+      cs.set(4, AC + 5, `=IF(AND(ROUND(${L(AC + 5)}5-(${dITD}),0)=0,ROUND(${L(AC + 5)}${S0 - 2}-(${dITD}),0)=0),"✔ ties to Detail","≠ "&TEXT(${L(AC + 5)}5-(${dITD}),"#,##0"))`,
+        { font: { ...st.B, color: { argb: 'FF1B7A4A' } }, align: { horizontal: 'right' } });
+      cs.set(4, AC + 6, `=IF(ROUND(${L(AC + 6)}5+${L(AC + 5)}5-SUM(${AMc})+SUMIFS(${AMc},${BKc},">"&$C$3,${BKc},"<>PENDING"),0)=0,"✔","≠")`, { font: { ...st.B, color: { argb: 'FF1B7A4A' } }, align: { horizontal: 'center' } });
+      ws.getCell(4, AC + 6).note = 'ITD + Pending + anything dated after the picked month = everything certified.';
+      [10, 30, 11, 40, 14, 14, 14, 13, 9, 15, 16, 15].forEach((w, j) => cs.width(1 + j, w));
+      ws.views = [{ state: 'frozen', ySplit: 0, xSplit: 0, showGridLines: false, zoomScale: 95 }];
+      STMT.rows = { D0, S0, divs: divs.length, keys: keys.length }; }
 
     // quarters (Q1 = Jan–Mar) from the same rows; live SUMIFS over the quarter's months, row 2 re-adds each quarter from Detail
     await say('Service Quarterly');
@@ -1458,7 +1547,7 @@ anchors += `<xdr:oneCellAnchor><xdr:from><xdr:col>${c.col}</xdr:col><xdr:colOff>
     await say('Writing the Excel file');
     const buf = await wb.xlsx.writeBuffer();
     await say('Adding charts');
-    return injectCharts(buf, charts, ORDER, JSZip, {});
+    return injectCharts(buf, charts, ORDER, JSZip, { dynamic: 'Cost Statement' });
   }
 
   // ================================================================== CODING MASTER
