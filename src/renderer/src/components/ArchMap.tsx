@@ -48,8 +48,6 @@ export interface ArchMapProps {
   onSelect: (code: string) => void;
   /** Open the upload wizard on this step, optionally with a file already dropped. */
   onLoad: (step: BuildStepStatus, path?: string) => void;
-  /** Refresh CJI3 live from S/4HANA instead of a file (the CJI3 card's ⟳ SAP button). */
-  onSap?: () => void;
 }
 
 /** A source the user cannot load yet: no report behind it, or the SAP report is not available. */
@@ -58,7 +56,7 @@ function isPending(s: BuildStepStatus, bars: BuildTimelineBar[]): boolean {
   return s.status === 'Not available' || (OFFLINE.has(s.step_code) && s.report_definition_id == null);
 }
 
-export function ArchMap({ steps, bars, selectedCode, onSelect, onLoad, onSap }: ArchMapProps) {
+export function ArchMap({ steps, bars, selectedCode, onSelect, onLoad }: ArchMapProps) {
   const byCode = new Map(steps.map((s) => [s.step_code, s]));
   const spine = byCode.get('B04');
   const costTypes = byCode.get('B11');
@@ -74,7 +72,7 @@ export function ArchMap({ steps, bars, selectedCode, onSelect, onLoad, onSap }: 
       </span>;
     }
     return <SourceCard key={code} step={s} bars={bars.get(code) ?? []} big={big} selected={selectedCode === code}
-                       onSelect={onSelect} onLoad={onLoad} onSap={code === 'B04' ? onSap : undefined} />;
+                       onSelect={onSelect} onLoad={onLoad} />;
   };
 
   return (
@@ -122,9 +120,9 @@ export function ArchMap({ steps, bars, selectedCode, onSelect, onLoad, onSap }: 
   );
 }
 
-function SourceCard({ step, bars, big, selected, onSelect, onLoad, onSap }: {
+function SourceCard({ step, bars, big, selected, onSelect, onLoad }: {
   step: BuildStepStatus; bars: BuildTimelineBar[]; big: boolean; selected: boolean;
-  onSelect: (code: string) => void; onLoad: (step: BuildStepStatus, path?: string) => void; onSap?: () => void;
+  onSelect: (code: string) => void; onLoad: (step: BuildStepStatus, path?: string) => void;
 }) {
   const [over, setOver] = useState(false);
   const canLoad = step.kind === 'upload' && step.report_definition_id != null && step.status !== 'Not available';
@@ -153,16 +151,10 @@ function SourceCard({ step, bars, big, selected, onSelect, onLoad, onSap }: {
          title={step.summary}>
       <div className="arch-card-top">
         <strong>{SOURCE_CODE[step.step_code] ?? step.name}</strong>
-        <span className="row" style={{ gap: 4 }}>
-          {onSap && (
-            <button className="arch-load" title="Refresh live from S/4HANA (instead of a CJI3 file)"
-                    onClick={(e) => { e.stopPropagation(); onSap(); }}>⟳ SAP</button>
-          )}
-          {canLoad && (
-            <button className="arch-load" title={`Load ${SOURCE_CODE[step.step_code] ?? step.name}`}
-                    onClick={(e) => { e.stopPropagation(); onLoad(step); }}>↥</button>
-          )}
-        </span>
+        {canLoad && (
+          <button className="arch-load" title={`Load ${SOURCE_CODE[step.step_code] ?? step.name}`}
+                  onClick={(e) => { e.stopPropagation(); onLoad(step); }}>↥</button>
+        )}
       </div>
       <span className="arch-name">{step.name}</span>
       <span className="arch-status"><span className={`sdot ${STATUS_DOT[step.status]}`} />{step.status}</span>

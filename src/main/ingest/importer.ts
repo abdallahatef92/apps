@@ -177,10 +177,8 @@ export async function stageFile(req: StageRequest, importedBy: string | null): P
 }
 
 /**
- * Stage rows that have already been read — from a sheet, or pulled from SAP.
- * The source does not matter from here on: the same mapping, subtotal rule,
- * validation and line identity apply, so a live pull is checked exactly as
- * strictly as an uploaded file.
+ * Stage rows that have already been read, whatever produced them. The source does not
+ * matter from here on: the same mapping, subtotal rule, validation and line identity apply.
  */
 export function stageRows(req: StageRequest, rows: Record<string, unknown>[],
                           importedBy: string | null): StageResult {

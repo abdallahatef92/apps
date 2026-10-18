@@ -16,8 +16,6 @@ import { runStoredQuery } from '../src/main/services/queryRunner';
 import { clearProjectData, deleteProject, projectFootprint } from '../src/main/services/projectAdmin';
 import { buildRegisterWorkbook } from '../src/main/services/registerReport';
 import { writeMonthlyPack } from '../src/main/services/monthlyPack';
-import { pullAndStage } from '../src/main/sap/pull';
-import { DEFAULT_EXTRACT } from '../src/main/sap/odata';
 import { scNorm } from '../src/main/db/systemQueries';
 import { exportResult } from '../src/main/services/exportExcel';
 import { buildSubcontractReport, buildSubcontractWorkbook } from '../src/main/services/subcontractReport';
@@ -27,7 +25,7 @@ import JSZip from 'jszip';
 import { writeFileSync } from 'node:fs';
 import {
   CERT_TOTALS, MB51_TOTALS, makeActualsFile, makeBudgetFile, makeCertificateFile, makeCji3File,
-  makeMaterialListFile, makeMb51File, makeMe2nFile, makePoServiceFile, makeScRulesFile, makeScRulesPoFile, makeSubcontractorFile, makeWbsTreeFile, makeS4JournalService, type JournalLine,
+  makeMaterialListFile, makeMb51File, makeMe2nFile, makePoServiceFile, makeScRulesFile, makeScRulesPoFile, makeSubcontractorFile, makeWbsTreeFile,
 } from './makeFixtures';
 import type { ColumnMappingEntry, Module } from '../src/shared/types';
 
@@ -1361,6 +1359,8 @@ async function buildWorkspace(dir: string): Promise<void> {
   // ---- seed data: steps, links, inputs ----
   const empty = mk('P-B00', 'Empty');
   const seeded = Object.keys(steps(empty));
+  check('the removed S/4HANA source is gone again (migration 029 undoes 028)',
+    !db.prepare("SELECT 1 FROM report_definition WHERE code = 'S4_JOURNAL_ITEMS'").get());
   check('16 build steps seeded (B01-B12, B15-B18; no B13/B14)', seeded.length === 16
     && !seeded.includes('B13') && !seeded.includes('B14'), seeded.join(','));
   same('steps load through their report definitions', (db.prepare(
@@ -1550,123 +1550,6 @@ async function sheetPrOrderOk(buffer: any): Promise<string[]> {
   return bad;
 }
 
-/**
- * A live pull from S/4HANA, end to end against a fake Gateway: what is asked of
- * SAP, how its OData answer is read, and that a refresh merges onto the lines
- * already posted instead of adding to them.
- */
-async function s4Pull(dir: string): Promise<void> {
-  console.log('\n--- S/4HANA live pull ---');
-  openDatabase(join(dir, 's4.db'));
-  const db = getDb();
-  const projectKey = Number(db.prepare('INSERT INTO dim_project (project_code, project_name) VALUES (?,?)')
-    .run('P-100', 'Test Plant').lastInsertRowid);
-  const connection = { baseUrl: 'https://s4.example.com:44300/', client: '100', user: 'COSTCTRL', language: 'EN' };
-  const extract = { ...DEFAULT_EXTRACT, postedFrom: '2025-01-01' };
-
-  const lines: JournalLine[] = [
-    { doc: '4900000001', line: '000001', year: '2026', gl: '30201000', wbs: 'P-100.CIV.01',
-      posted: '2026-08-05', type: 'WE', amount: '1000.00', po: '4500000001', supplier: '200001', text: 'Rebar' },
-    // Same document, second line: the line item keeps the two apart.
-    { doc: '4900000001', line: '000002', year: '2026', gl: '30501100', wbs: 'P-100.CIV.01',
-      posted: '2026-08-05', type: 'RE', amount: '2500.50' },
-    // Income comes through the journal as a negative on a 4xxxxxxx account, as in CJI3.
-    { doc: '9000000001', line: '000001', year: '2026', gl: '40000000', wbs: 'P-100',
-      posted: '2026-08-31', type: 'RV', amount: '-4000.00' },
-    { doc: '4900000002', line: '000001', year: '2026', gl: '30301000', wbs: 'P-100.MEC.01',
-      posted: '2026-09-10', type: 'SA', amount: '-200.00' },
-    // Document numbers restart each fiscal year: same number, different posting.
-    { doc: '4900000001', line: '000001', year: '2025', gl: '30201000', wbs: 'P-100.CIV.01',
-      posted: '2025-12-20', type: 'WE', amount: '300.00' },
-  ];
-  const cost = () => Number((db.prepare('SELECT COALESCE(SUM(amount),0) a FROM v_actual WHERE project_key = ?')
-    .get(projectKey) as any).a);
-
-  const sap = makeS4JournalService(lines, { pageSize: 2 });
-  const pull = (fetcher = sap.fetch) => pullAndStage({
-    connection, extract, password: 's3cret', projectKey, dataDate: '2026-10-18', importedBy: 'e2e', fetcher,
-  });
-
-  const first = await pull();
-  const url = decodeURIComponent(sap.requests[0].url);
-  check('asks the journal entry API', url.startsWith(
-    'https://s4.example.com:44300/sap/opu/odata/sap/API_JOURNALENTRYITEMBASIC_SRV/A_JournalEntryItemBasic?'), url);
-  check('logs on to the chosen client', url.includes('sap-client=100'));
-  check('filters to the project WBS', url.includes("startswith(WBSElement,'P-100') eq true"), url);
-  check('filters by posting date', url.includes("PostingDate ge datetime'2025-01-01T00:00:00'"), url);
-  check('reads the leading ledger only', url.includes("(Ledger eq '0L')"), url);
-  check('spaces are not sent as "+"', !sap.requests[0].url.includes('+'));
-  check('uses the user\'s own login',
-    sap.requests[0].headers.Authorization === `Basic ${Buffer.from('COSTCTRL:s3cret').toString('base64')}`);
-  check('follows the server\'s paging link', sap.requests.length === 3, `${sap.requests.length} requests`);
-  check('never puts the password in the URL', sap.requests.every((r) => !r.url.includes('s3cret')));
-
-  check('every row staged', first.stage.validCount === 5, String(first.stage.validCount));
-  check('the journal line is the line identity', first.stage.lineKey.usable
-    && first.stage.lineKey.used.join() === 'document_no,document_line,fiscal_year', first.stage.lineKey.used.join());
-  check('a field SAP did not send is named', first.missingColumns.includes('ReferenceDocument'),
-    first.missingColumns.join());
-  check('no other actual source on the project yet', first.otherActualSources.length === 0);
-
-  const posted = postBatch(first.stage.importBatchId);
-  check('5 lines posted', posted.posted === 5, String(posted.posted));
-  near('cost excludes the income line', cost(), 1000 + 2500.5 - 200 + 300);
-  near('income reported positive',
-    Number((db.prepare('SELECT SUM(amount) a FROM v_revenue WHERE project_key = ?').get(projectKey) as any).a), 4000);
-  const credit = db.prepare(`SELECT period_key, fiscal_year FROM fact_actual WHERE document_no = '4900000002'`).get() as any;
-  check('period derived from the SAP date', credit.period_key === '2026-09', credit.period_key);
-  check('SAP /Date()/ read as a date',
-    (db.prepare(`SELECT period_key p FROM fact_actual WHERE document_no = '4900000001' AND fiscal_year = '2025'`)
-      .get() as any).p === '2025-12');
-  check('the purchase order is carried, so service lines can reconcile against it',
-    (db.prepare(`SELECT COUNT(*) n FROM fact_actual WHERE po_no = '4500000001'`).get() as any).n === 1);
-
-  // ---- the next refresh: one line reversed in part, one new line -----------
-  lines[3] = { ...lines[3], amount: '-250.00' };
-  lines.push({ doc: '4900000003', line: '000001', year: '2026', gl: '30201000', wbs: 'P-100.CIV.02',
-    posted: '2026-10-02', type: 'WE', amount: '100.00' });
-  const second = await pull();
-  check('the refresh reports what it will replace', second.stage.lineKey.willReplace === 5,
-    String(second.stage.lineKey.willReplace));
-  const again = postBatch(second.stage.importBatchId);
-  check('5 lines updated in place, 1 new', again.replaced === 5 && again.posted === 6,
-    `${again.replaced} replaced of ${again.posted}`);
-  near('cost reflects SAP now, not both pulls', cost(), 1000 + 2500.5 - 250 + 300 + 100);
-
-  // ---- an unchanged system: same content, still harmless ------------------
-  const third = await pull();
-  check('an unchanged pull is recognised', third.stage.duplicateOf !== null);
-  postBatch(third.stage.importBatchId);
-  near('and posting it changes nothing', cost(), 1000 + 2500.5 - 250 + 300 + 100);
-
-  // ---- SAP saying no ---------------------------------------------------------
-  const refusal = async (fetcher: ReturnType<typeof makeS4JournalService>['fetch']) => {
-    try { await pull(fetcher); return ''; } catch (e) { return (e as Error).message; }
-  };
-  const denied = await refusal(makeS4JournalService([], { status: 401 }).fetch);
-  check('a rejected login says so', /User or password/.test(denied), denied);
-  const notActive = await refusal(makeS4JournalService([], { status: 404 }).fetch);
-  check('an inactive service points at its activation', /MAINT_SERVICE/.test(notActive), notActive);
-  const sso = await refusal(makeS4JournalService([], { body: '<html><body>Sign in</body></html>' }).fetch);
-  check('a single sign-on page is explained, not parsed', /single sign-on/.test(sso), sso);
-
-  // ---- CJI3 on the same project would add, not merge ---------------------
-  const cjiPath = join(dir, 's4_cji3.xlsx');
-  await makeCji3File(cjiPath);
-  await load(cjiPath, 'ACTUAL', 6, '2026-03-31', '2026-03', projectKey);
-  const mixed = await pull();
-  check('a project already fed by CJI3 is flagged before posting',
-    mixed.otherActualSources.some((s) => s.report_name === 'SAP CJI3 actual line items'),
-    JSON.stringify(mixed.otherActualSources));
-
-  // ---- Home: the pull fills the CJI3 step, and both sources together are flagged
-  const b04 = (runStoredQuery('BUILD_STATUS', { project_key: projectKey }).rows as any[]).find((r) => r.step_code === 'B04');
-  check('a posted pull counts as the CJI3 step (B04)', !!b04 && b04.lines > 0 && b04.status !== 'Ready to load', JSON.stringify(b04 && { s: b04.status, l: b04.lines }));
-  const warn = (runStoredQuery('BUILD_CHECKS', { project_key: projectKey }).rows as any[])
-    .filter((r) => r.step_code === 'B04' && /both loaded/.test(r.message));
-  check('CJI3 and the S/4HANA pull both loaded: B04 warns of double counting', warn.length === 1, String(warn.length));
-}
-
 async function main(): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), 'ci-e2e-'));
   openDatabase(join(dir, 'e2e.db'));
@@ -1782,7 +1665,6 @@ async function main(): Promise<void> {
   await materialIssue(dir);
   await costSources(dir);
   await buildWorkspace(dir);
-  await s4Pull(dir);
 
   // E2E_KEEP_DIR=<path> copies the fixture databases there for manual UI review instead of deleting them.
   if (process.env.E2E_KEEP_DIR) cpSync(dir, process.env.E2E_KEEP_DIR, { recursive: true });

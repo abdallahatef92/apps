@@ -497,19 +497,6 @@ Material cost can come from SAP material documents instead of CJI3 postings (mig
   fill (their own catalogue codes, which the app does not store); codes typed in the sheet are not read back. The round-trip sheets
   `_Ref`/`_Mvt` and the Changes sheet (no material snapshot yet) are not written.
 
-## Live CJI3 from S/4HANA (`S4_JOURNAL_ITEMS`, migration 028)
-
-The CJI3 card on Home has a **⟳ SAP** button (`SapConnect.tsx` as a Home panel): the user's own SAP login pulls
-journal entry items over OData (`API_JOURNALENTRYITEMBASIC_SRV`, `src/main/sap/odata.ts` + `pull.ts`, leading ledger
-`0L`, WBS prefix = the project code by default). A pull is staged by `stageRows()` — `stageFile()` only reads the sheet
-and calls it — and reviewed with `StageReview`, so it obeys every staging rule; lines are keyed document + ledger line +
-fiscal year. It is an **alternative** to the CJI3 file for build step B04, never an addition: FI and CO document numbers
-never share a `line_uid`, so the SAP panel blocks posting while the project has another ACTUAL source, and
-`BUILD_CHECKS` warns on B04 if both end up loaded. The password never goes in the database (encrypted with
-`safeStorage` beside the app if remembered); requests use Electron `net.fetch` (system proxy and certificate store).
-An on-premise server's URL is the application server + HTTPS port 443<instance> (instance 00 → `:44300`).
-The e2e `s4Pull` scenario runs against a fake Gateway (`makeS4JournalService`).
-
 ## Subcontractor and Material report pages
 
 Both pages are native tabs that mirror the Excel report's sheets (spec: `docs/port/native-report.md`; it

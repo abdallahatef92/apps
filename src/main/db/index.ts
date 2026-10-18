@@ -32,6 +32,7 @@ import buildStepsSql from './migrations/025_build_steps.sql?raw';
 import taggedJoinsSql from './migrations/026_tagged_joins.sql?raw';
 import registerItemSql from './migrations/027_register_item.sql?raw';
 import sapODataSql from './migrations/028_sap_odata.sql?raw';
+import removeSapODataSql from './migrations/029_remove_sap_odata.sql?raw';
 import { SYSTEM_QUERIES } from './systemQueries';
 
 interface Migration {
@@ -74,6 +75,7 @@ const MIGRATIONS: Migration[] = [
   { version: 26, name: '026_tagged_joins', sql: taggedJoinsSql },
   { version: 27, name: '027_register_item', sql: registerItemSql },
   { version: 28, name: '028_sap_odata', sql: sapODataSql },
+  { version: 29, name: '029_remove_sap_odata', sql: removeSapODataSql },
 ];
 
 let db: DB | null = null;
