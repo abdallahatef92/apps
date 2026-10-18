@@ -1,5 +1,5 @@
-import { BrowserWindow, app, dialog, ipcMain, shell } from 'electron';
-import { copyFileSync } from 'node:fs';
+import { BrowserWindow, app, dialog, ipcMain, net, safeStorage, shell } from 'electron';
+import { copyFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { closeDatabase, currentDbPath, defaultDbPath, getDb, openDatabase } from './db';
@@ -9,8 +9,50 @@ import { buildPivotSql, pivotMeta, type PivotRequest } from './services/pivot';
 import { readWorkbook } from './ingest/workbook';
 import { deleteBatch, loadColumnMapping, postBatch, revenueAccountPattern, saveColumnMapping, stageFile } from './ingest/importer';
 import { suggestMapping, targetFields } from './ingest/targetFields';
+import { testConnection } from './sap/odata';
+import { loadSapSettings, pullAndStage, saveSapSettings } from './sap/pull';
 import { COST_TYPE_VALUES } from '../shared/types';
-import type { CostTypeAssignment, CostTypeRuleInput, IpcResult, Module, QueryResult, StageRequest } from '../shared/types';
+import type {
+  CostTypeAssignment, CostTypeRuleInput, IpcResult, Module, QueryResult, SapConfig, SapConnection,
+  SapExtract, SapPullRequest, StageRequest,
+} from '../shared/types';
+
+/**
+ * The SAP password lives beside the app, never in the database: the .db file is
+ * made to be copied and handed to colleagues. It is encrypted with the OS
+ * keychain (DPAPI on Windows, Keychain on macOS), so the file is useless on any
+ * other account or machine.
+ */
+const passwordFile = () => join(app.getPath('userData'), 'sap-password.bin');
+
+function savedPassword(): string | null {
+  if (!safeStorage.isEncryptionAvailable() || !existsSync(passwordFile())) return null;
+  try {
+    return safeStorage.decryptString(readFileSync(passwordFile()));
+  } catch {
+    return null;
+  }
+}
+
+function rememberPassword(password: string): void {
+  if (safeStorage.isEncryptionAvailable()) writeFileSync(passwordFile(), safeStorage.encryptString(password));
+}
+
+function forgetPassword(): void {
+  rmSync(passwordFile(), { force: true });
+}
+
+function passwordFor(req: { password?: string }): string {
+  const pw = req.password || savedPassword();
+  if (!pw) throw new Error('Enter your SAP password.');
+  return pw;
+}
+
+/**
+ * Electron's own fetch: it goes through the system proxy and trusts the
+ * certificates the OS trusts, which is what a corporate SAP host needs.
+ */
+const sapFetch = (url: string, init: { headers: Record<string, string> }) => net.fetch(url, init);
 
 /** Wrap a handler so the renderer always gets {ok,data} | {ok,error} instead of a rejection. */
 function handle<T>(channel: string, fn: (...args: any[]) => T | Promise<T>): void {
@@ -265,6 +307,40 @@ export function registerIpc(): void {
     getDb().prepare(`SELECT row_no, status, message, raw_json FROM stg_row
                      WHERE import_batch_id = ? AND status IN ('ERROR','WARN')
                      ORDER BY row_no LIMIT ?`).all(batchId, limit));
+
+  // --- live SAP (S/4HANA OData) -------------------------------------------
+  handle('sap:config', (): SapConfig => ({
+    ...loadSapSettings(),
+    hasSavedPassword: savedPassword() !== null,
+    canRememberPassword: safeStorage.isEncryptionAvailable(),
+  }));
+
+  handle('sap:test', async (req: { connection: SapConnection; extract: SapExtract; password?: string;
+                                     rememberPassword?: boolean }) => {
+    const result = await testConnection(req.connection, passwordFor(req), req.extract, sapFetch);
+    saveSapSettings(req.connection, req.extract);
+    if (req.rememberPassword && req.password) rememberPassword(req.password);
+    return result;
+  });
+
+  handle('sap:pull', async (req: SapPullRequest) => {
+    const password = passwordFor(req);
+    const result = await pullAndStage({
+      connection: req.connection,
+      extract: req.extract,
+      password,
+      projectKey: req.projectKey,
+      dataDate: req.dataDate,
+      importedBy: req.connection.user || null,
+      fetcher: sapFetch,
+    });
+    // Only remembered once SAP has accepted it.
+    saveSapSettings(req.connection, req.extract);
+    if (req.rememberPassword && req.password) rememberPassword(req.password);
+    return result;
+  });
+
+  handle('sap:forgetPassword', () => { forgetPassword(); });
 
   // --- query library -------------------------------------------------------
   handle('query:list', () =>

@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { api, call } from './lib/api';
 import { Dashboard } from './pages/Dashboard';
 import { Upload } from './pages/Upload';
+import { SapConnect } from './pages/SapConnect';
 import { Analysis } from './pages/Analysis';
 import { QueryLibrary } from './pages/QueryLibrary';
 import { DataRegister } from './pages/DataRegister';
@@ -32,11 +33,12 @@ export const useApp = (): AppState => {
   return v;
 };
 
-type PageId = 'dashboard' | 'upload' | 'analysis' | 'queries' | 'register' | 'settings';
+type PageId = 'dashboard' | 'upload' | 'sap' | 'analysis' | 'queries' | 'register' | 'settings';
 
 const PAGES: { id: PageId; label: string; glyph: string; group: string; subtitle: string }[] = [
   { id: 'dashboard', label: 'Dashboard', glyph: '◈', group: 'Overview', subtitle: 'Portfolio position and data freshness' },
   { id: 'upload', label: 'Upload data', glyph: '↥', group: 'Data', subtitle: 'Bring a report in, map it, review it, post it' },
+  { id: 'sap', label: 'SAP live', glyph: '⟳', group: 'Data', subtitle: 'Log on to S/4HANA and refresh actual cost in one click' },
   { id: 'register', label: 'Data register', glyph: '▤', group: 'Data', subtitle: 'Every import, its data date and audit trail' },
   { id: 'analysis', label: 'Analysis', glyph: '◨', group: 'Reporting', subtitle: 'Run a saved analysis and export it' },
   { id: 'queries', label: 'Query library', glyph: '⌗', group: 'Reporting', subtitle: 'The SQL behind every report, stored in the database' },
@@ -137,6 +139,7 @@ export default function App() {
           <div className="content">
             {page === 'dashboard' && <Dashboard />}
             {page === 'upload' && <Upload onDone={() => { state.touch(); refresh(); }} />}
+            {page === 'sap' && <SapConnect onDone={() => { state.touch(); refresh(); }} />}
             {page === 'register' && <DataRegister />}
             {page === 'analysis' && <Analysis />}
             {page === 'queries' && <QueryLibrary />}

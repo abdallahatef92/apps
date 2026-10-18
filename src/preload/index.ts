@@ -58,6 +58,12 @@ const api = {
       invoke<any>('import:post', batchId, allowDuplicate),
     remove: (batchId: number) => invoke<void>('import:delete', batchId),
   },
+  sap: {
+    config: () => invoke<any>('sap:config'),
+    test: (req: unknown) => invoke<any>('sap:test', req),
+    pull: (req: unknown) => invoke<any>('sap:pull', req),
+    forgetPassword: () => invoke<void>('sap:forgetPassword'),
+  },
   queries: {
     list: () => invoke<any[]>('query:list'),
     run: (code: string, params: Record<string, unknown>) => invoke<any>('query:run', code, params),

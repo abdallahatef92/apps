@@ -1,4 +1,7 @@
-import type { CostTypeAssignment, CostTypeCombination, CostTypePreviewRow, CostTypeRule, IpcResult, PivotSource } from '@shared/types';
+import type {
+  CostTypeAssignment, CostTypeCombination, CostTypePreviewRow, CostTypeRule, IpcResult, PivotSource,
+  SapConfig, SapConnection, SapExtract, SapPullRequest, SapPullResult,
+} from '@shared/types';
 
 // Shape exposed by the preload bridge.
 type Bridge = {
@@ -31,6 +34,13 @@ type Bridge = {
     stage(req: unknown): Promise<IpcResult<any>>;
     post(id: number, allowDuplicate?: boolean): Promise<IpcResult<any>>;
     remove(id: number): Promise<IpcResult<void>>;
+  };
+  sap: {
+    config(): Promise<IpcResult<SapConfig>>;
+    test(req: { connection: SapConnection; extract: SapExtract; password?: string; rememberPassword?: boolean }):
+      Promise<IpcResult<{ columns: string[]; sample: Record<string, unknown> | null }>>;
+    pull(req: SapPullRequest): Promise<IpcResult<SapPullResult>>;
+    forgetPassword(): Promise<IpcResult<void>>;
   };
   queries: {
     list(): Promise<IpcResult<any[]>>;
