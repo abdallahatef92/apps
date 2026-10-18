@@ -31,6 +31,7 @@ import costSourcesSql from './migrations/024_cost_sources.sql?raw';
 import buildStepsSql from './migrations/025_build_steps.sql?raw';
 import taggedJoinsSql from './migrations/026_tagged_joins.sql?raw';
 import registerItemSql from './migrations/027_register_item.sql?raw';
+import sapODataSql from './migrations/028_sap_odata.sql?raw';
 import { SYSTEM_QUERIES } from './systemQueries';
 
 interface Migration {
@@ -72,6 +73,7 @@ const MIGRATIONS: Migration[] = [
   { version: 25, name: '025_build_steps', sql: buildStepsSql },
   { version: 26, name: '026_tagged_joins', sql: taggedJoinsSql },
   { version: 27, name: '027_register_item', sql: registerItemSql },
+  { version: 28, name: '028_sap_odata', sql: sapODataSql },
 ];
 
 let db: DB | null = null;

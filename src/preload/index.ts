@@ -73,6 +73,12 @@ const api = {
     list: (limit?: number) => invoke<any[]>('batches:list', limit),
     issues: (batchId: number, limit?: number) => invoke<any[]>('import:issues', batchId, limit),
   },
+  sap: {
+    config: () => invoke<any>('sap:config'),
+    test: (req: unknown) => invoke<any>('sap:test', req),
+    pull: (req: unknown) => invoke<any>('sap:pull', req),
+    forgetPassword: () => invoke<void>('sap:forgetPassword'),
+  },
   files: {
     pick: (title?: string) => invoke<string | null>('file:pick', title),
     preview: (filePath: string) => invoke<any>('file:preview', filePath),

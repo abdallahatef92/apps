@@ -4064,6 +4064,12 @@ bchk AS (
   SELECT 'B04', 'warn', n || ' cost lines (' || printf('%,d', CAST(ROUND(amt, 0) AS INTEGER)) || ') are after the cut-off and not counted'
   FROM bs_held WHERE n > 0
   UNION ALL
+  SELECT 'B04', 'warn', 'CJI3 files and the S/4HANA pull are both loaded - their lines never merge (CO vs FI documents), '
+         || 'so this cost counts twice. Remove one of them in Loaded files.'
+  WHERE (SELECT COUNT(DISTINCT CASE WHEN rd.code = 'S4_JOURNAL_ITEMS' THEN 'S4' ELSE 'FILE' END)
+         FROM v_posting p JOIN report_definition rd ON rd.report_definition_id = p.report_definition_id
+         WHERE p.project_key = :project_key AND rd.module = 'ACTUAL') > 1
+  UNION ALL
   SELECT f.step_code, 'warn', b.row_count_rejected || ' rows of the latest file were rejected'
   FROM bs_final f JOIN bs_last l ON l.step_code = f.step_code
   JOIN import_batch b ON b.import_batch_id = l.last_id

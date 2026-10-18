@@ -406,3 +406,60 @@ export async function makeMaterialListFile(path: string): Promise<void> {
   ws.addRow(['MAT-NEW-05', 'Not issued yet', 'HALB', 'S0401', 'EA']);
   await wb.xlsx.writeFile(path);
 }
+
+/**
+ * A stand-in for S/4HANA's API_JOURNALENTRYITEMBASIC_SRV, answering the way
+ * SAP Gateway does: OData v2 JSON under `d.results`, dates as "/Date(ms)/",
+ * decimals as strings, `__metadata` and deferred navigation links on every
+ * entity, and server-driven paging through `d.__next`.
+ *
+ * It records every request so a test can check what was actually asked of SAP.
+ * The filter is not evaluated — what reaches SAP is asserted, not simulated.
+ */
+export interface JournalLine {
+  doc: string; line: string; year: string; gl: string; wbs: string;
+  posted: string; type: string; amount: string; po?: string; supplier?: string; text?: string;
+}
+
+export function makeS4JournalService(lines: JournalLine[], opts: { pageSize?: number; status?: number; body?: string } = {}) {
+  const requests: { url: string; headers: Record<string, string> }[] = [];
+  const pageSize = opts.pageSize ?? 1000;
+  const sapDate = (iso: string) => `/Date(${Date.parse(`${iso}T00:00:00Z`)})/`;
+
+  const entity = (l: JournalLine) => ({
+    __metadata: { uri: `A_JournalEntryItemBasic('${l.doc}')`, type: 'API_JOURNALENTRYITEMBASIC_SRV.A_JournalEntryItemBasicType' },
+    CompanyCode: '1000', FiscalYear: l.year, AccountingDocument: l.doc, LedgerGLLineItem: l.line,
+    Ledger: '0L', GLAccount: l.gl, WBSElement: l.wbs, ControllingArea: 'A000',
+    PostingDate: sapDate(l.posted), DocumentDate: sapDate(l.posted),
+    AccountingDocumentType: l.type, PurchasingDocument: l.po ?? '', Supplier: l.supplier ?? '',
+    DocumentItemText: l.text ?? '', Quantity: '0.000', BaseUnit: '',
+    AmountInCompanyCodeCurrency: l.amount, CompanyCodeCurrency: 'USD',
+    AmountInGlobalCurrency: l.amount, GlobalCurrency: 'USD',
+    to_JournalEntry: { __deferred: { uri: `A_JournalEntry('${l.doc}')` } },
+  });
+
+  const fetch = async (url: string, init: { headers: Record<string, string> }) => {
+    requests.push({ url, headers: init.headers });
+    const status = opts.status ?? 200;
+    const token = Number(new URL(url).searchParams.get('$skiptoken') ?? 0);
+    let body = opts.body;
+    if (body === undefined && status === 200) {
+      const page = lines.slice(token, token + pageSize).map(entity);
+      const next = token + pageSize < lines.length
+        ? `${url.split('?')[0]}?$skiptoken=${token + pageSize}&$format=json`
+        : undefined;
+      body = JSON.stringify({ d: { results: page, ...(next ? { __next: next } : {}) } });
+    } else if (body === undefined) {
+      body = JSON.stringify({ error: { code: 'X', message: { lang: 'en', value: 'Denied by test' } } });
+    }
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      statusText: status === 200 ? 'OK' : 'Error',
+      headers: { get: () => null },
+      text: async () => body!,
+    };
+  };
+
+  return { fetch, requests };
+}

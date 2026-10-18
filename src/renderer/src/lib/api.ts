@@ -1,3 +1,4 @@
+import type { SapConfig, SapConnection, SapExtract, SapPullRequest, SapPullResult } from '@shared/types';
 import type { BuildCheck, BuildStepStatus, BuildTimelineBar, ReportReadiness, CostTypeAssignment, CostTypeCombination, CostTypeDef, CutoffStatus,ElementPackageAssignment, ExportDiagramRequest, IpcResult, LineageResult, MaterialImportResult, MaterialPackageAssignment, MaterialPackageCombination, OtherPackageCombination, PivotSource, SchemaDescription, ServiceMnl, ServiceMnlAssignment, ServicePackageAssignment, ServicePackageCombination, WorkPackageDef } from '@shared/types';
 
 // Shape exposed by the preload bridge.
@@ -53,6 +54,13 @@ type Bridge = {
   };
   freshness: { list(): Promise<IpcResult<any[]>> };
   batches: { list(limit?: number): Promise<IpcResult<any[]>>; issues(id: number, limit?: number): Promise<IpcResult<any[]>> };
+  sap: {
+    config(): Promise<IpcResult<SapConfig>>;
+    test(req: { connection: SapConnection; extract: SapExtract; password?: string; rememberPassword?: boolean }):
+      Promise<IpcResult<{ columns: string[]; sample: Record<string, unknown> | null }>>;
+    pull(req: SapPullRequest): Promise<IpcResult<SapPullResult>>;
+    forgetPassword(): Promise<IpcResult<void>>;
+  };
   files: { pick(title?: string): Promise<IpcResult<string | null>>; preview(p: string): Promise<IpcResult<any>>; pathOf(file: File): string };
   mapping: {
     targets(m: string): Promise<IpcResult<any[]>>;

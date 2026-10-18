@@ -3,6 +3,7 @@ import { useApp } from '../App';
 import { api, call } from '../lib/api';
 import { ArchMap } from '../components/ArchMap';
 import { Upload } from './Upload';
+import { SapConnect } from './SapConnect';
 import type { BuildCheck, BuildStatus, BuildStepStatus, BuildTimelineBar, Module, QueryResult, ReportReadiness } from '@shared/types';
 
 type Target = 'register' | 'packages' | 'reports' | 'costtypes' | 'settings'
@@ -53,8 +54,12 @@ export function Home({ onNavigate }: { onNavigate: (page: Target) => void }) {
   const pickView = (v: 'map' | 'timeline') => { setView(v); try { localStorage.setItem(VIEW_KEY, v); } catch { /* per-viewer convenience */ } };
   // The upload wizard, opened from a card (preset to its report) or from "Add file" (no preset).
   const [upload, setUpload] = useState<{ step: BuildStepStatus | null; path: string | null; n: number } | null>(null);
-  const openUpload = (step: BuildStepStatus | null, path?: string) =>
+  const openUpload = (step: BuildStepStatus | null, path?: string) => {
+    setSapOpen(false);
     setUpload((u) => ({ step, path: path ?? null, n: (u?.n ?? 0) + 1 }));
+  };
+  // The live S/4HANA pull, the other way to fill the CJI3 step
+  const [sapOpen, setSapOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -146,7 +151,7 @@ export function Home({ onNavigate }: { onNavigate: (page: Target) => void }) {
           </div>
         </div>
         <div className="row" style={{ gap: 8 }}>
-          <button className="link-btn" onClick={() => { pickView(view === 'map' ? 'timeline' : 'map'); setUpload(null); }}>
+          <button className="link-btn" onClick={() => { pickView(view === 'map' ? 'timeline' : 'map'); setUpload(null); setSapOpen(false); }}>
             {view === 'map' ? 'Timeline view' : 'Map view'}
           </button>
           <button className="btn sm" onClick={() => openUpload(null)}>Add file</button>
@@ -157,7 +162,11 @@ export function Home({ onNavigate }: { onNavigate: (page: Target) => void }) {
         </div>
       </div>
 
-      {upload ? (
+      {sapOpen ? (
+        <div className="upload-panel">
+          <SapConnect onClose={() => setSapOpen(false)} onDone={() => { touch(); refresh(); }} />
+        </div>
+      ) : upload ? (
         <div className="upload-panel">
           <Upload key={upload.n}
                   preset={upload.step?.module ? {
@@ -177,7 +186,8 @@ export function Home({ onNavigate }: { onNavigate: (page: Target) => void }) {
           {view === 'map' ? (
             <div className="card arch-card-wrap">
               <ArchMap steps={sortedSteps} bars={barsByStep} selectedCode={selected?.step_code ?? null}
-                       onSelect={setSelectedCode} onLoad={(s, path) => openUpload(s, path)} />
+                       onSelect={setSelectedCode} onLoad={(s, path) => openUpload(s, path)}
+                       onSap={() => { setUpload(null); setSapOpen(true); }} />
             </div>
           ) : (
           <div className="card build-grid">

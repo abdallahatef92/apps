@@ -172,6 +172,18 @@ function validateRow(module: Module, c: Canonical, rowNo: number, batchPeriod: s
  * so the user can review the outcome first.
  */
 export async function stageFile(req: StageRequest, importedBy: string | null): Promise<StageResult> {
+  const { rows } = await readSheetRows(req.filePath, req.sheetName, req.headerRow);
+  return stageRows(req, rows, importedBy);
+}
+
+/**
+ * Stage rows that have already been read — from a sheet, or pulled from SAP.
+ * The source does not matter from here on: the same mapping, subtotal rule,
+ * validation and line identity apply, so a live pull is checked exactly as
+ * strictly as an uploaded file.
+ */
+export function stageRows(req: StageRequest, rows: Record<string, unknown>[],
+                          importedBy: string | null): StageResult {
   const db = getDb();
 
   const duplicate = db.prepare(
@@ -180,8 +192,6 @@ export async function stageFile(req: StageRequest, importedBy: string | null): P
      ORDER BY import_batch_id DESC LIMIT 1`,
   ).get(req.fileHash) as
     { import_batch_id: number; file_name: string; data_date: string; status: string } | undefined;
-
-  const { rows } = await readSheetRows(req.filePath, req.sheetName, req.headerRow);
 
   const info = db.prepare(`
     INSERT INTO import_batch

@@ -717,7 +717,7 @@ export function Upload({ onDone, onNavigate, preset, initialPath, onClose }: {
               <button
                 className="btn primary"
                 onClick={post}
-                disabled={busy || staged.validCount === 0 || (!!staged.duplicateOf && !allowDuplicate)}
+                disabled={busy || staged.validCount === 0 || (!!staged.duplicateOf && !staged.lineKey.usable && !allowDuplicate)}
               >
                 {busy ? <span className="spinner" /> : null} Post {staged.validCount.toLocaleString()} rows
               </button>
