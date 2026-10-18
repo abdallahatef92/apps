@@ -3,13 +3,16 @@ import { useApp } from '../App';
 import { api, call } from '../lib/api';
 import { DataTable } from '../components/DataTable';
 import { buildExportSvg, rasterizeSvgToPng, useGraphCanvas } from '../components/GraphCanvas';
+import { inkOn, useThemeTokens } from '../lib/tokens';
 import type { LineageResult, QueryResult, ReportDefinition } from '@shared/types';
 
-const COLORS = {
-  surface: '#121822', surface2: '#172030', border: '#223047',
-  text: '#eef3f8', text2: '#a9b7c7', text3: '#6f8195', accent: '#3987e5',
-};
-const STAGE_COLOR = { source: '#d95926', staging: '#c98500', fact: '#3987e5', view: '#199e70', query: '#9085e9' };
+// Theme tokens resolved to concrete values (useThemeTokens), not var(--…):
+// the SVG/PNG export is a standalone document with no access to styles.css.
+const TOKENS = {
+  surface: '--surface', surface2: '--surface-2', border: '--border',
+  text: '--text', text2: '--text-2', text3: '--text-3', accent: '--accent',
+  source: '--series-2', staging: '--series-4', fact: '--series-1', view: '--series-3', query: '--series-7',
+} as const;
 
 const COL_WIDTH = 230;
 const COL_GAP = 80;
@@ -32,6 +35,7 @@ export function LineageGraph() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [savedTo, setSavedTo] = useState<string | null>(null);
+  const COLORS = useThemeTokens(TOKENS);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ title: string; result?: QueryResult; text?: string; error?: string } | null>(null);
@@ -276,7 +280,8 @@ export function LineageGraph() {
               {allNodes.map((n) => {
                 const r = layout.rects.get(n.id);
                 if (!r) return null;
-                const color = n.kind === 'summary' ? STAGE_COLOR.query : STAGE_COLOR[n.kind];
+                const color = n.kind === 'summary' ? COLORS.query : COLORS[n.kind];
+                const headerInk = inkOn(color, COLORS.text, COLORS.surface);
                 const isSelected = selectedId === n.id;
                 return (
                   <g key={n.id} style={{ cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); onNodeClick(n); }}>
@@ -286,7 +291,7 @@ export function LineageGraph() {
                     <rect x={r.x} y={r.y} width={r.w} height={HEADER_H} rx={6} fill={color} opacity={0.85} />
                     <rect x={r.x} y={r.y + HEADER_H - 6} width={r.w} height={6} fill={color} opacity={0.85} />
                     <text x={r.x + 10} y={r.y + HEADER_H / 2 + 4} className="mono" fontWeight={700} fontSize={11.5}
-                          fill={COLORS.text}>
+                          fill={headerInk}>
                       {n.title.length > 30 ? `${n.title.slice(0, 29)}…` : n.title}
                     </text>
                     {n.lines.map((line, i) => (

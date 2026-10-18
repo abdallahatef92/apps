@@ -22,7 +22,7 @@ export function VizPanel({ result, viz, height = 320 }:
   if (viz.kind === 'bar' && has(viz.label) && has(viz.value)) {
     return (
       <BarChart result={result} labelColumn={viz.label!} valueColumn={viz.value!}
-                diverging={viz.diverging}
+                diverging={viz.diverging} color={viz.fill}
                 referenceColumn={has(viz.reference) ? viz.reference : undefined}
                 referenceLabel={viz.referenceLabel} />
     );

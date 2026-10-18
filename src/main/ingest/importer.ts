@@ -40,11 +40,18 @@ const REQUIRED: Record<string, string[]> = {
   // centre (category = CTR) has no WBS yet and is still a real, valid row.
   ORDER: ['order_no', 'amount'],
   PO_SERVICE: ['po_no', 'po_item', 'po_line_no'],
+  // MB51: a movement line must carry a material and a movement type. SAP's total row has
+  // neither a material nor a document and is skipped through the report's detail key.
+  MATISSUE: ['material_code', 'movement_type', 'amount'],
+  // ME2N: a line without a material (service/text line) is staged with a warning, never loaded.
+  MATPO: ['po_no'],
+  MATLIST: ['material_code'],
 };
 
 const AMOUNT_FIELD: Record<string, string> = {
   ACTUAL: 'amount', BUDGET: 'budget_amount', FORECAST: 'forecast_amount',
   COMMITMENT: 'amount', SERVICE: 'amount_net', MASTER: '', ORDER: 'amount', PO_SERVICE: '',
+  MATISSUE: 'amount', MATPO: 'net_value', MATLIST: '',
 };
 
 /**
@@ -71,6 +78,12 @@ const NATURAL_KEY: Record<string, string[]> = {
   ORDER: [],
   // One PO service line: SAP's own PO + item + service-line number.
   PO_SERVICE: ['po_no', 'po_item', 'po_line_no'],
+  // SAP's own key of a material document line: document + year + item.
+  MATISSUE: ['document_no', 'fiscal_year', 'document_line'],
+  // One ME2N line: PO + item.
+  MATPO: ['po_no', 'po_item'],
+  // The material list updates dimension attributes; re-loading is idempotent.
+  MATLIST: [],
 };
 
 /**
@@ -80,9 +93,14 @@ const NATURAL_KEY: Record<string, string[]> = {
  * at staging and counted once. A repeat that differs in any of those is a real
  * key collision and still disables line identity for the file.
  */
-const SPLIT_COLLAPSE_MODULES = new Set(['SERVICE']);
-const splitSignature = (c: Canonical) =>
-  [toNumber(c.amount_net) ?? 0, toNumber(c.quantity_current) ?? 0, toNumber(c.amount_vat) ?? 0].join('|');
+const SPLIT_COLLAPSE_MODULES = new Set(['SERVICE', 'MATISSUE']);
+// MB51 never splits a line over WBS elements, but an export pasted twice repeats a
+// document line (doc + year + item) with identical values: that too is counted once.
+const splitSignature = (module: string, c: Canonical) =>
+  (module === 'MATISSUE'
+    ? [toNumber(c.amount) ?? 0, toNumber(c.quantity) ?? 0, toText(c.movement_type) ?? '']
+    : [toNumber(c.amount_net) ?? 0, toNumber(c.quantity_current) ?? 0, toNumber(c.amount_vat) ?? 0]
+  ).join('|');
 
 /** SAP marks a flag with "X"; anything else is off. Only called when the column is mapped. */
 const xFlag = (v: unknown): number => (toText(v)?.toUpperCase() === 'X' ? 1 : 0);
@@ -130,8 +148,12 @@ function validateRow(module: Module, c: Canonical, rowNo: number, batchPeriod: s
     }
   }
 
-  if (!batchProject && !toText(c.project_code)) {
+  if (module !== 'MATLIST' && !batchProject && !toText(c.project_code)) {
     issues.push({ rowNo, severity: 'ERROR', message: 'No project on the row and none chosen for the file.' });
+  }
+
+  if (module === 'MATPO' && !toText(c.material_code)) {
+    issues.push({ rowNo, severity: 'WARN', message: 'No material on the line (service or text line) — not loaded.' });
   }
 
   if (module === 'ACTUAL' || module === 'COMMITMENT') {
@@ -233,13 +255,15 @@ export async function stageFile(req: StageRequest, importedBy: string | null): P
       if (!hasError && collapseSplits) {
         const uid = lineUid(req.module, req.projectKey, mapped, keyFields);
         if (uid) {
-          const sig = splitSignature(mapped);
+          const sig = splitSignature(req.module, mapped);
           const first = firstByUid.get(uid);
           if (first && first.sig === sig) {
             first.count++;
             skipped++;
             insStg.run(batchId, rowNo, JSON.stringify({ raw, mapped }), 'SKIPPED',
-              `Repeat of row ${first.rowNo} on another WBS element (SAP split) — counted once.`);
+              req.module === 'MATISSUE'
+                ? `Repeat of the document line on row ${first.rowNo} — counted once.`
+                : `Repeat of row ${first.rowNo} on another WBS element (SAP split) — counted once.`);
             return;
           }
           if (!first) firstByUid.set(uid, { rowNo, sig, count: 1 });
@@ -408,7 +432,7 @@ export function saveColumnMapping(reportDefinitionId: number, mapping: ColumnMap
 
 const FACT_FOR_UPSERT: Record<string, string> = {
   ACTUAL: 'fact_actual', COMMITMENT: 'fact_actual', SERVICE: 'fact_service_line',
-  PO_SERVICE: 'fact_po_service_line',
+  PO_SERVICE: 'fact_po_service_line', MATISSUE: 'fact_material_issue', MATPO: 'fact_po_material_line',
 };
 
 /** How many of a staged batch's lines already exist in the warehouse. */
@@ -772,6 +796,56 @@ export function postBatch(batchId: number, options: { allowDuplicate?: boolean }
       qty_received = excluded.qty_received, qty_accepted = excluded.qty_accepted,
       total_cost = excluded.total_cost, source_row_no = excluded.source_row_no`);
 
+  const existsMatIssue = db.prepare('SELECT 1 FROM fact_material_issue WHERE line_uid = ?');
+  const existsPoMat = db.prepare('SELECT 1 FROM fact_po_material_line WHERE line_uid = ?');
+  const dateKey = (v: unknown): number | null => {
+    const d = toDate(v);
+    return d ? Number(d.replace(/-/g, '')) : null;
+  };
+
+  const upsertMatIssue = db.prepare(`INSERT INTO fact_material_issue
+    (import_batch_id, project_key, material_key, wbs_key, vendor_key, plant, storage_location,
+     movement_type, movement_text, document_no, fiscal_year, document_line, posting_date_key,
+     entry_date_key, quantity, amount, uom, order_no, reservation_no, valuation_type, user_name,
+     header_text, item_text, source_row_no, line_uid)
+    VALUES (@batch, @project, @material, @wbs, @vendor, @plant, @sloc, @mvt, @mvtText, @docNo,
+            @year, @item, @postingDateKey, @entryDateKey, @qty, @amount, @uom, @order, @resv,
+            @val, @user, @hdr, @text, @rowNo, @uid)
+    ON CONFLICT(line_uid) DO UPDATE SET
+      import_batch_id = excluded.import_batch_id, project_key = excluded.project_key,
+      material_key = excluded.material_key, wbs_key = excluded.wbs_key,
+      vendor_key = excluded.vendor_key, plant = excluded.plant,
+      storage_location = excluded.storage_location, movement_type = excluded.movement_type,
+      movement_text = excluded.movement_text, document_no = excluded.document_no,
+      fiscal_year = excluded.fiscal_year, document_line = excluded.document_line,
+      posting_date_key = excluded.posting_date_key, entry_date_key = excluded.entry_date_key,
+      quantity = excluded.quantity, amount = excluded.amount, uom = excluded.uom,
+      order_no = excluded.order_no, reservation_no = excluded.reservation_no,
+      valuation_type = excluded.valuation_type, user_name = excluded.user_name,
+      header_text = excluded.header_text, item_text = excluded.item_text,
+      source_row_no = excluded.source_row_no`);
+
+  const upsertPoMat = db.prepare(`INSERT INTO fact_po_material_line
+    (import_batch_id, project_key, material_key, vendor_key, po_no, po_item, document_date_key,
+     supplier_text, plant, material_group, short_text, order_unit, deletion_flag, order_qty,
+     price_unit, net_price, net_value, open_qty, open_value, invoice_qty, invoice_value,
+     source_row_no, line_uid)
+    VALUES (@batch, @project, @material, @vendor, @poNo, @poItem, @docDateKey, @supplier, @plant,
+            @mg, @shortText, @unit, @del, @qty, @priceUnit, @netPrice, @netValue, @openQty,
+            @openValue, @invQty, @invValue, @rowNo, @uid)
+    ON CONFLICT(line_uid) DO UPDATE SET
+      import_batch_id = excluded.import_batch_id, project_key = excluded.project_key,
+      material_key = excluded.material_key, vendor_key = excluded.vendor_key,
+      po_no = excluded.po_no, po_item = excluded.po_item,
+      document_date_key = excluded.document_date_key, supplier_text = excluded.supplier_text,
+      plant = excluded.plant, material_group = excluded.material_group,
+      short_text = excluded.short_text, order_unit = excluded.order_unit,
+      deletion_flag = excluded.deletion_flag, order_qty = excluded.order_qty,
+      price_unit = excluded.price_unit, net_price = excluded.net_price,
+      net_value = excluded.net_value, open_qty = excluded.open_qty,
+      open_value = excluded.open_value, invoice_qty = excluded.invoice_qty,
+      invoice_value = excluded.invoice_value, source_row_no = excluded.source_row_no`);
+
   const run = db.transaction(() => {
     for (const s of staged) {
       const { mapped } = JSON.parse(s.raw_json) as { mapped: Canonical };
@@ -860,7 +934,9 @@ export function postBatch(batchId: number, options: { allowDuplicate?: boolean }
         posted++;
       } else if (batch.module === 'SERVICE') {
         const certDate = toDate(mapped.invoice_date);
-        const period = toPeriod(mapped.period_key) ?? certDate?.slice(0, 7) ?? batch.period_key;
+        // An undated certificate line stays undated (no batch-period fallback):
+        // v_service_line reports it Pending, 'No date', as the tool does.
+        const period = toPeriod(mapped.period_key) ?? certDate?.slice(0, 7) ?? null;
         if (period) ensurePeriod(period);
         const uid = useLineKeys ? (toText(mapped.__line_uid) ?? null) : null;
         if (uid && existsService.get(uid)) replaced++;
@@ -901,6 +977,52 @@ export function postBatch(batchId: number, options: { allowDuplicate?: boolean }
           qty: toNumber(mapped.contract_qty), price: toNumber(mapped.contract_price),
           received: toNumber(mapped.qty_received), accepted: toNumber(mapped.qty_accepted),
           totalCost: toNumber(mapped.total_cost), rowNo: s.row_no, uid,
+        });
+        posted++;
+      } else if (batch.module === 'MATISSUE') {
+        const material = dims.materialKey(toText(mapped.material_code), toText(mapped.material_name));
+        if (!material) continue;
+        const postingDate = toDate(mapped.posting_date);
+        if (postingDate) ensurePeriod(postingDate.slice(0, 7));
+        const uid = useLineKeys ? (toText(mapped.__line_uid) ?? null) : null;
+        if (uid && existsMatIssue.get(uid)) replaced++;
+        upsertMatIssue.run({
+          batch: batchId, project: projectKey, material, wbs: wbsKey,
+          vendor: dims.vendorKey(toText(mapped.vendor_code), null),
+          plant: toText(mapped.plant), sloc: toText(mapped.storage_location),
+          mvt: (toText(mapped.movement_type) ?? '').toUpperCase(), mvtText: toText(mapped.movement_text),
+          docNo: toText(mapped.document_no), year: toText(mapped.fiscal_year),
+          item: toText(mapped.document_line),
+          postingDateKey: dateKey(mapped.posting_date), entryDateKey: dateKey(mapped.entry_date),
+          qty: toNumber(mapped.quantity), amount: toNumber(mapped.amount) ?? 0,
+          uom: toText(mapped.uom), order: toText(mapped.order_no), resv: toText(mapped.reservation_no),
+          val: toText(mapped.valuation_type), user: toText(mapped.user_name),
+          hdr: toText(mapped.header_text), text: toText(mapped.item_text),
+          rowNo: s.row_no, uid,
+        });
+        posted++;
+      } else if (batch.module === 'MATPO') {
+        const material = dims.materialKey(toText(mapped.material_code), null);
+        if (!material) continue;   // a service or text line: no material, not loaded
+        // "Supplier/Supplying Plant" reads "1000123 ACME" for a purchase and "SBD1" for a
+        // stock transport order from own stores; only a numeric first token is a vendor.
+        const supplier = toText(mapped.supplier);
+        const supplierCode = supplier?.split(/\s+/)[0] ?? '';
+        const vendor = supplier && /^\d+$/.test(supplierCode)
+          ? dims.vendorKey(supplierCode, supplier.slice(supplierCode.length).trim() || null) : null;
+        const uid = useLineKeys ? (toText(mapped.__line_uid) ?? null) : null;
+        if (uid && existsPoMat.get(uid)) replaced++;
+        upsertPoMat.run({
+          batch: batchId, project: projectKey, material, vendor,
+          poNo: toText(mapped.po_no), poItem: toText(mapped.po_item),
+          docDateKey: dateKey(mapped.document_date), supplier, plant: toText(mapped.plant),
+          mg: toText(mapped.material_group), shortText: toText(mapped.short_text),
+          unit: toText(mapped.order_unit), del: toText(mapped.deletion_flag)?.toUpperCase() ?? null,
+          qty: toNumber(mapped.order_qty), priceUnit: toNumber(mapped.price_unit),
+          netPrice: toNumber(mapped.net_price), netValue: toNumber(mapped.net_value),
+          openQty: toNumber(mapped.open_qty), openValue: toNumber(mapped.open_value),
+          invQty: toNumber(mapped.invoice_qty), invValue: toNumber(mapped.invoice_value),
+          rowNo: s.row_no, uid,
         });
         posted++;
       } else if (batch.module === 'MASTER') {
@@ -946,6 +1068,12 @@ export function postBatch(batchId: number, options: { allowDuplicate?: boolean }
     if (batch.module === 'MASTER') {
       posted = postWbsMaster(batchId, batch, staged);
     }
+    if (batch.module === 'MATLIST') {
+      posted = postMaterialList(batchId, staged);
+    }
+    if (batch.module === 'MATPO') {
+      resolveMaterialGroupsFromPo(batchId);
+    }
 
     // Superseding is the fallback for sources with no line identity. Where lines
     // merge on their own key, replacing whole batches would throw away the months
@@ -974,6 +1102,59 @@ export function postBatch(batchId: number, options: { allowDuplicate?: boolean }
   run();
 
   return { importBatchId: batchId, posted, replaced, rejected: rejected.n, byLineKey: useLineKeys };
+}
+
+/**
+ * The material list (MM60 / MB52) writes dimension attributes, not facts: group,
+ * type and base unit of each material, creating the material when it is new.
+ * Group resolution order is ME2N, then this list, then what was known before, so
+ * a list never overwrites a group that ME2N supplied (group_source = 'ME2N').
+ * Type and unit are simply refreshed when the file states them.
+ */
+function postMaterialList(batchId: number, staged: any[]): number {
+  const db = getDb();
+  const dims = new DimCache();
+  const upd = db.prepare(`UPDATE dim_material SET
+      material_name = CASE WHEN material_name = material_code AND @name IS NOT NULL THEN @name ELSE material_name END,
+      material_type = COALESCE(@type, material_type),
+      base_unit     = COALESCE(@unit, base_unit),
+      material_group = CASE WHEN @grp IS NOT NULL AND COALESCE(group_source, 'MATLIST') = 'MATLIST'
+                            THEN @grp ELSE material_group END,
+      group_source   = CASE WHEN @grp IS NOT NULL AND COALESCE(group_source, 'MATLIST') = 'MATLIST'
+                            THEN 'MATLIST' ELSE group_source END
+    WHERE material_key = @key`);
+  let written = 0;
+  for (const s of staged) {
+    const { mapped } = JSON.parse(s.raw_json) as { mapped: Canonical };
+    const key = dims.materialKey(toText(mapped.material_code), toText(mapped.material_name));
+    if (!key) continue;
+    upd.run({
+      key, name: toText(mapped.material_name), type: toText(mapped.material_type),
+      unit: toText(mapped.base_unit), grp: toText(mapped.material_group),
+    });
+    written++;
+  }
+  db.prepare(`UPDATE stg_row SET status = 'POSTED' WHERE import_batch_id = ? AND status = 'VALID'`)
+    .run(batchId);
+  return written;
+}
+
+/**
+ * ME2N gives a material its group: the most frequent group over the material's
+ * posted PO lines (the tool's top()), and it outranks the material list.
+ */
+function resolveMaterialGroupsFromPo(batchId: number): void {
+  getDb().prepare(`
+    UPDATE dim_material SET
+      material_group = (SELECT f.material_group FROM fact_po_material_line f
+                          JOIN import_batch b ON b.import_batch_id = f.import_batch_id
+                         WHERE f.material_key = dim_material.material_key AND COALESCE(f.material_group, '') <> ''
+                           -- the batch being posted is not marked POSTED yet
+                           AND (b.status = 'POSTED' OR b.import_batch_id = @batch)
+                         GROUP BY f.material_group ORDER BY COUNT(*) DESC, f.material_group LIMIT 1),
+      group_source = 'ME2N'
+    WHERE material_key IN (SELECT material_key FROM fact_po_material_line
+                            WHERE import_batch_id = @batch AND COALESCE(material_group, '') <> '')`).run({ batch: batchId });
 }
 
 /**
@@ -1071,7 +1252,10 @@ export const FACT_TABLE: Record<string, string | null> = {
   ORDER: 'fact_order_line',
   ACCRUAL: 'fact_accrual',
   PO_SERVICE: 'fact_po_service_line',
+  MATISSUE: 'fact_material_issue',
+  MATPO: 'fact_po_material_line',
   MASTER: null, // writes dimensions, not facts
+  MATLIST: null, // updates dim_material (group, type, unit), no fact
 };
 
 /** The projects a batch's posted rows actually belong to. */
@@ -1163,6 +1347,10 @@ export function deleteBatch(batchId: number): void {
     db.prepare('DELETE FROM fact_service_line WHERE import_batch_id = ?').run(batchId);
     db.prepare('DELETE FROM service_line_snapshot WHERE import_batch_id = ?').run(batchId);
     db.prepare('DELETE FROM fact_po_service_line WHERE import_batch_id = ?').run(batchId);
+    db.prepare('DELETE FROM fact_material_issue WHERE import_batch_id = ?').run(batchId);
+    db.prepare('DELETE FROM fact_po_material_line WHERE import_batch_id = ?').run(batchId);
+    db.prepare('DELETE FROM fact_order_line WHERE import_batch_id = ?').run(batchId);
+    db.prepare('DELETE FROM fact_accrual WHERE import_batch_id = ?').run(batchId);
     db.prepare('DELETE FROM stg_row WHERE import_batch_id = ?').run(batchId);
     db.prepare(`UPDATE import_batch SET status = 'POSTED', superseded_by = NULL
                 WHERE superseded_by = ? AND status = 'SUPERSEDED'`).run(batchId);

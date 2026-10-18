@@ -241,9 +241,63 @@ export async function makeCertificateFile(path: string, month2 = false): Promise
   await wb.xlsx.writeFile(path);
 }
 
+/**
+ * A small ZSCPROG01 file for the tool's cut-off and line rules (one PO line,
+ * 5000001 item 10 / package 1 / line 1, certified at 1000):
+ *  - C1 Jan   100 x 1000 = 100,000, Normal: sets the PO line's certified rate
+ *  - C2 Feb   paid-80% line: qty 50, amount 40,000 -> Adjustment, qty 40
+ *  - C3 Feb   hold release: qty 0, amount 5,000 -> Adjustment, qty 5
+ *  - C4 Feb   re-price to 0.10: qty 100, amount 2,000 -> Adjustment, qty 2 (at 1000, not 0.10)
+ *  - C5       approved but undated, amount 7,000        -> Pending, No date
+ *  - C6 Mar   dated 2026-03-05, amount 3,000            -> Pending, After cut date (cut 2026-02-28)
+ *  - C7 Feb   not approved, amount 4,000                -> Pending, Not approved
+ *  - C0 Opening balance, item 20, amount 10,000
+ */
+export async function makeScRulesFile(path: string): Promise<void> {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Data');
+  ws.addRow(['Plnt', 'Profit Ctr', 'Invoice Serial (new)', 'Date', 'Pur. Doc.',
+    'Account Number of Supplier', 'Supplier', 'Character 1', 'Flag', 'DocumentNo', 'Item', 'Number',
+    'Line', 'Gross Price', 'Service', 'Short Text 1', 'Tx', 'نوع العقد', 'Total Quantity',
+    'Previous Quantity', 'Current Quantity', 'Progress %', 'VAT Current', 'SC Work Current Cost',
+    'Entry Sh.', 'G/L Acct', 'WBS Element', 'Description']);
+  // serial, date, approved, flag, docno, item, price, qty, amount
+  type R = [string, string, string, string, string, string, number, number, number];
+  const rows: R[] = [
+    ['C1', '2026-01-10', 'X', '', 'D1', '10', 1000, 100, 100000],
+    ['C2', '2026-02-10', 'X', '', 'D2', '10', 1000, 50, 40000],
+    ['C3', '2026-02-12', 'X', '', 'D3', '10', 1000, 0, 5000],
+    ['C4', '2026-02-14', 'X', '', 'D4', '10', 0.1, 100, 2000],
+    ['C5', '', 'X', '', 'D5', '10', 1000, 7, 7000],
+    ['C6', '2026-03-05', 'X', '', 'D6', '10', 1000, 3, 3000],
+    ['C7', '2026-02-20', '', '', 'D7', '10', 1000, 4, 4000],
+    ['C0', '2025-12-31', 'X', 'X', 'D0', '20', 500, 20, 10000],
+  ];
+  for (const [serial, date, appr, flag, doc, item, price, qty, amt] of rows) {
+    ws.addRow(['P300', 'PC1', serial, date, '5000001', 'Nile Builders', 'V020', appr, flag, doc, item, '1', '1',
+      price, 'S0302', 'Concrete  C30', 'P0', 'A1', qty, 0, qty, 0, 0, amt, '', '30501100', 'P-300.A', 'DIV - TEST']);
+  }
+  await wb.xlsx.writeFile(path);
+}
+
+/** ZSCSRV1 for the rules fixture: PO 5000001, whose first line carries a Type of Works (padded, blank on line 2). */
+export async function makeScRulesPoFile(path: string): Promise<void> {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Data');
+  ws.addRow(['Purchase Order', 'PO item', 'PO Service Line no.', 'PO Service Code', 'Service Short Text',
+    'Service Unit Price', 'PO Service UOM', 'PO Service Material Group', 'PO Service Material Group Description',
+    'Subcontractor', 'Subcontractor Name', 'Type of Works for PO', 'Type of Contract (Include/Exclude VAT)',
+    'PO Service Qty', 'PO Service Price', 'Total Qty Received', 'Total Qty Accepted', 'Total Cost']);
+  ws.addRow(['5000001', '00010', '1', 'S0302', 'Concrete  C30', 1000, 'M3', 'SC03', 'Concrete works',
+    'V020', 'Nile Builders', '', 'Exclude VAT', 500, 500000, 140, 130, 140000]);
+  ws.addRow(['5000001', '00020', '1', 'S0302', 'Concrete  C30', 500, 'M3', 'SC03', 'Concrete works',
+    'V020', 'Nile Builders', ' Civil works ', 'Exclude VAT', 500, 250000, 20, 20, 10000]);
+  await wb.xlsx.writeFile(path)
+}
+
 /** The ZSCPROG01 certificate lines above, amounts summed once (split not repeated). */
 export const CERT_TOTALS = {
-  month1: { total: 165_000, approved: 125_000, opening: 10_000, pending: 30_000, adjustments: -2_000, footer: 265_000 },
+  month1: { total: 165_000, approved: 125_000, opening: 10_000, pending: 30_000, adjustments: 10_000, footer: 265_000 },
 };
 
 /**
@@ -265,5 +319,90 @@ export async function makePoServiceFile(path: string): Promise<void> {
     'V010', 'Nile Builders', 'Civil', 'Exclude VAT', 200, 50000, 50, 50, 10000]);
   ws.addRow(['4600002', '00030', '1', 'S0901', 'Plaster', 114, 'M2', 'SC09', 'Finishes',
     'V011', 'Delta Finishes', 'Finishes', 'Include VAT', 1000, 114000, 120, 120, 10000]);
+  await wb.xlsx.writeFile(path);
+}
+
+/**
+ * MB51 (material documents) for project P-100, with the traps the real export has:
+ *  - SAP total row (no material) carrying the sum of EVERY row, the duplicate included;
+ *  - receipts (101) and transfers (301) mixed in with the issues;
+ *  - Z21, material issued to a subcontractor with deduction (project cost, type S);
+ *  - a zero-value owner-supplied line (valuation type CUSTOMER);
+ *  - the same document line twice (an export pasted twice), counted once;
+ *  - a 222 return (negative cost), a 551 scrap line, an unknown movement type;
+ *  - a line posted after the 2026-03-31 cut-off and a line with no posting date.
+ * Amounts are SAP-signed: an issue is negative.
+ */
+export async function makeMb51File(path: string): Promise<void> {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Data');
+  ws.addRow(['Material', 'Plant', 'Storage Location', 'Movement Type', 'Movement Type Text',
+    'Material Document', 'Material Doc.Item', 'Posting Date', 'Material Description', 'Material Doc. Year',
+    'Qty in unit of entry', 'Amt.in Loc.Cur.', 'Unit of Entry', 'Entry Date', 'Supplier', 'WBS Element',
+    'Order', 'Reservation', 'User Name', 'Document Header Text', 'Text', 'Valuation Type']);
+  const row = (mat: string, mvt: string, text: string, doc: string, item: string, date: string | null,
+               desc: string, qty: number, amt: number, unit: string, supplier = '', valuation = '') =>
+    [mat, 'P1', 'S001', mvt, text, doc, item, date ?? '', desc, '2026', qty, amt, unit,
+      date ?? '2026-01-02', supplier, 'P-100.MEC.01', '', '', 'USER1', '', '', valuation];
+  const CEM = 'Portland Cement 42.5N', STL = 'Rebar 16mm', PIPE = 'Steel pipe 6in';
+  ws.addRow(row('MAT-CEM-01', '221', 'GI for project', '4900000001', '1', '2026-01-15', CEM, -100, -80000, 'TON'));
+  ws.addRow(row('MAT-CEM-01', '221', 'GI for project', '4900000002', '1', '2026-02-20', CEM, -300, -250000, 'TON'));
+  ws.addRow(row('MAT-CEM-01', '222', 'RE for project', '4900000003', '1', '2026-03-05', CEM, 60, 50000, 'TON'));
+  ws.addRow(row('MAT-STL-02', '221', 'GI for project', '4900000004', '1', '2026-02-10', STL, -20, -120000, 'TON'));
+  ws.addRow(row('MAT-STL-02', 'Z21', 'GI to subcontr. w/ deduction', '4900000005', '1', '2026-02-25', STL, -5, -30000, 'TON', 'V001'));
+  ws.addRow(row('MAT-STL-02', '101', 'GR goods receipt', '4900000006', '1', '2026-02-01', STL, 100, 500000, 'TON', 'V002'));
+  ws.addRow(row('MAT-STL-02', '301', 'Transfer plant to plant', '4900000007', '1', '2026-02-02', STL, -10, -50000, 'TON'));
+  ws.addRow(row('MAT-OWN-03', '221', 'GI for project', '4900000008', '1', '2026-02-12', 'Owner-supplied tiles', -50, 0, 'M2', '', 'CUSTOMER'));
+  ws.addRow(row('MAT-CEM-01', '221', 'GI for project', '4900000002', '1', '2026-02-20', CEM, -300, -250000, 'TON')); // pasted twice
+  ws.addRow(row('MAT-PIPE-04', '221', 'GI for project', '4900000009', '1', '2026-04-10', PIPE, -8, -40000, 'M'));    // after cut-off
+  ws.addRow(row('MAT-PIPE-04', '551', 'Scrapping', '4900000010', '1', '2026-03-20', PIPE, -1, -5000, 'M'));
+  ws.addRow(row('MAT-PIPE-04', '221', 'GI for project', '4900000011', '1', null, PIPE, -1, -1000, 'M'));             // no posting date
+  ws.addRow(row('MAT-PIPE-04', 'ZZ9', 'Unknown movement', '4900000012', '1', '2026-03-21', PIPE, -1, -2000, 'M'));
+  // SAP total row: no material, only the sum of the Amt column (all 13 rows above, duplicate included).
+  ws.addRow(['', '', '', '', '', '', '', '', '', '', '', -278000, '', '', '', '', '', '', '', '', '', '']);
+  await wb.xlsx.writeFile(path);
+}
+
+/** What makeMb51File must give (cost-signed, i.e. an issue is positive). */
+export const MB51_TOTALS = {
+  fileTotal: -278_000,             // the footer, as SAP signs it
+  issuesDatedNoCut: 475_000,       // 80,000 + 250,000 - 50,000 + 120,000 + 30,000 + 40,000 + 5,000
+  issuesDatedCut: 435_000,         // the same to 2026-03-31 (the 40,000 in April is held back)
+  issuesAll: 476_000,              // adds the undated 1,000
+  cji3Material: 200_000,           // makeCji3File's MAT-CEM-01: 250,000 - 50,000
+};
+
+/**
+ * ME2N purchase-order lines: a deleted line (L), a stock transport order from own
+ * stores (supplier "SBD1"), a price unit of 10, a service line with no material and
+ * SAP's total row. MAT-STL-02 sits on two groups, the more frequent one wins.
+ */
+export async function makeMe2nFile(path: string): Promise<void> {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Data');
+  ws.addRow(['Purchasing Document', 'Item', 'Document Date', 'Supplier/Supplying Plant', 'Plant', 'Material',
+    'Material Group', 'Short Text', 'Order Unit', 'Deletion Indicator', 'Order Quantity', 'Price Unit',
+    'Net Price', 'Net Order Value', 'Still to be delivered (qty)', 'Still to be delivered (value)',
+    'Still to be invoiced (qty)', 'Still to be invoiced (val.)']);
+  const V = '1000123 Gulf Materials';
+  ws.addRow(['4500100', '10', '2026-01-05', V, 'P1', 'MAT-CEM-01', 'M0001', 'Cement', 'TON', '', 400, 1, 800, 320000, 100, 80000, 0, 0]);
+  ws.addRow(['4500101', '10', '2026-02-05', V, 'P1', 'MAT-CEM-01', 'M0001', 'Cement', 'TON', '', 100, 1, 900, 90000, 0, 0, 20, 18000]);
+  ws.addRow(['4500102', '10', '2026-02-06', V, 'P1', 'MAT-CEM-01', 'M0001', 'Cement (cancelled)', 'TON', 'L', 10, 1, 5000, 50000, 0, 0, 0, 0]);
+  ws.addRow(['4500103', '10', '2026-02-07', 'SBD1', 'P1', 'MAT-STL-02', 'M030201', 'Rebar from stores', 'TON', '', 50, 1, 0, 0, 0, 0, 0, 0]);
+  ws.addRow(['4500104', '10', '2026-02-08', V, 'P1', 'MAT-STL-02', 'M030201', 'Rebar', 'TON', '', 20, 10, 6000, 12000, 0, 0, 0, 0]);
+  ws.addRow(['4500105', '10', '2026-02-09', V, 'P1', 'MAT-STL-02', 'M0302', 'Rebar', 'TON', '', 30, 1, 700, 21000, 30, 21000, 0, 0]);
+  ws.addRow(['4500106', '10', '2026-02-10', V, 'P1', '', 'S0401', 'Labour supply', 'LS', '', 1, 1, 5000, 5000, 1, 5000, 0, 0]);
+  ws.addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', 498000, '', '', '', '']);  // SAP total row
+  await wb.xlsx.writeFile(path);
+}
+
+/** MM60 material list: one material already grouped by ME2N, one only here, one new. */
+export async function makeMaterialListFile(path: string): Promise<void> {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Data');
+  ws.addRow(['Material', 'Material Description', 'Material Type', 'Material Group', 'Base Unit of Measure']);
+  ws.addRow(['MAT-CEM-01', 'Portland Cement 42.5N', 'ROH', 'XX999', 'TON']);   // ME2N already says M0001
+  ws.addRow(['MAT-PIPE-04', 'Steel pipe 6in', 'ROH', 'M2204', 'M']);          // on no PO line
+  ws.addRow(['MAT-NEW-05', 'Not issued yet', 'HALB', 'S0401', 'EA']);
   await wb.xlsx.writeFile(path);
 }

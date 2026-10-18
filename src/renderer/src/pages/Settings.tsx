@@ -1,408 +1,56 @@
-import { Fragment, useMemo, useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { useApp } from '../App';
 import { api, call } from '../lib/api';
-import type { CostType, CostTypeCombination, CostTypeDef } from '@shared/types';
+import { THEMES, applyTheme, getTheme, type ThemeId } from '../lib/theme';
 
-const money = (n: number) =>
-  n.toLocaleString(undefined, { maximumFractionDigits: 0 });
-
-const lookupType = (types: CostTypeDef[], code: string) => types.find((t) => t.code === code);
+/** Tokens shown as each theme tile's swatch strip, resolved inside that tile's own preview scope. */
+const THEME_SWATCHES = ['--surface', '--accent', '--ink-good', '--ink-bad', '--series-2'];
 
 /**
- * Assign a cost type with one click instead of a dropdown: a row of icon
- * buttons, filled in that type's colour when selected. `value` of '' or
- * undefined means "not set" — nothing is filled, and no clear button shows.
- * The buttons themselves come from dim_cost_type, not a hard-coded list, so a
- * type added from the manager above shows up here immediately.
+ * One tile per theme. Each tile sets data-theme-preview, which re-declares that
+ * theme's tokens for its subtree, so the tile is drawn in its own theme.
  */
-function CostTypePicker({ types, value, onChange, clearLabel = 'inherit' }: {
-  types: CostTypeDef[];
-  value: CostType | '';
-  onChange: (v: CostType | '') => void;
-  clearLabel?: string;
-}) {
+function AppearancePicker() {
+  const [active, setActive] = useState<ThemeId>(() => getTheme());
+  const pick = (id: ThemeId) => { applyTheme(id); setActive(id); };
   return (
-    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
-      {types.map((t) => {
-        const selected = value === t.code;
+    <div className="grid k4">
+      {THEMES.map((t) => {
+        const isActive = t.id === active;
         return (
-          <button key={t.code} type="button" title={t.label}
-                  onClick={() => onChange(selected ? '' : t.code)}
-                  style={{
-                    fontSize: 13, lineHeight: 1, padding: '4px 7px', borderRadius: 6,
-                    cursor: 'pointer', fontFamily: 'inherit',
-                    background: selected ? t.color : 'var(--surface-3)',
-                    border: `1px solid ${selected ? t.color : 'var(--border)'}`,
-                    filter: selected ? 'none' : 'grayscale(0.4) opacity(0.75)',
-                  }}>
-            {t.icon}
+          <button key={t.id} type="button" className="theme-tile" data-theme-preview={t.id}
+                  aria-pressed={isActive} onClick={() => pick(t.id)}>
+            <span className="theme-tile-head">
+              <span className="theme-tile-label">{t.label}</span>
+              <span className="badge mute plain">{t.mode}</span>
+              {isActive && <span className="badge info">Active</span>}
+            </span>
+            <span className="theme-tile-desc">{t.description}</span>
+            <span className="theme-swatches" aria-hidden="true">
+              {THEME_SWATCHES.map((v) => (
+                <span key={v} className="theme-swatch" style={{ background: `var(${v})` }} />
+              ))}
+            </span>
           </button>
         );
       })}
-      {value !== '' && (
-        <button type="button" title={`Clear — ${clearLabel}`} onClick={() => onChange('')}
-                style={{ fontSize: 10, padding: '4px 6px', borderRadius: 6, cursor: 'pointer',
-                         fontFamily: 'inherit', background: 'transparent', color: 'var(--text-3)',
-                         border: '1px solid var(--border)' }}>
-          ✕
-        </button>
-      )}
-    </div>
-  );
-}
-
-/** Small icon + label badge for showing a resolved cost type, not picking one. */
-function CostTypeBadge({ types, type }: { types: CostTypeDef[]; type: string }) {
-  const meta = lookupType(types, type);
-  if (!meta) {
-    return <span className="faint mono">{type}</span>;
-  }
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600,
-      color: meta.color, background: `${meta.color}22`, border: `1px solid ${meta.color}55`,
-      borderRadius: 5, padding: '2px 8px', whiteSpace: 'nowrap',
-    }}>
-      <span>{meta.icon}</span>{meta.label}
-    </span>
-  );
-}
-
-interface CostTypeGroup {
-  type: CostType | 'UNMAPPED';
-  rows: CostTypeCombination[];
-  postings: number;
-  amount: number;
-}
-
-/** GL description if the file gave one, falling back to the code alone. */
-const glLabel = (c: { cost_element_code: string; cost_element_name?: string | null }) =>
-  c.cost_element_name ? `${c.cost_element_name} (${c.cost_element_code})` : c.cost_element_code;
-
-/**
- * Group combinations by their current cost type — UNMAPPED first, since that
- * is the group needing attention — with the GL + document-type combinations
- * inside each sorted by GL description, not GL code. Purely a view of the
- * server's own truth: every allocation here is saved the moment it is made,
- * so there is no separate "pending" state to also account for.
- */
-function groupByCostType(combos: CostTypeCombination[], types: CostTypeDef[]): CostTypeGroup[] {
-  const map = new Map<string, CostTypeGroup>();
-  for (const c of combos) {
-    const key = c.resolved_cost_type ?? 'UNMAPPED';
-    const g = map.get(key) ?? { type: key, rows: [], postings: 0, amount: 0 };
-    g.rows.push(c);
-    g.postings += c.postings;
-    g.amount += c.amount;
-    map.set(key, g);
-  }
-  for (const g of map.values()) {
-    g.rows.sort((a, b) =>
-      glLabel(a).localeCompare(glLabel(b)) || a.document_type.localeCompare(b.document_type));
-  }
-  const order = ['UNMAPPED', ...types.map((t) => t.code)];
-  return [...map.values()].sort((a, b) => order.indexOf(a.type) - order.indexOf(b.type));
-}
-
-type AllocateFn = (items: { cost_element_code: string; document_type: string; cost_type: CostType | null }[]) => void;
-
-/**
- * The allocation grid as a pivot: one collapsible row per cost type, its GL +
- * document-type combinations nested beneath, sorted by GL description so the
- * list reads by what the account means rather than its number. Every picker
- * here — a single row's or a whole group's — saves the instant it is clicked;
- * the row reappears under its new group as soon as the save round-trips.
- */
-function GroupedAllocationTable({ combos, types, savingKeys, allocate, comboKey }: {
-  combos: CostTypeCombination[];
-  types: CostTypeDef[];
-  savingKeys: Set<string>;
-  allocate: AllocateFn;
-  comboKey: (c: { cost_element_code: string; document_type: string }) => string;
-}) {
-  const groups = useMemo(() => groupByCostType(combos, types), [combos, types]);
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  const [allCollapsed, setAllCollapsed] = useState(true);
-
-  const isOpen = (type: string) => collapsed[type] !== undefined ? !collapsed[type] : !allCollapsed;
-  const toggle = (type: string) => setCollapsed((c) => ({ ...c, [type]: isOpen(type) }));
-  const expandAll = () => { setAllCollapsed(false); setCollapsed({}); };
-  const collapseAll = () => { setAllCollapsed(true); setCollapsed({}); };
-
-  return (
-    <div className="table-wrap">
-      <div className="row" style={{ marginBottom: 8, gap: 8 }}>
-        <button className="btn sm" onClick={expandAll}>Expand all</button>
-        <button className="btn sm" onClick={collapseAll}>Collapse all</button>
-        <span className="faint" style={{ fontSize: 11, alignSelf: 'center' }}>
-          {combos.length} combination{combos.length === 1 ? '' : 's'} across {groups.length} cost type{groups.length === 1 ? '' : 's'}
-        </span>
-      </div>
-      <table>
-        <thead>
-          <tr>
-            <th style={{ width: 24 }}></th>
-            <th>Cost type / GL</th>
-            <th>Doc type</th>
-            <th style={{ textAlign: 'right' }}>Postings</th>
-            <th style={{ textAlign: 'right' }}>Amount</th>
-            <th style={{ width: 150 }}>Now</th>
-            <th style={{ width: 240 }}>Allocate</th>
-          </tr>
-        </thead>
-        <tbody>
-          {groups.length === 0 && (
-            <tr><td colSpan={7}><div className="empty">No actual cost loaded yet.</div></td></tr>
-          )}
-          {groups.map((g) => {
-            const open = isOpen(g.type);
-            const groupSaving = g.rows.some((r) => savingKeys.has(comboKey(r)));
-            return (
-              <Fragment key={g.type}>
-                <tr style={{ background: 'var(--surface-2)', cursor: 'pointer' }}
-                    onClick={() => toggle(g.type)}>
-                  <td className="faint" style={{ textAlign: 'center' }}>{open ? '▾' : '▸'}</td>
-                  <td colSpan={2}>
-                    {g.type === 'UNMAPPED'
-                      ? <span className="faint mono" style={{ fontWeight: 700 }}>UNMAPPED</span>
-                      : <CostTypeBadge types={types} type={g.type} />}
-                    <span className="faint" style={{ fontSize: 11, marginLeft: 8 }}>
-                      {g.rows.length} GL/doc-type combination{g.rows.length === 1 ? '' : 's'}
-                    </span>
-                    {groupSaving && <span className="faint" style={{ fontSize: 10, marginLeft: 8 }}>saving…</span>}
-                  </td>
-                  <td className="mono" style={{ textAlign: 'right' }}>{g.postings.toLocaleString()}</td>
-                  <td className="mono" style={{ textAlign: 'right' }}>{money(g.amount)}</td>
-                  <td></td>
-                  <td onClick={(e) => e.stopPropagation()}
-                      style={groupSaving ? { opacity: .5, pointerEvents: 'none' } : undefined}>
-                    <CostTypePicker types={types} value={g.type === 'UNMAPPED' ? '' : g.type} clearLabel="per-row"
-                      onChange={(v) => allocate(g.rows.map((r) => ({
-                        cost_element_code: r.cost_element_code, document_type: r.document_type,
-                        cost_type: v || null,
-                      })))} />
-                  </td>
-                </tr>
-                {open && g.rows.map((c) => {
-                  const key = comboKey(c);
-                  const saving = savingKeys.has(key);
-                  return (
-                    <tr key={key}>
-                      <td></td>
-                      <td className="mono" style={{ paddingLeft: 20 }} title={c.cost_element_code}>
-                        {glLabel(c)}
-                      </td>
-                      <td className="mono faint">{c.document_type || '(none)'}</td>
-                      <td className="mono" style={{ textAlign: 'right' }}>{c.postings.toLocaleString()}</td>
-                      <td className="mono" style={{ textAlign: 'right' }}>{money(c.amount)}</td>
-                      <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          {c.resolved_cost_type
-                            ? <CostTypeBadge types={types} type={c.resolved_cost_type} />
-                            : <span className="faint mono">UNMAPPED</span>}
-                          {!c.assigned_cost_type && c.resolved_cost_type && (
-                            <span className="faint" style={{ fontSize: 10 }}>(pattern)</span>
-                          )}
-                          {saving && <span className="faint" style={{ fontSize: 10 }}>saving…</span>}
-                        </div>
-                      </td>
-                      <td style={saving ? { opacity: .5, pointerEvents: 'none' } : undefined}>
-                        <CostTypePicker types={types} value={c.assigned_cost_type ?? ''}
-                          onChange={(v) => allocate([{
-                            cost_element_code: c.cost_element_code, document_type: c.document_type,
-                            cost_type: v || null,
-                          }])} />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </Fragment>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-/**
- * Manage the cost types themselves — rename, re-icon, re-colour, add, or (for
- * anything the user added) delete. The six built-in types can be edited but
- * not removed: the account-range rules and a lot of history name them by
- * code, and OTHER is the resolver's catch-all.
- */
-function CostTypeManager({ types, onCreate, onUpdate, onDelete, busy }: {
-  types: CostTypeDef[];
-  onCreate: (input: { label: string; icon: string; color: string }) => void;
-  onUpdate: (input: { code: string; label: string; icon: string; color: string }) => void;
-  onDelete: (code: string) => void;
-  busy: boolean;
-}) {
-  const [editingCode, setEditingCode] = useState<string | null>(null);
-  const [draft, setDraft] = useState({ label: '', icon: '', color: '' });
-  const [newType, setNewType] = useState({ label: '', icon: '🏷️', color: '#8fa8f0' });
-
-  const startEdit = (t: CostTypeDef) => {
-    setEditingCode(t.code);
-    setDraft({ label: t.label, icon: t.icon, color: t.color });
-  };
-  const saveEdit = () => {
-    if (!editingCode) return;
-    onUpdate({ code: editingCode, ...draft });
-    setEditingCode(null);
-  };
-
-  return (
-    <div className="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th style={{ width: 60 }}>Icon</th>
-            <th>Name</th>
-            <th style={{ width: 90 }}>Colour</th>
-            <th style={{ width: 90 }}>Kind</th>
-            <th style={{ width: 170 }}></th>
-          </tr>
-        </thead>
-        <tbody>
-          {types.map((t) => {
-            const editing = editingCode === t.code;
-            return (
-              <tr key={t.code}>
-                <td style={{ textAlign: 'center', fontSize: 16 }}>
-                  {editing
-                    ? <input value={draft.icon} style={{ width: 44, textAlign: 'center' }}
-                             onChange={(e) => setDraft((d) => ({ ...d, icon: e.target.value }))} />
-                    : t.icon}
-                </td>
-                <td>
-                  {editing
-                    ? <input value={draft.label} style={{ width: '100%' }}
-                             onChange={(e) => setDraft((d) => ({ ...d, label: e.target.value }))} />
-                    : <CostTypeBadge types={types} type={t.code} />}
-                </td>
-                <td>
-                  {editing
-                    ? <input type="color" value={draft.color}
-                             onChange={(e) => setDraft((d) => ({ ...d, color: e.target.value }))} />
-                    : <span style={{ display: 'inline-block', width: 18, height: 18, borderRadius: 4,
-                                      background: t.color, verticalAlign: 'middle' }} />}
-                </td>
-                <td className="faint" style={{ fontSize: 11 }}>{t.is_system ? 'Built-in' : 'Custom'}</td>
-                <td>
-                  {editing ? (
-                    <div className="row" style={{ gap: 6 }}>
-                      <button className="btn sm primary" onClick={saveEdit} disabled={busy}>Save</button>
-                      <button className="btn sm ghost" onClick={() => setEditingCode(null)} disabled={busy}>Cancel</button>
-                    </div>
-                  ) : (
-                    <div className="row" style={{ gap: 6 }}>
-                      <button className="btn sm" onClick={() => startEdit(t)} disabled={busy}>Edit</button>
-                      {!t.is_system && (
-                        <button className="btn sm ghost" onClick={() => onDelete(t.code)} disabled={busy}>Delete</button>
-                      )}
-                    </div>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-          <tr>
-            <td style={{ textAlign: 'center' }}>
-              <input value={newType.icon} style={{ width: 44, textAlign: 'center' }}
-                     onChange={(e) => setNewType((s) => ({ ...s, icon: e.target.value }))} />
-            </td>
-            <td>
-              <input placeholder="New cost type name" style={{ width: '100%' }} value={newType.label}
-                     onChange={(e) => setNewType((s) => ({ ...s, label: e.target.value }))} />
-            </td>
-            <td>
-              <input type="color" value={newType.color}
-                     onChange={(e) => setNewType((s) => ({ ...s, color: e.target.value }))} />
-            </td>
-            <td className="faint" style={{ fontSize: 11 }}>Custom</td>
-            <td>
-              <button className="btn sm primary" disabled={busy || !newType.label.trim()}
-                      onClick={() => { onCreate(newType); setNewType({ label: '', icon: '🏷️', color: '#8fa8f0' }); }}>
-                + Add
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
     </div>
   );
 }
 
 export function Settings() {
-  const { projects, refresh } = useApp();
+  const { projects, refresh, touch, devTools, setDevTools } = useApp();
   const [info, setInfo] = useState<{ version: string; dbPath: string; userData: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<{
+    projectKey: number; mode: 'clear' | 'delete'; typed: string; footprint: { lines: number; files: number } | null;
+  } | null>(null);
   const [form, setForm] = useState({ project_code: '', project_name: '', client_name: '', currency_code: 'USD', contract_value: '' });
-
-  const [types, setTypes] = useState<CostTypeDef[]>([]);
-  const [combos, setCombos] = useState<CostTypeCombination[]>([]);
-  const [savingKeys, setSavingKeys] = useState<Set<string>>(new Set());
-
-  const comboKey = (c: { cost_element_code: string; document_type: string }) =>
-    `${c.cost_element_code} ${c.document_type}`;
-
-  const loadCostTypes = async () => {
-    const c = await api.costTypes.combinations();
-    if (c.ok) setCombos(c.data);
-  };
-  const loadTypes = async () => {
-    const r = await api.costTypes.types();
-    if (r.ok) setTypes(r.data);
-  };
-
-  /**
-   * Every allocation saves the instant it is picked — no separate save step.
-   * Combinations reload from the server afterwards rather than being patched
-   * in place, so the "Now" badge and which pattern a cleared row falls back
-   * to are always the server's real answer, not a guess made in the browser.
-   */
-  const allocate: AllocateFn = (items) => {
-    const keys = items.map(comboKey);
-    setSavingKeys((s) => new Set([...s, ...keys]));
-    setError(null);
-    (async () => {
-      try {
-        await call(api.costTypes.assign(items));
-        await loadCostTypes();
-      } catch (e) {
-        setError((e as Error).message);
-      } finally {
-        setSavingKeys((s) => { const n = new Set(s); keys.forEach((k) => n.delete(k)); return n; });
-      }
-    })();
-  };
-
-  const createType = (input: { label: string; icon: string; color: string }) => guard(async () => {
-    setTypes(await call(api.costTypes.typeCreate(input)));
-    setNote(`Added "${input.label}" as a cost type.`);
-  });
-  const updateType = (input: { code: string; label: string; icon: string; color: string }) => guard(async () => {
-    setTypes(await call(api.costTypes.typeUpdate(input)));
-    setNote(`"${input.label}" updated.`);
-  });
-  const deleteType = (code: string) => guard(async () => {
-    setTypes(await call(api.costTypes.typeDelete(code)));
-    setNote('Cost type removed.');
-  });
-
-  const exportMapping = () => guard(async () => {
-    const path = await call(api.costTypes.exportMapping());
-    setNote(path ? `Exported to ${path} — grouped by cost type, expand/collapse in Excel's own outline.`
-      : 'Export cancelled.');
-  });
 
   useEffect(() => {
     api.app.info().then((r) => { if (r.ok) setInfo(r.data); });
-    loadTypes();
-    loadCostTypes();
   }, []);
 
   const guard = async (fn: () => Promise<void>) => {
@@ -421,6 +69,27 @@ export function Settings() {
     setNote('Project created.');
   });
 
+  const askRemove = (projectKey: number, mode: 'clear' | 'delete') => {
+    setError(null); setNote(null);
+    setPending({ projectKey, mode, typed: '', footprint: null });
+    api.projects.footprint(projectKey).then((r) => {
+      if (r.ok) setPending((cur) => (cur && cur.projectKey === projectKey ? { ...cur, footprint: r.data } : cur));
+    });
+  };
+
+  const confirmRemove = () => guard(async () => {
+    if (!pending) return;
+    const code = projects.find((p) => p.project_key === pending.projectKey)?.project_code ?? '';
+    const res = await call(pending.mode === 'delete'
+      ? api.projects.remove(pending.projectKey)
+      : api.projects.clearData(pending.projectKey));
+    setPending(null);
+    await refresh();
+    touch();
+    setNote(`${pending.mode === 'delete' ? `Project ${code} deleted` : `Data of ${code} removed`}: `
+      + `${res.lines.toLocaleString()} lines, ${res.files} file${res.files === 1 ? '' : 's'}. Copy saved first at ${res.backupPath}`);
+  });
+
   const backup = () => guard(async () => {
     const path = await call(api.db.backup());
     setNote(path ? `Backed up to ${path}` : 'Backup cancelled.');
@@ -437,6 +106,15 @@ export function Settings() {
       {note && <div className="banner ok">{note}</div>}
 
       <div className="card">
+        <h3>Appearance</h3>
+        <p className="hint">
+          Layout theme for this computer. Charts keep the same meaning in every theme: blue is on
+          track, orange is over budget.
+        </p>
+        <AppearancePicker />
+      </div>
+
+      <div className="card">
         <h3>Database</h3>
         <p className="hint">
           Everything lives in one SQLite file. Copy it to move the whole warehouse to another machine.
@@ -445,37 +123,6 @@ export function Settings() {
         <div className="row">
           <button className="btn" onClick={backup} disabled={busy}>Back up now</button>
           <button className="btn" onClick={openDb} disabled={busy}>Open another database…</button>
-        </div>
-      </div>
-
-      <div className="card">
-        <h3>Cost types</h3>
-        <p className="hint">
-          The categories offered below in Allocate cost types. Rename or re-colour any of them, or
-          add a new one — it shows up in the picker immediately, nothing to reload. The six built-in
-          types can be edited but not deleted; anything added here can be removed once nothing is
-          allocated to it.
-        </p>
-        <CostTypeManager types={types} onCreate={createType} onUpdate={updateType} onDelete={deleteType} busy={busy} />
-      </div>
-
-      <div className="card">
-        <h3>Allocate cost types</h3>
-        <p className="hint">
-          Every combination of cost element and document type that actually occurs in the cost
-          already loaded — {combos.length} of them, grouped by their current cost type (UNMAPPED
-          first) with each GL listed by description, not code. Pick one and it saves immediately —
-          no re-import, nothing else to click — and the row moves into its new group as soon as
-          the save comes back; <em>inherit</em> leaves it to whatever the account's own pattern
-          already resolves to.
-        </p>
-
-        <GroupedAllocationTable combos={combos} types={types} savingKeys={savingKeys} allocate={allocate} comboKey={comboKey} />
-
-        <div className="row" style={{ marginTop: 10 }}>
-          <button className="btn" style={{ marginLeft: 'auto' }} onClick={exportMapping} disabled={busy}>
-            ⤓ Export to Excel
-          </button>
         </div>
       </div>
 
@@ -511,19 +158,69 @@ export function Settings() {
 
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Code</th><th>Name</th><th>Currency</th></tr></thead>
+            <thead><tr><th>Code</th><th>Name</th><th>Currency</th><th /></tr></thead>
             <tbody>
-              {projects.length === 0 && <tr><td colSpan={3}><div className="empty">No projects yet.</div></td></tr>}
+              {projects.length === 0 && <tr><td colSpan={4}><div className="empty">No projects yet.</div></td></tr>}
               {projects.map((p) => (
-                <tr key={p.project_key}>
-                  <td className="mono">{p.project_code}</td>
-                  <td>{p.project_name}</td>
-                  <td>{p.currency_code ?? '—'}</td>
-                </tr>
+                <Fragment key={p.project_key}>
+                  <tr>
+                    <td className="mono">{p.project_code}</td>
+                    <td>{p.project_name}</td>
+                    <td>{p.currency_code ?? '—'}</td>
+                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      <button className="btn sm" disabled={busy} onClick={() => askRemove(p.project_key, 'clear')}>Remove data…</button>{' '}
+                      <button className="btn sm danger" disabled={busy} onClick={() => askRemove(p.project_key, 'delete')}>Delete…</button>
+                    </td>
+                  </tr>
+                  {pending?.projectKey === p.project_key && (
+                    <tr className="confirm-row">
+                      <td colSpan={4}>
+                        <div className="confirm-box">
+                          <strong>
+                            {pending.mode === 'delete' ? `Delete project ${p.project_code}?` : `Remove all data of ${p.project_code}?`}
+                          </strong>
+                          <p className="hint" style={{ margin: '4px 0 8px' }}>
+                            {pending.footprint
+                              ? `${pending.footprint.lines.toLocaleString()} lines from ${pending.footprint.files} uploaded file${pending.footprint.files === 1 ? '' : 's'} will be removed`
+                              : 'Counting what will be removed…'}
+                            {pending.mode === 'delete'
+                              ? ', together with the project, its cut-off, work-package and MNL coding.'
+                              : '. The project, its cut-off, work-package and MNL coding stay, ready for new uploads.'}
+                            {' '}A file that also carries another project keeps that project's lines. A copy of the database
+                            is saved first, so this can be undone by opening that copy.
+                          </p>
+                          <div className="row">
+                            <label className="field"><span>Type {p.project_code} to confirm</span>
+                              <input value={pending.typed} autoFocus style={{ width: 180 }}
+                                     onChange={(e) => setPending({ ...pending, typed: e.target.value })} />
+                            </label>
+                            <button className="btn danger" disabled={busy || pending.typed.trim() !== p.project_code}
+                                    onClick={confirmRemove}>
+                              {pending.mode === 'delete' ? 'Delete project' : 'Remove data'}
+                            </button>
+                            <button className="btn" disabled={busy} onClick={() => setPending(null)}>Cancel</button>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               ))}
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div className="card">
+        <h3>Developer tools</h3>
+        <p className="hint">
+          Analysis, Pivot builder, Query library, Schema diagram and Data lineage — the tools used to build and
+          check the app. The monthly routine does not need them, so they are out of the menu unless switched on.
+        </p>
+        <label className="row" style={{ gap: 8, cursor: 'pointer' }}>
+          <input type="checkbox" checked={devTools} onChange={(e) => setDevTools(e.target.checked)} />
+          <span>Show developer tools in the menu</span>
+        </label>
       </div>
 
       <div className="card">

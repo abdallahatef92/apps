@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, call } from '../lib/api';
 import { buildExportSvg, rasterizeSvgToPng, useGraphCanvas } from '../components/GraphCanvas';
+import { inkOn, useThemeTokens } from '../lib/tokens';
 import type { SchemaDescription, SchemaTable } from '@shared/types';
 
 /**
@@ -9,36 +10,38 @@ import type { SchemaDescription, SchemaTable } from '@shared/types';
  * into "Other" rather than being dropped, so a future migration's table still
  * shows up.
  *
- * Colours are literal hex (matching the tokens in styles.css) rather than
- * var(--…) — the exported SVG/PNG is a standalone document with no access to
- * the app's stylesheet, so anything drawn on screen must already be a value
+ * Colours are theme tokens resolved to concrete values (useThemeTokens) rather
+ * than var(--…) — the exported SVG/PNG is a standalone document with no access
+ * to the app's stylesheet, so anything drawn on screen must already be a value
  * that survives export unchanged.
  */
-const COLORS = {
-  surface: '#121822', surface2: '#172030', border: '#223047', borderSoft: '#1a2433',
-  text: '#eef3f8', text2: '#a9b7c7', text3: '#6f8195', accent: '#3987e5',
-};
-const GROUPS: { label: string; color: string; tables: string[] }[] = [
+const TOKENS = {
+  surface: '--surface', surface2: '--surface-2', border: '--border',
+  text: '--text', text2: '--text-2', text3: '--text-3', accent: '--accent',
+  s1: '--series-1', s2: '--series-2', s3: '--series-3', s4: '--series-4', s7: '--series-7',
+} as const;
+type ColorKey = keyof typeof TOKENS;
+const GROUPS: { label: string; color: ColorKey; tables: string[] }[] = [
   {
-    label: 'Lineage & staging', color: '#d95926',
+    label: 'Lineage & staging', color: 's2',
     tables: ['source_system', 'report_definition', 'module_type', 'import_batch',
              'stg_row', 'column_mapping', 'value_mapping'],
   },
   {
-    label: 'Dimensions', color: '#3987e5',
+    label: 'Dimensions', color: 's1',
     tables: ['dim_date', 'dim_period', 'dim_currency', 'dim_project', 'dim_wbs',
              'dim_cost_element', 'dim_cost_type', 'dim_vendor', 'dim_scenario'],
   },
   {
-    label: 'Facts', color: '#199e70',
+    label: 'Facts', color: 's3',
     tables: ['fact_actual', 'fact_budget', 'fact_forecast', 'fact_service_line', 'fact_order_line'],
   },
   {
-    label: 'Library & admin', color: '#c98500',
+    label: 'Library & admin', color: 's4',
     tables: ['cost_type_rule', 'query_library', 'query_run_log', 'app_setting'],
   },
 ];
-const OTHER_COLOR = '#9085e9';
+const OTHER_COLOR: ColorKey = 's7';
 
 const COL_WIDTH = 250;
 const COL_GAP = 90;
@@ -56,6 +59,7 @@ export function SchemaDiagram() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [savedTo, setSavedTo] = useState<string | null>(null);
+  const COLORS = useThemeTokens(TOKENS);
 
   useEffect(() => {
     call(api.schema.describe()).then(setSchema).catch((e) => setError((e as Error).message));
@@ -221,7 +225,8 @@ export function SchemaDiagram() {
             {schema.tables.map((t) => {
               const r = layout.rects.get(t.name);
               if (!r) return null;
-              const groupColor = GROUPS[r.group]?.color ?? OTHER_COLOR;
+              const groupColor = COLORS[GROUPS[r.group]?.color ?? OTHER_COLOR];
+              const headerInk = inkOn(groupColor, COLORS.text, COLORS.surface);
               const dim = search.trim() && !matches(t);
               const isSelected = selected === t.name;
               const isNeighbor = selected != null && !isSelected && layout.edges.some(
@@ -240,7 +245,7 @@ export function SchemaDiagram() {
                   <rect x={r.x} y={r.y} width={r.w} height={HEADER_H} rx={6} fill={groupColor} opacity={0.85} />
                   <rect x={r.x} y={r.y + HEADER_H - 6} width={r.w} height={6} fill={groupColor} opacity={0.85} />
                   <text x={r.x + 10} y={r.y + HEADER_H / 2 + 4} className="mono"
-                        fill={COLORS.text} fontWeight={700} fontSize={12}>{t.name}</text>
+                        fill={headerInk} fontWeight={700} fontSize={12}>{t.name}</text>
                   {t.columns.map((c, i) => {
                     const isFk = t.foreignKeys.some((fk) => fk.column === c.name);
                     const y = r.y + HEADER_H + i * ROW_H + ROW_H / 2 + 4;

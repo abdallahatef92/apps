@@ -38,7 +38,8 @@ export function buildLineage(reportDefinitionId: number): LineageResult {
   const factName = FACT_TABLE[report.module];
   const fact = factName
     ? { name: factName, isDimension: false }
-    : report.module === 'MASTER' ? { name: 'dim_wbs', isDimension: true } : null;
+    : report.module === 'MASTER' ? { name: 'dim_wbs', isDimension: true }
+    : report.module === 'MATLIST' ? { name: 'dim_material', isDimension: true } : null;
 
   const allViews = db.prepare(
     `SELECT name, sql FROM sqlite_master WHERE type = 'view' AND sql IS NOT NULL`,

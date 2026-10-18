@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '../App';
 import { api, call } from '../lib/api';
 import { periodOf, today } from '../lib/format';
@@ -22,19 +22,34 @@ const MODULES: { code: Module; label: string; hint: string }[] = [
   { code: 'FORECAST', label: 'Forecast', hint: 'ETC / EAC by period' },
   { code: 'SERVICE', label: 'Service lines', hint: 'Subcontractor detail behind a PO — reconciled against actuals, never added to them' },
   { code: 'PO_SERVICE', label: 'PO service lines (ZSCSRV1)', hint: 'The subcontract PO register: contract qty, price, unit and material group per service line' },
+  { code: 'MATISSUE', label: 'Material issues — SAP MB51', hint: 'Goods issues to the project: the source of material cost (cut off by posting date). Reconciled against CJI3 material, never added to it' },
+  { code: 'MATPO', label: 'Material POs — SAP ME2N', hint: 'Purchase order lines for materials: quantities, prices, open and to-invoice; gives each material its group and PO price' },
+  { code: 'MATLIST', label: 'Material list — SAP MM60/MB52', hint: 'Material master: material group, type and base unit for materials on no PO line' },
   { code: 'ORDER', label: 'Order settlement detail', hint: 'Internal-order cost line items — reconciled against a CJI3 settlement posting, never added to them' },
   { code: 'MASTER', label: 'WBS structure', hint: 'Project breakdown structure' },
   { code: 'ACCRUAL', label: 'Accrual', hint: 'Cost incurred but not yet posted in SAP — a manual estimate, not a SAP extract' },
 ];
 
-export function Upload({ onDone }: { onDone: () => void }) {
+/**
+ * The upload wizard. Opened from a Home card it is preset to that card's report (the module picker
+ * is hidden) and may start with a file already dropped on the card (initialPath skips the picker).
+ */
+export function Upload({ onDone, onNavigate, preset, initialPath, onClose }: {
+  onDone: () => void;
+  onNavigate?: (page: 'packages' | 'costtypes') => void;
+  preset?: { module: Module; reportId: number | null; title: string };
+  initialPath?: string | null;
+  onClose?: () => void;
+}) {
+  // Opened from a Home card: the file picker opens at once and, when the app can fill every step
+  // itself, the wizard runs straight to the review (fastTrack). It still always stops before posting.
   const { projects, projectKey } = useApp();
 
   const [step, setStep] = useState<Step>(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [module, setModule] = useState<Module>('ACTUAL');
+  const [module, setModule] = useState<Module>(preset?.module ?? 'ACTUAL');
   const [reports, setReports] = useState<ReportDefinition[]>([]);
   const [reportId, setReportId] = useState<number | null>(null);
 
@@ -66,7 +81,11 @@ export function Upload({ onDone }: { onDone: () => void }) {
 
   const moduleReports = reports.filter((r) => r.module === module);
   const selectedReport = reports.find((r) => r.report_definition_id === reportId) ?? null;
-  useEffect(() => { setReportId(moduleReports[0]?.report_definition_id ?? null); },
+  useEffect(() => {
+    const wanted = preset?.module === module && preset.reportId
+      && moduleReports.some((r) => r.report_definition_id === preset.reportId) ? preset.reportId : null;
+    setReportId(wanted ?? moduleReports[0]?.report_definition_id ?? null);
+  },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [module, reports.length]);
 
@@ -83,7 +102,68 @@ export function Upload({ onDone }: { onDone: () => void }) {
 
   const pickFile = () => guard(async () => {
     const path = await call(api.files.pick());
-    if (!path) return;
+    if (!path) { if (preset && step === 1 && !preview) onClose?.(); return; }
+    if (preset) await fastTrack(path); else await openPath(path);
+  });
+
+  const [tracked, setTracked] = useState(false);
+  /**
+   * The one-click path from a Home card: first sheet, detected data date (else today), the saved
+   * column mapping (else the suggestion), stage. Stops at the step that needs the user: the sheet
+   * step when the file cannot be read or staged, the mapping step when a required column is unmapped.
+   */
+  const fastTrack = async (path: string) => {
+    const p = await call(api.files.preview(path)) as FilePreview;
+    const sh = p.sheets[0];
+    const date = p.detectedDataDate ?? dataDate;
+    setPreview(p); setStaged(null); setPosted(null);
+    setSheetName(sh?.sheetName ?? ''); setHeaderRow(sh?.headerRow ?? 0);
+    setDataDate(date); setPeriod(periodOf(date));
+    if (!sh || !reportId) { setStep(2); return; }
+
+    const tf = await call(api.mapping.targets(module)) as TargetField[];
+    const saved = await call(api.mapping.load(reportId)) as ColumnMappingEntry[];
+    const map: Record<string, string> = { ...(await call(api.mapping.suggest(module, sh.columns))) };
+    for (const m of saved) if (m.source_column && sh.columns.includes(m.source_column)) map[m.target_field] = m.source_column;
+    let keys: string[] = [];
+    try { const k = JSON.parse(selectedReport?.detail_key_fields ?? '[]'); keys = Array.isArray(k) ? k.map(String) : []; } catch { keys = []; }
+    setTargets(tf); setMapping(map); setDetailKeys(keys);
+    if (tf.some((t) => t.required && !map[t.field])) {
+      setError('Some required columns could not be matched — map them, then continue.');
+      setStep(3); return;
+    }
+    try {
+      const result = await call(api.imports.stage({
+        filePath: p.filePath, fileName: p.fileName, fileHash: p.fileHash, fileSize: p.fileSize,
+        sheetName: sh.sheetName, headerRow: sh.headerRow ?? 0, module, reportDefinitionId: reportId,
+        dataDate: date, periodKey: periodOf(date) || null, projectKey: fileProject, scenarioKey: null,
+        notes: null, mapping: Object.entries(map).filter(([, c]) => !!c).map(([target_field, source_column]) => ({ target_field, source_column })),
+        saveMapping: true, detailKeyFields: keys,
+      })) as StageResult;
+      setStaged(result); setAllowDuplicate(false);
+      setStagedPreview(await call(api.imports.preview(result.importBatchId, 8)));
+      setTracked(true);
+      setStep(4);
+    } catch (e) {
+      setError(`${(e as Error).message} — check the sheet, data date and project, then continue.`);
+      setStep(2);
+    }
+  };
+
+  // Undo a fast-tracked staging to change the sheet, data date, project or mapping.
+  const adjust = () => guard(async () => {
+    if (staged) await call(api.imports.remove(staged.importBatchId));
+    setStaged(null); setTracked(false); setStep(2);
+  });
+
+  // Opened from a card's ↥ (no file yet): open the picker straight away.
+  const autoPicked = useRef(false);   // a ref, so a double-run effect (StrictMode) never opens two pickers
+  useEffect(() => {
+    if (preset && !initialPath && !autoPicked.current && reports.length > 0 && reportId) { autoPicked.current = true; pickFile(); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reports.length > 0 && !!reportId]);
+
+  const openPath = async (path: string) => {
     const p = await call(api.files.preview(path)) as FilePreview;
     setPreview(p);
     setSheetName(p.sheets[0]?.sheetName ?? '');
@@ -95,7 +175,17 @@ export function Upload({ onDone }: { onDone: () => void }) {
     setStaged(null);
     setPosted(null);
     setStep(2);
-  });
+  };
+
+  // A file dropped on a Home card: go straight to the sheet step once the report list is in.
+  const openedInitial = useRef(false);   // never stage the dropped file twice (StrictMode runs effects twice)
+  useEffect(() => {
+    if (initialPath && !openedInitial.current && reports.length > 0 && reportId) {
+      openedInitial.current = true;
+      guard(() => (preset ? fastTrack(initialPath) : openPath(initialPath)));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialPath, reports.length > 0 && !!reportId]);
 
   const goToMapping = () => guard(async () => {
     if (!sheet) throw new Error('Choose a sheet first.');
@@ -181,6 +271,12 @@ export function Upload({ onDone }: { onDone: () => void }) {
 
   return (
     <>
+      {preset && (
+        <div className="upload-head">
+          <div><span className="faint">Load into</span> <strong>{preset.title}</strong></div>
+          {onClose && <button className="btn sm" onClick={onClose}>← Back to the map</button>}
+        </div>
+      )}
       <div className="stepper">
         {STEPS.map((s) => (
           <div key={s.n} className={`step ${step === s.n ? 'active' : step > s.n ? 'done' : ''}`}>
@@ -195,15 +291,15 @@ export function Upload({ onDone }: { onDone: () => void }) {
       {/* ---------------- step 1 ---------------- */}
       {step === 1 && (
         <div className="card">
-          <h3>What are you loading?</h3>
-          <p className="hint">
+          <h3>{preset ? 'Choose the file' : 'What are you loading?'}</h3>
+          <p className="hint" style={preset ? { display: 'none' } : undefined}>
             Pick the module and the source report. Actual cost comes out of SAP in several
             different extracts — keeping them as separate sources is what lets the app track a
             data date per module.
           </p>
 
           <div className="row" style={{ marginBottom: 16 }}>
-            <label className="field">
+            <label className="field" style={preset ? { display: 'none' } : undefined}>
               <span>Module</span>
               <select value={module} onChange={(e) => setModule(e.target.value as Module)}>
                 {MODULES.map((m) => <option key={m.code} value={m.code}>{m.label}</option>)}
@@ -226,10 +322,9 @@ export function Upload({ onDone }: { onDone: () => void }) {
             <div className="banner info" style={{ marginBottom: 14 }}>{selectedReport.description}</div>
           )}
           {module === 'SERVICE' && (
-            <div className="banner warn" style={{ marginBottom: 14 }}>
-              Service lines are a sub-ledger of cost already posted in SAP. They are stored
-              separately and reconciled against actuals — loading them here will not change your
-              actual cost figures.
+            <div className="banner info" style={{ marginBottom: 14 }}>
+              Certificate lines replace the CJI3 subcontract postings of every PO they cover; the CJI3
+              amount is kept as a reconciliation check, never added.
             </div>
           )}
 
@@ -440,6 +535,14 @@ export function Upload({ onDone }: { onDone: () => void }) {
       {/* ---------------- step 4 ---------------- */}
       {step === 4 && staged && (
         <>
+          {tracked && !posted && (
+            <div className="banner info" style={{ marginBottom: 12 }}>
+              Read <strong>{sheetName}</strong> with data date <strong>{dataDate}</strong>
+              {fileProject ? <> for <strong>{projects.find((x) => x.project_key === fileProject)?.project_code}</strong></> : null}
+              {' '}and the saved column mapping. Check the result below, then post.
+              <button className="btn sm" style={{ marginLeft: 10 }} onClick={adjust} disabled={busy}>Change sheet, date or mapping</button>
+            </div>
+          )}
           <div className="grid k4" style={{ marginBottom: 16 }}>
             <div className="kpi">
               <div className="label">Rows read</div>
@@ -619,7 +722,13 @@ export function Upload({ onDone }: { onDone: () => void }) {
                 {busy ? <span className="spinner" /> : null} Post {staged.validCount.toLocaleString()} rows
               </button>
             )}
-            {posted && <button className="btn primary" onClick={reset}>Load another file</button>}
+            {posted && (
+              <>
+                <button className="btn primary" onClick={() => onNavigate?.('packages')}>Next: code the cost →</button>
+                <button className="btn" onClick={() => onNavigate?.('costtypes')}>Cost types</button>
+                <button className="btn" onClick={reset}>Load another file</button>
+              </>
+            )}
           </div>
         </>
       )}

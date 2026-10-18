@@ -1,4 +1,5 @@
-export type Module = 'ACTUAL' | 'BUDGET' | 'FORECAST' | 'COMMITMENT' | 'SERVICE' | 'MASTER' | 'ORDER' | 'ACCRUAL' | 'PO_SERVICE';
+export type Module = 'ACTUAL' | 'BUDGET' | 'FORECAST' | 'COMMITMENT' | 'SERVICE' | 'MASTER' | 'ORDER' | 'ACCRUAL' | 'PO_SERVICE'
+  | 'MATISSUE' | 'MATPO' | 'MATLIST';
 
 export interface QueryResult {
   columns: string[];
@@ -184,6 +185,69 @@ export interface BatchRow {
 
 export type IpcResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
+/** One project's cut-off and what it holds back (stored query CUTOFF_STATUS). */
+export interface CutoffStatus {
+  cutoff_date: string | null;         // ISO 'YYYY-MM-DD'
+  latest_posting_date: string | null; // newest posting date among posted cost lines (uncut)
+  earliest_posting_date: string | null; // oldest one (posting date, else period end) — the cut-off list starts here
+  lines_after_cutoff: number;         // posted cost lines held back by the cut-off
+  amount_after_cutoff: number;        // their cost amount
+}
+
+export type BuildStatus =
+  | 'Complete' | 'Behind cut-off' | 'Needs action' | 'Ready to load' | 'Waiting' | 'Optional' | 'Not available';
+
+/** One build step of the project (stored query BUILD_STATUS). */
+export interface BuildStepStatus {
+  step_code: string;
+  name: string;
+  group_label: string;
+  sort_order: number;
+  kind: 'project' | 'upload' | 'coding';
+  status: BuildStatus;
+  data_date: string | null;
+  latest_posting: string | null;
+  lines: number;
+  summary: string;
+  action_label: string | null;
+  action_target: 'upload' | 'packages' | 'costtypes' | 'settings' | null;
+  is_optional: number;
+  is_conditional: number;
+  has_data: number;
+  depends_on: string | null;   // 'B01, B04'
+  feeds: string | null;        // report page ids, comma separated
+  module: string | null;       // the upload module of an upload step
+  report_definition_id: number | null;  // the report its Home card opens the upload wizard on
+}
+
+/** One posted file of an upload step and the dates it covers on the project (stored query BUILD_TIMELINE). */
+export interface BuildTimelineBar {
+  step_code: string;
+  import_batch_id: number;
+  file_name: string | null;
+  data_date: string | null;
+  date_from: string | null;   // NULL = the file carries no dates (drawn at data_date)
+  date_to: string | null;
+  lines: number;
+}
+
+/** One line of a step's detail panel (stored query BUILD_CHECKS). */
+export interface BuildCheck {
+  step_code: string;
+  level: 'ok' | 'warn' | 'todo';
+  message: string;
+}
+
+/** Whether a report page can be built from what is loaded (stored query REPORT_READINESS). */
+export interface ReportReadiness {
+  report_page: string;
+  label: string;
+  status: 'Ready' | 'Builds with gaps' | 'Behind cut-off' | 'Waiting';
+  missing: string;
+  required_steps: string | null;   // 'B04,B11'
+  improves_steps: string | null;
+}
+
 export interface PivotField { key: string; label: string; column: string }
 export interface PivotMeasure { key: string; label: string; expr: string; format?: 'money' | 'count' }
 export interface PivotSource {
@@ -210,6 +274,8 @@ export interface VizSpec {
   reference?: string;
   referenceLabel?: string;
   diverging?: boolean;
+  /** bar fill for a one-sided bar chart (a CSS colour, not a column) */
+  fill?: string;
   color?: string;
   row?: string;
   col?: string;
@@ -231,6 +297,8 @@ export interface CostTypeDef {
   sort_order: number;
   /** Built-in types (the original six) can be renamed but not deleted. */
   is_system: number;
+  /** Resource category code printed in the workbooks: MAT, SUB, EQU, LAB or OTHER. */
+  mnl: 'MAT' | 'SUB' | 'EQU' | 'LAB' | 'OTHER';
 }
 
 /**
@@ -321,6 +389,15 @@ export interface MaterialPackageCombination {
   amount: number;
   resolved_work_package: string | null;
   assigned_work_package: WorkPackage | null;
+  /** SAP material-group tree (dim_material_group): family > division > group, with display labels and tree order. */
+  family: string;
+  family_label: string;
+  family_sort: number;
+  division_key: string;
+  division_label: string;
+  group_code: string;
+  group_label: string;
+  group_sort: number;
 }
 
 /** Result of bulk-applying a material_code -> work_package mapping read from an edited export. */
@@ -348,6 +425,17 @@ export interface ServicePackageCombination {
   amount: number;
   resolved_work_package: string | null;
   assigned_work_package: WorkPackage | null;
+  /** The service's MNL override (service_mnl); 'SUB' when none. LAB / EQU report under Labor / Equipment cost. */
+  mnl: ServiceMnl;
+}
+
+/** Resource category a subcontract service reports under: Subcontract (default), Labor or Equipment. */
+export type ServiceMnl = 'SUB' | 'LAB' | 'EQU';
+
+/** The service item an MNL override is set on (project + code + text, as for ServicePackageAssignment). */
+export interface ServiceMnlAssignment {
+  service_code: string;
+  service_text: string;
 }
 
 /** `work_package: null` removes the assignment, leaving the material unallocated. */

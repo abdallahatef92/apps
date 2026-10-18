@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import type { QueryResult } from '@shared/types';
-import { Tooltip, divergingColor, fmtCompact, fmtFull, useTooltip } from './chrome';
+import { Tooltip, divergingColor, divergingInk, fmtCompact, fmtFull, useTooltip } from './chrome';
 
 interface Props {
   result: QueryResult;
@@ -100,6 +100,8 @@ export function Treemap({ result, labelColumn, sizeColumn, colorColumn, codeColu
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={height} role="img">
         {tiles.map((t, i) => {
           const fill = colorColumn ? divergingColor(t.color, extent) : 'var(--series-1)';
+          // Label ink follows the fill's step, so it flips on a light theme's faint steps.
+          const ink = colorColumn ? divergingInk(t.color, extent) : 'var(--on-accent)';
           // Only label a tile with room for it; the tooltip covers the rest.
           const showLabel = t.w > 74 && t.h > 30;
           return (
@@ -119,10 +121,10 @@ export function Treemap({ result, labelColumn, sizeColumn, colorColumn, codeColu
                     fill={fill} rx={3} />
               {showLabel && (
                 <>
-                  <text x={t.x + 10} y={t.y + 20} fill="#fff" fontSize={11.5} fontWeight={600}>
+                  <text x={t.x + 10} y={t.y + 20} fill={ink} fontSize={11.5} fontWeight={600}>
                     {t.label.length > Math.floor(t.w / 7) ? `${t.label.slice(0, Math.floor(t.w / 7))}…` : t.label}
                   </text>
-                  <text x={t.x + 10} y={t.y + 35} fill="rgba(255,255,255,.75)" fontSize={10.5}>
+                  <text x={t.x + 10} y={t.y + 35} fill={ink} fillOpacity={0.75} fontSize={10.5}>
                     {fmtCompact(t.size)}
                   </text>
                 </>

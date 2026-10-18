@@ -1,18 +1,34 @@
-import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, ElementPackageAssignment, ExportDiagramRequest, IpcResult, LineageResult, MaterialImportResult, MaterialPackageAssignment, MaterialPackageCombination, OtherPackageCombination, PivotSource, SchemaDescription, ServicePackageAssignment, ServicePackageCombination, WorkPackageDef } from '@shared/types';
+import type { BuildCheck, BuildStepStatus, BuildTimelineBar, ReportReadiness, CostTypeAssignment, CostTypeCombination, CostTypeDef, CutoffStatus,ElementPackageAssignment, ExportDiagramRequest, IpcResult, LineageResult, MaterialImportResult, MaterialPackageAssignment, MaterialPackageCombination, OtherPackageCombination, PivotSource, SchemaDescription, ServiceMnl, ServiceMnlAssignment, ServicePackageAssignment, ServicePackageCombination, WorkPackageDef } from '@shared/types';
 
 // Shape exposed by the preload bridge.
 type Bridge = {
   app: { info(): Promise<IpcResult<{ version: string; dbPath: string; userData: string }>> };
   db: { open(): Promise<IpcResult<{ changed: boolean; dbPath: string }>>; backup(): Promise<IpcResult<string | null>> };
-  projects: { list(): Promise<IpcResult<any[]>>; create(p: unknown): Promise<IpcResult<{ project_key: number }>> };
+  projects: {
+    list(): Promise<IpcResult<any[]>>;
+    create(p: unknown): Promise<IpcResult<{ project_key: number }>>;
+    footprint(projectKey: number): Promise<IpcResult<{ lines: number; files: number }>>;
+    clearData(projectKey: number): Promise<IpcResult<{ backupPath: string; lines: number; files: number }>>;
+    remove(projectKey: number): Promise<IpcResult<{ backupPath: string; lines: number; files: number }>>;
+  };
   reports: { list(): Promise<IpcResult<any[]>> };
+  cutoff: {
+    get(projectKey: number): Promise<IpcResult<CutoffStatus>>;
+    set(projectKey: number, cutoffDate: string | null): Promise<IpcResult<{ ok: true }>>;
+  };
+  build: {
+    status(projectKey: number): Promise<IpcResult<BuildStepStatus[]>>;
+    checks(projectKey: number): Promise<IpcResult<BuildCheck[]>>;
+    timeline(projectKey: number): Promise<IpcResult<BuildTimelineBar[]>>;
+    readiness(projectKey: number): Promise<IpcResult<ReportReadiness[]>>;
+  };
   costTypes: {
     combinations(): Promise<IpcResult<CostTypeCombination[]>>;
     assign(items: CostTypeAssignment[]): Promise<IpcResult<{ assigned: number; cleared: number }>>;
     exportMapping(): Promise<IpcResult<string | null>>;
     types(): Promise<IpcResult<CostTypeDef[]>>;
     typeCreate(input: { label: string; icon: string; color: string }): Promise<IpcResult<CostTypeDef[]>>;
-    typeUpdate(input: { code: string; label: string; icon: string; color: string }): Promise<IpcResult<CostTypeDef[]>>;
+    typeUpdate(input: { code: string; label: string; icon: string; color: string; mnl?: string }): Promise<IpcResult<CostTypeDef[]>>;
     typeDelete(code: string): Promise<IpcResult<CostTypeDef[]>>;
   };
   workPackages: {
@@ -28,6 +44,7 @@ type Bridge = {
     importMaterialMapping(projectKey: number, filePath: string): Promise<IpcResult<MaterialImportResult>>;
     serviceCombinations(projectKey: number): Promise<IpcResult<ServicePackageCombination[]>>;
     assignService(projectKey: number, items: ServicePackageAssignment[]): Promise<IpcResult<{ assigned: number; cleared: number }>>;
+    assignServiceMnl(projectKey: number, items: ServiceMnlAssignment[], mnl: ServiceMnl | null): Promise<IpcResult<{ assigned: number; cleared: number }>>;
   };
   settings: {
     list(): Promise<IpcResult<{ key: string; value: string }[]>>;
@@ -36,7 +53,7 @@ type Bridge = {
   };
   freshness: { list(): Promise<IpcResult<any[]>> };
   batches: { list(limit?: number): Promise<IpcResult<any[]>>; issues(id: number, limit?: number): Promise<IpcResult<any[]>> };
-  files: { pick(title?: string): Promise<IpcResult<string | null>>; preview(p: string): Promise<IpcResult<any>> };
+  files: { pick(title?: string): Promise<IpcResult<string | null>>; preview(p: string): Promise<IpcResult<any>>; pathOf(file: File): string };
   mapping: {
     targets(m: string): Promise<IpcResult<any[]>>;
     suggest(m: string, cols: string[]): Promise<IpcResult<Record<string, string>>>;
@@ -71,6 +88,13 @@ type Bridge = {
   showItem(p: string): Promise<IpcResult<void>>;
   sc: {
     exportReport(projectKey: number): Promise<IpcResult<string | null>>;
+    /** The Subcontract Cost Report workbook as a view model (docs/port/workbook-view.md). */
+  };
+  material: {
+    exportReport(projectKey: number): Promise<IpcResult<string | null>>;
+  };
+  register: {
+    exportReport(projectKey: number, rowsBy: string | null, source: string | null): Promise<IpcResult<string | null>>;
   };
 };
 

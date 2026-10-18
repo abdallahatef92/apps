@@ -7,7 +7,7 @@ const SOURCE_BADGE: Record<string, string> = { ACTUAL: 'info', SERVICE: 'mute' }
 interface Props {
   result: QueryResult;
   maxHeight?: number;
-  /** Colour negative values red / positive green on these columns. */
+  /** Colour negative values orange / positive blue on these columns (never red/green). */
   signColumns?: string[];
   /** Render this column's value as a small badge instead of plain text. */
   badgeColumn?: string;
@@ -18,6 +18,23 @@ interface Props {
    */
   flagColumn?: string;
   flagLabel?: string;
+  /** Makes rows clickable (a master/detail table); the selected row is outlined. */
+  onRowClick?: (row: Record<string, unknown>) => void;
+  selectedRow?: Record<string, unknown> | null;
+  /** Group by this column initially (the user can still change it). */
+  defaultGroupBy?: string;
+  /** Keep groups in the order the query returned them instead of A-Z (a query that sorts by its own rule). */
+  keepGroupOrder?: boolean;
+  /** Columns kept in the rows (e.g. a drill-down key) but never shown, grouped or summed. */
+  hiddenColumns?: string[];
+  /** Header text per column, instead of the column name. */
+  columnLabels?: Record<string, string>;
+  /** Numeric columns that must not be summed into group / total rows (rates, percentages). */
+  noSumColumns?: string[];
+  /** Show a grand-total row even when the table is not grouped. */
+  totalRow?: boolean;
+  /** Hide the toolbar's row filter / column picker (a small summary table). */
+  compact?: boolean;
 }
 
 /**
@@ -28,11 +45,12 @@ interface Props {
  * already does, never a second source of truth for a number.
  */
 export function DataTable({
-  result, maxHeight = 520, signColumns = [], badgeColumn, flagColumn, flagLabel,
+  result, maxHeight = 520, signColumns = [], badgeColumn, flagColumn, flagLabel, onRowClick, selectedRow,
+  defaultGroupBy = '', keepGroupOrder = false, hiddenColumns, columnLabels, noSumColumns, totalRow = false, compact = false,
 }: Props) {
   const [sort, setSort] = useState<{ col: string; dir: 1 | -1 } | null>(null);
   const [filter, setFilter] = useState('');
-  const [groupBy, setGroupBy] = useState('');
+  const [groupBy, setGroupBy] = useState(defaultGroupBy);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [pickerOpen, setPickerOpen] = useState(false);
   const [hiddenCols, setHiddenCols] = useState<Set<string>>(new Set());
@@ -44,12 +62,15 @@ export function DataTable({
 
   const summable = useMemo(() => {
     const first = result.rows[0] ?? {};
-    return new Set(result.columns.filter((c) => isSummableColumn(c, first[c])));
-  }, [result]);
+    const skip = new Set(noSumColumns ?? []);
+    return new Set(result.columns.filter((c) => isSummableColumn(c, first[c]) && !skip.has(c)));
+  }, [result, noSumColumns]);
 
   // The flag column drives row styling only; it never appears as its own cell,
   // and it makes no sense to group or hide-toggle it either.
-  const displayColumns = flagColumn ? result.columns.filter((c) => c !== flagColumn) : result.columns;
+  const hidden = useMemo(() => new Set(hiddenColumns ?? []), [hiddenColumns]);
+  const displayColumns = result.columns.filter((c) => c !== flagColumn && !hidden.has(c));
+  const label = (c: string) => columnLabels?.[c] ?? c.replace(/_/g, ' ');
   const groupCandidates = useMemo(
     () => displayColumns.filter((c) => !numeric.has(c) && c !== badgeColumn),
     [displayColumns, numeric, badgeColumn],
@@ -83,21 +104,26 @@ export function DataTable({
       const list = byKey.get(key);
       if (list) list.push(r); else byKey.set(key, [r]);
     }
-    return [...byKey.entries()]
-      .sort((a, b) => a[0].localeCompare(b[0]))
+    const entries = [...byKey.entries()];
+    if (!keepGroupOrder || sort) entries.sort((a, b) => a[0].localeCompare(b[0]));
+    return entries
       .map(([key, groupRows]) => {
         const sums: Record<string, number> = {};
         for (const c of summable) sums[c] = groupRows.reduce((s, r) => s + (Number(r[c]) || 0), 0);
         return { key, rows: groupRows, sums };
       });
-  }, [groupBy, groupCandidates, rows, summable]);
+  }, [groupBy, groupCandidates, rows, summable, keepGroupOrder, sort]);
 
   const grandTotal = useMemo(() => {
-    if (!groups) return null;
     const sums: Record<string, number> = {};
-    for (const c of summable) sums[c] = groups.reduce((s, g) => s + (g.sums[c] ?? 0), 0);
+    if (groups) {
+      for (const c of summable) sums[c] = groups.reduce((s, g) => s + (g.sums[c] ?? 0), 0);
+      return sums;
+    }
+    if (!totalRow) return null;
+    for (const c of summable) sums[c] = rows.reduce((s, r) => s + (Number(r[c]) || 0), 0);
     return sums;
-  }, [groups, summable]);
+  }, [groups, summable, totalRow, rows]);
 
   const signs = new Set(signColumns);
   const toggleGroup = (key: string) => setCollapsedGroups((s) => ({ ...s, [key]: !s[key] }));
@@ -132,18 +158,18 @@ export function DataTable({
             <select value={groupBy} onChange={(e) => { setGroupBy(e.target.value); setCollapsedGroups({}); }}>
               <option value="">None</option>
               {groupCandidates.map((c) => (
-                <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>
+                <option key={c} value={c}>{label(c)}</option>
               ))}
             </select>
           </label>
         )}
-        <input
+        {!compact && <input
           placeholder="Filter rows…"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           style={{ width: 220 }}
-        />
-        <div style={{ position: 'relative' }}>
+        />}
+        {!compact && <div style={{ position: 'relative' }}>
           <button className="btn sm" onClick={() => setPickerOpen((v) => !v)}>Columns ▾</button>
           {pickerOpen && (
             <>
@@ -158,13 +184,13 @@ export function DataTable({
                              if (next.has(c)) next.delete(c); else next.add(c);
                              return next;
                            })} />
-                    {c.replace(/_/g, ' ')}
+                    {label(c)}
                   </label>
                 ))}
               </div>
             </>
           )}
-        </div>
+        </div>}
         <div className="spacer" />
         <span className="faint" style={{ fontSize: 12 }}>
           {rows.length.toLocaleString()} of {result.rowCount.toLocaleString()} rows · {result.ms} ms
@@ -185,7 +211,7 @@ export function DataTable({
                     setSort((s) => (s?.col === c ? { col: c, dir: s.dir === 1 ? -1 : 1 } : { col: c, dir: 1 }))
                   }
                 >
-                  {c.replace(/_/g, ' ')}
+                  {label(c)}
                   {sort?.col === c ? (sort.dir === 1 ? ' ▲' : ' ▼') : ''}
                 </th>
               ))}
@@ -221,17 +247,30 @@ export function DataTable({
                       return <td key={c} />;
                     })}
                   </tr>
-                  {open && g.rows.map((r, i) => (
-                    <tr key={`${g.key}-${i}`}>
-                      {visibleColumns.map((c, ci) => renderCell(c, r[c], ci, false))}
-                    </tr>
-                  ))}
+                  {/* Rows inside a group behave like ungrouped rows: click-through, selection, flag tint. */}
+                  {open && g.rows.map((r, i) => {
+                    const flagged = !!flagColumn && !!Number(r[flagColumn] ?? 0);
+                    return (
+                      <tr key={`${g.key}-${i}`}
+                          style={{ ...(flagged ? { background: 'var(--row-flag)' } : {}),
+                                   ...(onRowClick ? { cursor: 'pointer' } : {}),
+                                   ...(selectedRow === r ? { outline: '1px solid var(--accent)', outlineOffset: -1 } : {}) }}
+                          onClick={onRowClick ? () => onRowClick(r) : undefined}
+                          title={flagged ? (flagLabel ?? 'Flagged') : undefined}>
+                        {visibleColumns.map((c, ci) => renderCell(c, r[c], ci, flagged))}
+                      </tr>
+                    );
+                  })}
                 </Fragment>
               );
             }) : rows.map((r, i) => {
               const flagged = !!flagColumn && !!Number(r[flagColumn] ?? 0);
               return (
-                <tr key={i} style={flagged ? { background: 'rgba(250,178,25,.07)' } : undefined}
+                <tr key={i}
+                    style={{ ...(flagged ? { background: 'var(--row-flag)' } : {}),
+                             ...(onRowClick ? { cursor: 'pointer' } : {}),
+                             ...(selectedRow === r ? { outline: '1px solid var(--accent)', outlineOffset: -1 } : {}) }}
+                    onClick={onRowClick ? () => onRowClick(r) : undefined}
                     title={flagged ? (flagLabel ?? 'Flagged') : undefined}>
                   {visibleColumns.map((c, ci) => renderCell(c, r[c], ci, flagged))}
                 </tr>

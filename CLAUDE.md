@@ -42,13 +42,29 @@ the reconciliation. The files are not in the repo, so this is a manual check.
 - **Reporting views read `POSTED` batches only.** That is what makes superseding work;
   don't query `fact_*` directly in a report — go through `v_actual` / `v_revenue` /
   `v_posting` / `v_budget` / `v_forecast` / `v_service_line`.
+- **The project cut-off is applied inside `v_posting`** (`018_cutoff.sql`, spec in
+  `docs/flow-redesign.md`). `project_cutoff` holds one date per project; a posted line counts
+  when its posting date (else its period's end date) is on or before it, so `v_actual`,
+  `v_revenue` and every query over them respect it with no change. `v_posting` is a filter
+  over `v_posting_all` (same columns, no cut-off) — only status queries that count what is
+  held back (`CUTOFF_STATUS`) may read `v_posting_all`, never a report. Held-back lines
+  stay in `fact_actual`. `v_order_line`, `v_accrual` and budget/forecast are not cut off
+  yet, so a PO reported from its service-line detail ignores the cut-off for those
+  sources (`v_service_line` carries the cut-off as `pend_reason`/`bucket`, see below).
+  `PKG_ACT_SQL` in `systemQueries.ts` is the one work-package split of actual cost shared by
+  `PKG_SUMMARY` and `FLOW_STATUS`.
 - **Cost and revenue are not the same number.** A CJI3 export carries income on
   4xxxxxxx accounts as negative amounts. `v_actual` is cost only; `v_revenue` is income
   as a positive; `v_posting` is both. Never write a "total actuals" query against
   `v_posting` — it silently nets billing off spend.
-- **Service lines are never actual cost.** `fact_service_line` is the sub-ledger behind
-  a purchase order whose money is already in `fact_actual`. Reconcile the two, never
-  add them.
+- **Certificates replace CJI3 subcontract postings, per PO; they are never added to them.**
+  `fact_service_line` is the sub-ledger behind a purchase order whose money is also in
+  `fact_actual`. The headline actual (`v_actual_cost`) takes, for every PO that has
+  certificates loaded, the counted certificate lines (To date, `pend_reason IS NULL`) and
+  sets that PO's CJI3 SUBCONTRACT lines aside; a PO with no certificates keeps its CJI3
+  amount. The set-aside amount is reconciled against the certificates (`COST_SOURCE_RECON`),
+  never summed with them — the same rule as MB51. Any other query that reads both
+  `v_actual` and `v_service_line` must make the same choice, not add them.
 - **Detail Substitution is the general pattern, not a subcontractor special case.**
   `fact_service_line` carries nothing subcontractor-specific (po_no, vendor, description,
   quantities, amount) — a second PO-based detail report (equipment rental, materials
@@ -89,10 +105,9 @@ the reconciliation. The files are not in the repo, so this is a manual check.
   reviewable via `cost_element_work_package` too. `v_posting` (→ `v_actual`/`v_revenue`)
   resolves MATERIAL/other work packages per row but leaves SUBCONTRACT rows `NULL` — that
   split is resolved later, off `v_service_line` detail, mirroring the Detail Substitution
-  pattern (`PKG_SUMMARY` pulls subcontract package cost from `v_service_line`, excluding
-  the matching PO's `v_actual` posting, exactly like `UNIFIED_COST_REGISTER` does for
-  actual cost itself — a PO with no detail loaded yet falls into `(unallocated)`, never
-  silently dropped). Budget carries its own package code directly (a mapped upload
+  pattern (`PKG_SUMMARY` reads `v_actual_cost`, where the certificate lines replace the
+  matching PO's CJI3 posting — a PO with no certificates loaded yet falls into
+  `(unallocated)`, never silently dropped). Budget carries its own package code directly (a mapped upload
   column, `fact_budget.work_package`, auto-vivifying a bare `dim_work_package` row the
   same way `wbsKey()`/`costElementKey()` auto-vivify their own dimensions) — there is no
   GL-level ambiguity on the budget side the way there is for a posted SAP actual line.
@@ -150,7 +165,8 @@ the reconciliation. The files are not in the repo, so this is a manual check.
   Every other sort column keeps identity ordering, since a group has no single
   code/description of its own to rank by. Unallocated gets weight beyond plain
   text: the "N unallocated" clause (group header and page summary) renders in
-  the reserved `--warning` token, a leaf row's own `UNALLOCATED` is a tinted
+  the warning badge ink (`--badge-warn-ink`, the reserved `--warning` hue darkened so it
+  stays readable on light themes), a leaf row's own `UNALLOCATED` is a tinted
   pill (`UnallocatedBadge`, `PackageBadge`'s shape in warning color) rather
   than plain text, and a group header carries a small coded/uncoded meter —
   one fill whose color is the severity (`--good` once the group is fully
@@ -229,10 +245,23 @@ the reconciliation. The files are not in the repo, so this is a manual check.
   approval as approved rather than turning old lines into pending. The report's rules
   are columns of `v_service_line`, not TypeScript: `net_rate` (an A2 contract's gross
   price divided back by `dim_tax_code.vat_rate`), `line_class` (Adjustment / Qty only /
-  Normal), `report_qty` (a Normal line whose amount is not qty × rate is reported at
-  amount ÷ net rate), `trade` (chars 2–3 of an S-code, else the first char, labelled
-  from `dim_sc_trade`), `bucket` (PENDING / OPENING / period) and `is_other_pc` (not the
-  project's most common profit centre). The PO service-line register (ZSCSRV1) is its
+  Normal) — Normal only when `abs(amount − qty × net_rate) <= max(1, 0.1% of amount)`,
+  otherwise Adjustment (paid-% change, hold release, reversal, re-price) — and `report_qty`
+  (Normal = the certificate qty; Adjustment = amount ÷ the rate its PO line was certified
+  at, a window over po/item/package/line on Normal lines, else its own net rate;
+  `rate_used`/`rate_src` say which), `certificate_id` (PO | invoice serial),
+  `service_text_norm` (the tool's `normText`, in SQL), `tow` (Type of Works from the PO's
+  ZSCSRV1 lines; `dim_tow_order` holds a user order), `trade` (chars 2–3 of an S-code, else
+  the first char, labelled from `dim_sc_trade`) and `is_other_pc` (not the project's most
+  common profit centre). The project cut-off (migration 019) is applied inside
+  `v_service_line` without dropping rows: `pend_reason` is 'Not approved' / 'No date' /
+  'After cut date' (NULL = counted) and every pending line has `bucket = 'PENDING'`;
+  otherwise `bucket` is OPENING or the period. An undated certificate line has no period
+  (the importer no longer gives it the batch period). `report_month` is the month of the
+  cut-off, else the latest counted month, and `report_bucket` splits counted lines into
+  OPENING / PREVIOUS / THIS_MONTH (To date = all three, Opening included). Both public
+  views sit over `v_service_line_core`; `v_service_line_all` is the same without the cut-off
+  (status counts only, never a report). The PO service-line register (ZSCSRV1) is its
   own module, `PO_SERVICE` → `fact_po_service_line` / `v_po_service_line`, keyed on
   PO + item + service line. `v_service_line_po_match` matches each certificate line to
   it in tiers: Exact (PO + item + code + text + price), Text (price differs), Service
@@ -260,20 +289,26 @@ the reconciliation. The files are not in the repo, so this is a manual check.
   Removed. A line missing from the newer file is reported as Removed but stays in
   `fact_service_line` — posting merges by line identity and never deletes, so the Checks
   tab's "report total vs latest upload" row is what shows the gap.
+  Both Excel exports pass their finished buffer through `fixSheetPrOrder()` (`src/main/services/xlsxFix.ts`):
+  ExcelJS 4.4.0 writes `<sheetPr>` as tabColor, pageSetUpPr, outlinePr, but the schema needs outlinePr
+  before pageSetUpPr, and Excel drops ("repairs") every sheet that has both fit-to-page and row grouping.
+  The e2e asserts the order on both workbooks — never remove the wrapper while on ExcelJS 4.4.0.
   **⤓ Excel report** (`sc:exportReport` → `src/main/services/subcontractReport.ts`) writes
-  the standalone tool's monthly workbook: Dashboard, Service Monthly, Service Coding,
-  Changes, Detail, PO Register, By Supplier, Subcontractor x Trade, Subcontractors over
-  time, Qty Reconciliation, Coding and Notes, with live formulas and native charts.
-  `subcontractWorkbook.ts` is that tool's `buildWorkbook`/`injectCharts` ported nearly
-  verbatim (`// @ts-nocheck` on purpose — keep it a port, don't rewrite its formulas);
-  `subcontractReport.ts` is the typed adapter that feeds it rows from `v_service_line`,
-  `v_service_line_po_match`, `v_po_service_line`, `SC_LOAD_HISTORY` and `SC_CHANGES`, so
-  the workbook and the page read the same rules. The Service Coding sheet's CSI column is
-  the app's work package (`service_work_package`); MNL and Cost Element Code are left blank
-  for the user to fill, since the app does not keep them. The tool's hidden `_History` /
-  `_Lines` sheets are dropped because the database holds the history. The Notes
-  reconciliation block stays on row 32 because the Dashboard's FINAL CONTROL cell points
-  at it. Charts are injected into the ExcelJS output with `jszip`, a direct dependency.
+  the v2.6 tool's monthly workbook, `<project>_SC_Report_<yyyy-mm>.xlsx`: Summary (cut date in
+  B4 = `CutDate`, every figure SUMIFS on Data), Coding, Lists, Service Summary (with rate
+  analysis), Service per Month, PO Register, PO per Month, Subcontractor Summary, Invoices
+  Register, Checks, Changes, Data, Notes and hidden `_Codes`/`_Meta`/`_Cal`/`_Ref`.
+  `subcontractWorkbookV26.ts` is the tool's model + writer ported nearly verbatim
+  (`// @ts-nocheck` on purpose — keep it a port, don't rewrite its formulas);
+  `subcontractReport.ts` is the typed adapter that feeds it `v_service_line` (classification,
+  bucket, pend_reason, tow all come from the view — the writer does not re-classify),
+  `v_po_service_line`, `SC_CHECKS`/`SC_CHECK_ROWS`, `SC_LOAD_HISTORY` and `SC_CHANGES`, so
+  the workbook and the page read the same rules. Cut date = the project cut-off, else the end
+  of the latest counted month; undated/unapproved/after-cut lines are Pending. Coding columns:
+  DIV = the service's work package (`service_work_package`), MNL = `dim_cost_type.mnl` of
+  SUBCONTRACT (`SUB`; migration 023, edited in Cost types). PKG and Cost element are left blank
+  for the user to fill (their own catalogue codes, which the app does not store). Edits typed on
+  the workbook's Coding sheet are not read back.
 - **Accrual is a manual estimate, but it still goes through staging.** `ACCRUAL` is a
   module like any other — `fact_accrual` / `v_accrual`, staged and posted via the normal
   upload wizard — for cost incurred but not yet posted in SAP (e.g. "ADD/OMM",
@@ -312,9 +347,24 @@ the reconciliation. The files are not in the repo, so this is a manual check.
 
 Chart colours come from the validated palette in `styles.css`: eight categorical
 slots assigned in fixed order and never cycled, one sequential blue ramp for
-magnitude, a blue↔red diverging pair with a neutral midpoint for signed variance,
-and a reserved status set that must never double as a series. Before changing any
-of them, re-run the dataviz validator against `--surface #121822`.
+magnitude, an orange↔blue diverging pair with a neutral midpoint for signed variance
+(orange = over budget, blue = under — never red/green, per the Power BI layout-design
+skill's cost-control semantics; `divergingColor()` in `charts/chrome.tsx` maps a value
+onto the arm tokens), and a reserved status set that must never double as a series. Good/bad money
+text uses `--ink-good`/`--ink-bad` (blue/orange), not the status colours. Before
+changing any of them, re-run the dataviz validator against that theme's `--surface`.
+
+The renderer is themeable: `:root` in `styles.css` is the default `crypto` theme and
+`:root[data-theme="technical" | "finance" | "prof"]` blocks override the same tokens
+(applied by `src/renderer/src/lib/theme.ts`; values and validation notes in `docs/themes.md`).
+Chart and component code uses tokens only — `var(--series-n)`, `var(--seq-n)` /
+`var(--seq-ink-n)`, `var(--div-neg-n)` / `var(--div-pos-n)` / `var(--div-ink-n)` — never a
+literal hex. A new colour is a new token with a value in every theme block, not a literal in a rule.
+
+The chrome follows the same skill: Sidebar frame with an edge-bar active item, "Tick"
+card titles (accent bar before each `.card > h3`), 8px corners, 16px gutters
+(`--gutter`), and on a dashboard the KPI row first (Budget, Actual, variance, …),
+charts next, tables last.
 
 Never use a dual axis, never colour by rank (a filter must not repaint the
 survivors), and never let a null read as zero — an element with no budget is
@@ -368,6 +418,110 @@ accordingly — it now covers a PO or a settled order with no detail loaded.
 `ORDER_SETTLEMENTS` and `ORDER_DETAIL_SOURCES` are the order-side equivalents of
 checking CJI3 postings and `DETAIL_SOURCES`.
 
+## Material from MB51 / ME2N (`MATISSUE`, `MATPO`, `MATLIST`) and `v_actual_cost`
+
+Material cost can come from SAP material documents instead of CJI3 postings (migration 021).
+- `MATISSUE` (MB51) → `fact_material_issue`, keyed on document + year + item (`line_uid`). Every
+  movement is stored in SAP sign — receipts and transfers too, because the file's total row
+  (`import_batch.control_total`) covers them. `material_movement_rule` (data, `GLOB` on the movement
+  type) says which are cost: 221/222/281/282 = P Project, Z21/Z22 = S To subcontractors, 551-556 = X
+  Scrap; known non-cost types are `OUTSIDE`, anything else is `UNKNOWN` (a Check, never cost).
+  `v_material_movement` classifies all; `v_material_issue_all` = issues with a value, cost-signed
+  (`amount`/`quantity` flipped, `sap_*` kept), with `pending_reason`; `v_material_issue` = the same
+  held to `project_cutoff` on the posting date. A line with no posting date never counts (no period
+  to fall back on, unlike CJI3). A document line pasted twice is staged SKIPPED (counted once).
+- `MATPO` (ME2N) → `fact_po_material_line` / `v_po_material_line` (PO + item; `kind` PUR vs STO by
+  a numeric vs plant-code supplier; `is_deleted`), `v_po_material_price` = weighted PO price per
+  material (deleted lines and stock transfers left out). A line with no material is not loaded.
+- `MATLIST` (MM60) writes `dim_material` only (like `MASTER` writes `dim_wbs`): `material_group`,
+  `material_type`, `base_unit`. Group resolution: ME2N (most frequent group) > the list > what was
+  known; `group_source` records it. The group's name/family/division come from `dim_material_group`.
+- **`v_actual_cost` is the headline actual, and it is generalised to every cost category**
+  (migration 024, plan rev. 4): *if a category's detail source is loaded for the project, the
+  detail is that category's actual cost and the category's CJI3 lines are set aside; otherwise
+  CJI3 is the actual.* One mechanism, driven by data: `cost_source_rule(cost_type, source,
+  detail_view, match_key, description, is_active)` names each detail source and how a CJI3 line
+  is matched to "has detail", read through `v_cost_source_active`. `v_actual_tagged` tags every
+  `v_actual` line with the source that replaces it (`aside_source`, NULL = kept; first match
+  wins: MB51, CERT, ORDER), `v_actual_set_aside` lists them and `v_actual_cost` is the kept CJI3
+  lines (`source` 'CJI3') plus the details, with the same columns as before:
+  - `MB51` (cost type MATERIAL, per project): all CJI3 MATERIAL lines of a project that has MB51
+    issues loaded (`v_mb51_project`) are set aside; the issues come in as MATERIAL.
+  - `CERT` (SUBCONTRACT, per PO): CJI3 SUBCONTRACT lines whose `po_no` has certificates loaded
+    (`v_cost_cert_po`, read off the fact table so the cut-off never flips a PO) are set aside; the
+    counted `v_service_line` lines come in (`amount_net`, `eff_date` as posting date, work package
+    from `service_work_package`). A PO whose certificates are all pending is still "loaded": its
+    CJI3 is set aside and the difference shows in the recon.
+  - `ORDER` (EQUIPMENT / FLEET / HOUSING and any type whose CJI3 line is an order settlement,
+    per order): a CJI3 line with `partner_object_type = 'Order'` whose order has `category = 'WBS'`
+    detail (`v_cost_order_detail`) is set aside whatever its cost type (the settlement GL's type
+    says nothing about the detail's); the `v_order_line` WBS rows come in with the cost type their
+    own GL resolves to through `cost_type_rule` (already done inside `v_order_line` — no second
+    copy of the resolver), held to the cut-off by their period's end date. `CTR` rows never count.
+    An ORDER MATERIAL row of a project with MB51 is left out (MB51 already covers it).
+    The ORDER rows are switched on/off as a source; the named cost types on them are descriptive.
+  - `LABOR` (Labour Allocation Form) and `DEPRECIATION` (Asset Movement Sheet) have rule rows with
+    `is_active = 0` and a view that does not exist yet: the modules are future work and the
+    mechanism is ready — activating a rule needs its branch in `v_actual_tagged` / `v_actual_cost`.
+  - G&A has no detail source (CJI3 only).
+  - **Service MNL** (`service_mnl(project_key, service_code, service_text, mnl)`, `mnl` SUB/LAB/EQU,
+    exposed as `v_service_line.mnl`, default SUB; IPC `workPackages:assignServiceMnl`): a certificate
+    service coded LAB / EQU reports under LABOR / EQUIPMENT in `v_actual_cost`. A sibling table, not a
+    column of `service_work_package`, because that assign path deletes and re-inserts a row and an MNL
+    can exist with no package. The Subcontractors report still lists the service (it is still a
+    subcontract) with its `mnl`.
+  - `COST_SOURCE_RECON(:project_key)`: per source and cost type (plus a TOTAL row per source), CJI3 set
+    aside vs detail amount, difference (detail − CJI3: timing / not yet in the detail), `detail_loaded`
+    and `cji3_kept`. Never add the two sides.
+  On `v_actual_cost`: `KPI_PROJECT`, `FLOW_STATUS`, `S_CURVE`, `ACT_MONTHLY_TREND`, `ACT_BY_COST_TYPE`,
+  `COST_HEATMAP`, and all of `PKG_SUMMARY` / `FLOW_STATUS` work-package actual (`PKG_ACT_SQL` is now one
+  read of it: certificates carry their service's package, a PO without certificates stays CJI3 and
+  `(unallocated)`). Still on CJI3 `v_actual`: everything GL-level (Reports pivot, anomalies,
+  `UNIFIED_COST_REGISTER`, the Material analysis pages), because the detail sources have no CJI3 GL
+  account — `UNIFIED_COST_REGISTER` does its own PO / order substitution and ignores the cut-off for
+  detail lines. `MAT_RECON` (in `materialQueries.ts`) reconciles MB51 vs CJI3 by month. Never add a
+  detail source on top of its CJI3 category — swap, per project / PO / order. The cost types FLEET,
+  HOUSING, DEPRECIATION and GA are seeded (is_system) with no GL rules: the user maps GLs in Cost types.
+  The old custom `ASSET_DEPRECIATION` type was repointed to `DEPRECIATION` (rules and cost elements)
+  and kept, labelled "(legacy)".
+- **⤓ Excel report on the Material page** (`material:exportReport` → `src/main/services/materialReport.ts`)
+  writes the Material Cost Report v1.2 workbook, `<plant>_Material_Report_<yyyy-mm>.xlsx`: Summary,
+  Coding, Lists, Material Summary, Material per Month, PO Register, Stores Transfers, Checks, Data, Notes
+  and hidden `_Codes`/`_Meta`/`_Cal`, live (cut date in `Summary!B4`, SUMIFS on the Data sheet).
+  `materialWorkbook.ts` is the tool's writer and `materialEngine.ts` its `build()` ported nearly verbatim
+  (`// @ts-nocheck` on purpose — keep them ports); `materialReport.ts` feeds the engine from
+  `v_material_movement`, `v_po_material_line`, `dim_material`/`dim_material_group` and the work packages,
+  and takes the Checks sheet from `MAT_CHECKS`/`MAT_CHECK_ROWS` and asserts To date = `MAT_KPI`. Cut date =
+  `project_cutoff`, else the end of the latest month with counted issues. PKG = `material_work_package`,
+  MNL = `dim_cost_type.mnl` of MATERIAL (`MAT`, migration 023). Cost element is left blank for the user to
+  fill (their own catalogue codes, which the app does not store); codes typed in the sheet are not read back. The round-trip sheets
+  `_Ref`/`_Mvt` and the Changes sheet (no material snapshot yet) are not written.
+
+## Subcontractor and Material report pages
+
+Both pages are native tabs that mirror the Excel report's sheets (spec: `docs/port/native-report.md`; it
+supersedes the removed Excel-clone view): SQL for the numbers, the app's own components, interactive. The
+⤓ Excel export is unchanged and still built by `buildSubcontractWorkbook` / `buildMaterialWorkbook`; the
+`SC_*` / `MAT_*` queries and the export tie to the same KPI (the e2e asserts it).
+- **One stored query per sheet**: `SC_SHEET_*` / `MAT_SHEET_*` in `systemQueries.ts` / `materialQueries.ts`.
+  Each takes the page's filters as optional params written `(:p IS NULL OR col = :p)`, so filtering is SQL;
+  the page passes `null` for an unset filter.
+- **Text keys carry a `~` prefix.** A key that is TEXT but looks numeric (a service code `020212`, a material
+  number) must reach SQL as text, but the query runner's `coerce()` binds numeric-looking strings as numbers
+  (and the `.0` rendering then breaks equality). The page sends `"~" + value` and the query strips it
+  (`scParam()` in `systemQueries.ts`), so the value is never coerced.
+- **Page shape**: `<KpiStrip>` from `SC_REPORT_KPI` / `MAT_KPI`, one `<ReportFilterBar>` above the tabs
+  (search + dimension selects, chips, Clear; the page turns its values into the optional params),
+  then `<SheetTabs>` with lazy content (a tab is fetched when first opened and again when a filter, the
+  project or `dataVersion` changes). Month-by-column sheets use long-format SQL plus `<MonthPivot>`
+  (measure toggle, To date column, group subtotals). Tables are `<DataTable>` with `defaultGroupBy` +
+  `keepGroupOrder` for the sheet's own grouping (Type of works / family), `noSumColumns` for every
+  rate, price, percentage and quantity column (their group / total rows must not add up), `hiddenColumns`
+  for drill-down keys, `columnLabels`, `totalRow` and `compact` for small summaries.
+- **Drill-down**: clicking a summary row (service, PO line, subcontractor, material) opens the underlying
+  certificate / issue lines below it from `SC_SHEET_LINES` / `MAT_SHEET_LINES` filtered to that key.
+- Material without MB51 loaded falls back to the CJI3 material postings page.
+
 ## Adding a source report
 
 Most new report shapes need no code — a `report_definition` row (including its
@@ -385,6 +539,28 @@ row and a branch in `postBatch` — no table rebuild.
 
 ## Renderer architecture
 
+The menu is kept to the monthly routine (Home + Loaded files, Coding, Reports, Settings). The builder tools
+(Analysis, Pivot builder, Query library, Schema diagram, Data lineage — the `Advanced` group) are hidden unless
+Settings › Developer tools is switched on (`devTools` in `useApp()`, per computer). Sources nothing can be
+loaded into yet (a SAP report in development, an offline form without a template) are notes on the Home map,
+not cards. Cost types and Work packages are one **Coding** page (`Coding.tsx`, page id `coding`): tabs GL accounts
+(`CostTypes part="allocate"`), Materials / Subcontract services / Other GLs (`PackageMapping tab=…`) and Lists (both
+catalogues), with "Only what still needs coding" on by default. Links still say 'costtypes' / 'packages' /
+'coding:<tab>' and go through `navigate()` in `App.tsx`.
+
+**Actual cost register** (`Register.tsx`, page id `register_cost`, the monthly report): `v_actual_cost` by category and
+row: the item, its source(s) and unit, **Cumulative to <cut-off month>** as the first figure column (`MonthPivot totalFirst`),
+then one column per month (the cut-off month tinted); Amount or Quantity (quantity is per item — `noGroupTotals` leaves
+category subtotals blank since units differ); each category in its cost type's own `dim_cost_type.color`; groups collapsed
+first. Unit and source are taken once per row (CTE `u`), and an item row is keyed on code + name (a service code can carry
+several texts), so the page and the workbook list the same rows. Rows (`:rows_by`) are the item — migration 027 added `item_code` / `item_name` to
+`v_actual_cost` (CJI3 = GL, a subcontract PO without certificates = 'PO <no>', MB51 = material, CERT = service,
+ORDER = 'Order <no>'), plus `quantity` / `unit` per line (CERT = `report_qty`) — or the work package or WBS. Queries `REG_KPI` / `REG_MONTHLY` / `REG_LINES` share `REG_BASE_SQL`;
+the e2e asserts every view adds up to `v_actual_cost`. ⤓ Excel (`register:export` → `services/registerReport.ts`) writes
+Per month (Unit, Qty to date, Cumulative, months; SUBTOTAL formulas) and Lines. It replaced Project dashboard, Actual cost (GL pivot) and the Cost
+Report in the menu: those pages are in developer tools, and `navigate()` sends links to them to the register when the
+tools are off. Next: a close checklist and a monthly pack export on Home.
+
 Pages live in `src/renderer/src/pages/` and are wired in exactly two places in `App.tsx`:
 the `PAGES` array (nav entry, glyph, subtitle) and the `page === '...'` switch in the
 `content` div. Both need updating to add a page — there is no router.
@@ -395,6 +571,26 @@ successful import, which is how a page knows to re-run its queries without a man
 refresh. A page that fetches once in a plain `useEffect(() => ..., [])` will go stale after
 the next import; depend on `[projectKey, dataVersion]` instead.
 
+Home (`Home.tsx`, page id `home`, the start page) is the build workspace and the only place uploads start
+(the separate Upload data page was removed). Its default **Map** view (`components/ArchMap.tsx`) draws the
+actual-cost source architecture: CJI3 as the spine feeding each cost category, each category's detail
+sources as cards (status, lines, date span) that accept a dropped file (`api.files.pathOf` →
+`webUtils.getPathForFile`) or open the wizard via ↥. The wizard is `Upload.tsx` embedded with `preset`
+(the step's `module` / `report_definition_id` from `BUILD_STATUS`) and `initialPath`. From a card the wizard fast-tracks: ↥ opens
+the picker at once, then first sheet, detected data date (else today), saved mapping (else suggestion) and
+staging run without stops, landing on the review — it stops early only at the step that needs the user
+(an unmapped required column, a staging error) and never posts by itself. With no project (a new
+database) Home queries project 0, so the map still shows every source as not loaded. The category layout
+is presentation; the rule itself is `cost_source_rule` / `v_actual_cost`. App blocks window-level file drops
+so a miss never navigates Electron to the file. The **Timeline** view is the Gantt below. Build steps from
+`BUILD_STATUS` / `BUILD_CHECKS` and the report readiness cards from `REPORT_READINESS`. The step list is a
+Gantt: one green bar per posted file from its first to last date on the project (`BUILD_TIMELINE`; a file
+with no dates inside is a diamond at its data date), faint month lines, dashed gaps no file covers, and the
+cut-off as a vertical line. A date key is converted only when present (`printf` over NULL gives
+'0000-00-00'). It shows no
+cost figures — the KPIs and charts are the **Project dashboard** (`Dashboard.tsx`, page id `dashboard`,
+under Reports), which is also the `report_page` its readiness card opens.
+
 Two established page shapes — reuse one rather than inventing a third:
 - **Single-query explorer** (`Analysis.tsx`, `QueryLibrary.tsx`): pick one stored query,
   render it via chart/table/SQL tabs. This is what `query_library.viz_json` is for.
@@ -402,7 +598,9 @@ Two established page shapes — reuse one rather than inventing a third:
   `MaterialAnalysis.tsx`): several stored queries fetched into one screen — a `<KpiStrip>`
   (renders every column of a single-row headline query generically, so a new KPI is a SQL
   change, not a component change), a couple of charts, a `<DataTable>` detail table. Reach
-  for this shape for a new "insights + details" report.
+  for this shape for a new "insights + details" report. `SubcontractorAnalysis.tsx` and
+  `MaterialAnalysis.tsx` go further: a shared `<ReportFilterBar>` and lazily-fetched
+  `<SheetTabs>` that mirror a workbook's sheets (see "Subcontractor and Material report pages").
 
 `Reports.tsx` is the one bespoke page (a collapsible cost-type/GL/WBS pivot with sortable
 columns and a shared filter bar) — copy its patterns only when the data is genuinely

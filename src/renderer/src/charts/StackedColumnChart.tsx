@@ -11,6 +11,8 @@ interface Props {
   seriesColumn?: string;
   /** Fixes each series' colour slot, so a filter never repaints the survivors. */
   orderColumn?: string;
+  /** Numeric sort key per x. Without it x values sort as text (fine for 'YYYY-MM'). */
+  xOrderColumn?: string;
   /** A series with this name is an aggregate of the rest, drawn in a neutral, not a series colour. */
   otherLabel?: string;
   height?: number;
@@ -26,29 +28,37 @@ const NEUTRAL = 'var(--text-3)';
  * Segments are separated by a 2px surface gap.
  */
 export function StackedColumnChart({
-  result, xColumn, valueColumn, seriesColumn, orderColumn, otherLabel, height = 280, valueLabel,
+  result, xColumn, valueColumn, seriesColumn, orderColumn, xOrderColumn, otherLabel, height = 280, valueLabel,
 }: Props) {
   const { tip, show, hide } = useTooltip();
   const [hover, setHover] = useState<number | null>(null);
   const box = useRef<HTMLDivElement>(null);
 
-  const { xs, series, cells } = useMemo(() => {
+  const { xs, series, cells, order } = useMemo(() => {
     const xs: string[] = [];
     const order = new Map<string, number>();
     const cells = new Map<string, number>();
+    const xKey = new Map<string, number>();
     for (const r of result.rows) {
       const x = String(r[xColumn] ?? '');
+      if (xOrderColumn) xKey.set(x, Number(r[xOrderColumn] ?? 0));
       const s = seriesColumn ? String(r[seriesColumn] ?? '') : (valueLabel ?? valueColumn);
       if (!xs.includes(x)) xs.push(x);
       if (!order.has(s)) order.set(s, orderColumn ? Number(r[orderColumn] ?? order.size) : order.size);
       cells.set(`${x}\u0001${s}`, Number(r[valueColumn] ?? 0));
     }
-    xs.sort();
+    if (xOrderColumn) xs.sort((a, b) => (xKey.get(a) ?? 0) - (xKey.get(b) ?? 0)); else xs.sort();
     const series = [...order.entries()].sort((a, b) => a[1] - b[1]).map(([s]) => s);
-    return { xs, series, cells };
-  }, [result, xColumn, valueColumn, seriesColumn, orderColumn, valueLabel]);
+    return { xs, series, cells, order };
+  }, [result, xColumn, valueColumn, seriesColumn, orderColumn, xOrderColumn, valueLabel]);
 
-  const color = (s: string, i: number) => (s === otherLabel ? NEUTRAL : SERIES[i % SERIES.length]);
+  // With orderColumn the query's 1-based order IS the colour slot, so a series keeps its colour
+  // when others are absent (CLAUDE.md: never colour by rank). Without it, slots follow position.
+  const color = (s: string, i: number) => {
+    if (s === otherLabel) return NEUTRAL;
+    const slot = orderColumn ? Math.max(0, (order.get(s) ?? i + 1) - 1) : i;
+    return SERIES[slot % SERIES.length];
+  };
 
   const scale = useMemo(() => {
     let lo = 0, hi = 0;

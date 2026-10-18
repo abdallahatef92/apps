@@ -1,5 +1,5 @@
-import { contextBridge, ipcRenderer } from 'electron';
-import type { ExportDiagramRequest, IpcResult, LineageResult, SchemaDescription } from '../shared/types';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import type { BuildCheck, BuildStepStatus, BuildTimelineBar, ReportReadiness, CutoffStatus, ExportDiagramRequest,IpcResult, LineageResult, SchemaDescription } from '../shared/types';
 
 /**
  * The renderer never touches Node or the database directly; everything goes
@@ -19,9 +19,23 @@ const api = {
   projects: {
     list: () => invoke<any[]>('projects:list'),
     create: (p: unknown) => invoke<{ project_key: number }>('projects:create', p),
+    footprint: (projectKey: number) => invoke<{ lines: number; files: number }>('projects:footprint', projectKey),
+    clearData: (projectKey: number) => invoke<{ backupPath: string; lines: number; files: number }>('projects:clearData', projectKey),
+    remove: (projectKey: number) => invoke<{ backupPath: string; lines: number; files: number }>('projects:delete', projectKey),
   },
   reports: {
     list: () => invoke<any[]>('reports:list'),
+  },
+  cutoff: {
+    get: (projectKey: number) => invoke<CutoffStatus>('cutoff:get', projectKey),
+    set: (projectKey: number, cutoffDate: string | null) =>
+      invoke<{ ok: true }>('cutoff:set', projectKey, cutoffDate),
+  },
+  build: {
+    status: (projectKey: number) => invoke<BuildStepStatus[]>('build:status', projectKey),
+    checks: (projectKey: number) => invoke<BuildCheck[]>('build:checks', projectKey),
+    timeline: (projectKey: number) => invoke<BuildTimelineBar[]>('build:timeline', projectKey),
+    readiness: (projectKey: number) => invoke<ReportReadiness[]>('build:readiness', projectKey),
   },
   costTypes: {
     combinations: () => invoke<any[]>('costTypes:combinations'),
@@ -45,6 +59,7 @@ const api = {
     importMaterialMapping: (projectKey: number, filePath: string) => invoke<any>('workPackages:importMaterialMapping', projectKey, filePath),
     serviceCombinations: (projectKey: number) => invoke<any[]>('workPackages:serviceCombinations', projectKey),
     assignService: (projectKey: number, items: unknown[]) => invoke<{ assigned: number; cleared: number }>('workPackages:assignService', projectKey, items),
+    assignServiceMnl: (projectKey: number, items: unknown[], mnl: string | null) => invoke<{ assigned: number; cleared: number }>('workPackages:assignServiceMnl', projectKey, items, mnl),
   },
   settings: {
     list: () => invoke<{ key: string; value: string }[]>('settings:list'),
@@ -61,6 +76,8 @@ const api = {
   files: {
     pick: (title?: string) => invoke<string | null>('file:pick', title),
     preview: (filePath: string) => invoke<any>('file:preview', filePath),
+    /** The disk path of a file dropped on the window (Electron no longer exposes File.path). */
+    pathOf: (file: File): string => webUtils.getPathForFile(file),
   },
   mapping: {
     targets: (module: string) => invoke<any[]>('mapping:targets', module),
@@ -98,6 +115,13 @@ const api = {
   showItem: (filePath: string) => invoke<void>('shell:showItem', filePath),
   sc: {
     exportReport: (projectKey: number) => invoke<string | null>('sc:exportReport', projectKey),
+  },
+  material: {
+    exportReport: (projectKey: number) => invoke<string | null>('material:exportReport', projectKey),
+  },
+  register: {
+    exportReport: (projectKey: number, rowsBy: string | null, source: string | null) =>
+      invoke<string | null>('register:export', projectKey, rowsBy, source),
   },
 };
 

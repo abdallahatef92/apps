@@ -11,6 +11,9 @@ interface Props {
   /** Optional second column shown as a faint reference bar behind the value. */
   referenceColumn?: string;
   referenceLabel?: string;
+  /** Fill for a one-sided chart whose values all mean the same thing — e.g.
+   *  `var(--div-neg)` for a list of overruns. Defaults to the first series slot. */
+  color?: string;
 }
 
 /**
@@ -19,7 +22,7 @@ interface Props {
  */
 export function BarChart({
   result, labelColumn, valueColumn, limit = 14, diverging = false,
-  referenceColumn, referenceLabel,
+  referenceColumn, referenceLabel, color = SERIES[0],
 }: Props) {
   const { tip, show, hide } = useTooltip();
   const rows = result.rows.slice(0, limit);
@@ -48,7 +51,7 @@ export function BarChart({
             ...(ref !== null ? [{ label: referenceLabel ?? referenceColumn!, value: fmtFull(ref),
                                   color: 'var(--text-3)' }] : []),
             { label: valueColumn.replace(/_/g, ' '), value: fmtFull(v),
-              color: diverging ? divergingColor(v, extent) : SERIES[0] },
+              color: diverging ? divergingColor(v, extent) : color },
           ]);
 
           return (
@@ -79,7 +82,7 @@ export function BarChart({
                     )}
                     <div style={{ position: 'absolute', top: ref !== null ? 4 : 1,
                                   bottom: ref !== null ? 4 : 1, left: 0, width: `${pct}%`,
-                                  background: SERIES[0], borderRadius: 4 }} />
+                                  background: color, borderRadius: 4 }} />
                   </>
                 )}
               </div>

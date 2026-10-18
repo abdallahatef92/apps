@@ -125,7 +125,7 @@ function ShareBar({ pctValue, color }: { pctValue: number; color: string }) {
 
 function typeMeta(types: CostTypeDef[], code: string) {
   return types.find((t) => t.code === code)
-    ?? { code, label: code === 'UNMAPPED' ? 'Unmapped' : code, icon: '❓', color: '#9aa5b1', sort_order: 999, is_system: 0 };
+    ?? { code, label: code === 'UNMAPPED' ? 'Unmapped' : code, icon: '❓', color: 'var(--text-3)', sort_order: 999, is_system: 0 };
 }
 
 interface Filters { search: string; types: Set<string>; periodFrom: string; periodTo: string }
@@ -180,7 +180,9 @@ function FilterBar({ filters, onChange, types, periods, matched, total }: {
             <button key={code} type="button" title={meta.label} onClick={() => toggleType(code)}
                     style={{
                       fontSize: 12, padding: '4px 9px', borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit',
-                      background: on ? meta.color : 'var(--surface-3)', color: on ? '#0b0f14' : 'var(--text-2)',
+                      // Type colour (user data) tints the pill; the label stays a text token.
+                      background: on ? `color-mix(in srgb, ${meta.color} 28%, var(--surface))` : 'var(--surface-3)',
+                      color: on ? 'var(--text)' : 'var(--text-2)',
                       border: `1px solid ${on ? meta.color : 'var(--border)'}`, fontWeight: on ? 700 : 400,
                     }}>
               {meta.icon} {meta.label}
@@ -301,7 +303,7 @@ function MonthlyPivot({ rows, types }: { rows: MonthRow[]; types: CostTypeDef[] 
                   <td style={{ position: 'sticky', left: 0, zIndex: 1, background: tint, fontWeight: 700 }}>
                     <span className="faint" style={{ marginRight: 6 }}>{open ? '▾' : '▸'}</span>
                     <span style={{ marginRight: 6 }}>{meta.icon}</span>
-                    <span style={{ color: meta.color }}>{meta.label}</span>
+                    <span style={{ color: 'var(--text)' }}>{meta.label}</span>
                   </td>
                   <td style={{ position: 'sticky', left: LABEL_W, zIndex: 1, background: tint }}></td>
                   <td className="mono" style={{ position: 'sticky', left: LABEL_W + CODE_W, zIndex: 1, background: tint, textAlign: 'right' }}>
@@ -474,7 +476,7 @@ function TransactionTree({ rows, types, filters }: { rows: MonthRow[]; types: Co
                   <td className="faint" style={{ textAlign: 'center' }}>{open ? '▾' : '▸'}</td>
                   <td colSpan={5} style={{ fontWeight: 700 }}>
                     <span style={{ marginRight: 6 }}>{meta.icon}</span>
-                    <span style={{ color: meta.color }}>{meta.label}</span>
+                    <span style={{ color: 'var(--text)' }}>{meta.label}</span>
                   </td>
                   <td className="mono" style={{ textAlign: 'right' }}>{g.postings.toLocaleString()}</td>
                   <td className="mono" style={{ textAlign: 'right', fontWeight: 700 }}>{money(g.amount)}</td>
@@ -633,7 +635,10 @@ function CostBadge({ types, code }: { types: CostTypeDef[]; code: string }) {
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600,
-      color: meta.color, background: `${meta.color}22`, border: `1px solid ${meta.color}55`,
+      // Type colour (user data) tints the pill and border; label is a text token
+      // so a pale type colour stays readable on light themes.
+      color: 'var(--text)', background: `color-mix(in srgb, ${meta.color} 14%, transparent)`,
+      border: `1px solid color-mix(in srgb, ${meta.color} 45%, transparent)`,
       borderRadius: 5, padding: '2px 8px', whiteSpace: 'nowrap',
     }}>
       <span>{meta.icon}</span>{meta.label}

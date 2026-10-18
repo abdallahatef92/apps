@@ -13,26 +13,56 @@ export const SERIES = [
   'var(--series-5)', 'var(--series-6)', 'var(--series-7)', 'var(--series-8)',
 ];
 
-/** Single-hue sequential ramp, mirrored for a dark surface: low recedes. */
-export const SEQUENTIAL = ['#0d366b', '#154a8c', '#1c5cab', '#256abf', '#2a78d6',
-  '#3987e5', '#5598e7', '#6da7ec', '#86b6ef', '#9ec5f4', '#b7d3f6', '#cde2fb'];
+/**
+ * Single-hue sequential ramp, 7 steps low → high, from the active theme's
+ * `--seq-n` tokens (styles.css): on a dark theme high is brightest and low
+ * recedes into the surface; on a light theme high is darkest.
+ */
+export const SEQUENTIAL = [1, 2, 3, 4, 5, 6, 7].map((n) => `var(--seq-${n})`);
+/** Cell ink matching each SEQUENTIAL step (`--seq-ink-n`), flipped per theme. */
+export const SEQUENTIAL_INK = [1, 2, 3, 4, 5, 6, 7].map((n) => `var(--seq-ink-${n})`);
+
+function sequentialIndex(t: number): number {
+  return Math.min(SEQUENTIAL.length - 1, Math.max(0, Math.round(t * (SEQUENTIAL.length - 1))));
+}
 
 export function sequentialColor(t: number): string {
   if (!Number.isFinite(t)) return 'var(--div-mid)';
-  const i = Math.min(SEQUENTIAL.length - 1, Math.max(0, Math.round(t * (SEQUENTIAL.length - 1))));
-  return SEQUENTIAL[i];
+  return SEQUENTIAL[sequentialIndex(t)];
 }
 
-/** Diverging blue↔red with a neutral midpoint, for signed variance. */
-export function divergingColor(value: number, extent: number): string {
-  if (!extent || !Number.isFinite(value)) return 'var(--div-mid)';
+/** Readable text ink on the fill `sequentialColor(t)` returns. */
+export function sequentialInk(t: number): string {
+  if (!Number.isFinite(t)) return 'var(--text-3)';
+  return SEQUENTIAL_INK[sequentialIndex(t)];
+}
+
+/** Diverging step for a value: 0 = midpoint, -1..-4 negative arm, 1..4 positive arm. */
+function divergingStep(value: number, extent: number): number {
+  if (!extent || !Number.isFinite(value)) return 0;
   const t = Math.max(-1, Math.min(1, value / extent));
   const mag = Math.abs(t);
-  if (mag < 0.06) return 'var(--div-mid)';
-  const arm = t < 0
-    ? ['#5b3540', '#8b3a42', '#b03b3f', '#d03b3b']
-    : ['#24405f', '#256abf', '#3987e5', '#6da7ec'];
-  return arm[Math.min(arm.length - 1, Math.floor(mag * arm.length))];
+  if (mag < 0.06) return 0;
+  const n = Math.min(3, Math.floor(mag * 4)) + 1;   // 1 = faintest, nearest the midpoint
+  return t < 0 ? -n : n;
+}
+
+/**
+ * Diverging orange↔blue with a neutral midpoint, for signed variance: orange is
+ * over budget, blue under — never red/green. Each arm passes the dataviz
+ * validator's ordinal checks against --surface (faintest step >= 2:1). The
+ * steps are the theme's `--div-neg-n` / `--div-pos-n` tokens.
+ */
+export function divergingColor(value: number, extent: number): string {
+  const s = divergingStep(value, extent);
+  if (s === 0) return 'var(--div-mid)';
+  return s < 0 ? `var(--div-neg-${-s})` : `var(--div-pos-${s})`;
+}
+
+/** Readable label ink on the fill `divergingColor(value, extent)` returns. */
+export function divergingInk(value: number, extent: number): string {
+  const s = divergingStep(value, extent);
+  return s === 0 ? 'var(--div-ink-mid)' : `var(--div-ink-${Math.abs(s)})`;
 }
 
 export const fmtCompact = (v: number): string => {

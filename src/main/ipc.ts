@@ -7,12 +7,16 @@ import { closeDatabase, currentDbPath, defaultDbPath, getDb, openDatabase } from
 import { runSelect, runStoredQuery } from './services/queryRunner';
 import { exportCostTypeMapping, exportResult } from './services/exportExcel';
 import { buildSubcontractReport } from './services/subcontractReport';
+import { buildMaterialReport } from './services/materialReport';
+import { buildRegisterWorkbook } from './services/registerReport';
 import { buildPivotSql, pivotMeta, type PivotRequest } from './services/pivot';
 import { buildLineage } from './services/lineage';
+import { MATERIAL_TREE_CTE } from './db/materialQueries';
 import { readWorkbook } from './ingest/workbook';
+import { clearProjectData, deleteProject, projectFootprint } from './services/projectAdmin';
 import { deleteBatch, loadColumnMapping, postBatch, revenueAccountPattern, saveColumnMapping, stageFile } from './ingest/importer';
 import { suggestMapping, targetFields } from './ingest/targetFields';
-import type { CostTypeAssignment, CostTypeCombination, CostTypeDef, ElementPackageAssignment, ExportDiagramRequest, IpcResult, LineageResult, MaterialPackageAssignment, MaterialPackageCombination, Module, OtherPackageCombination, QueryResult, SchemaDescription, SchemaTable, ServicePackageAssignment, ServicePackageCombination, StageRequest, WorkPackageDef } from '../shared/types';
+import type { BuildCheck, BuildStepStatus, BuildTimelineBar, ReportReadiness, CostTypeAssignment, CostTypeCombination, CutoffStatus,CostTypeDef, ElementPackageAssignment, ExportDiagramRequest, IpcResult, LineageResult, MaterialPackageAssignment, MaterialPackageCombination, Module, OtherPackageCombination, QueryResult, SchemaDescription, SchemaTable, ServiceMnl, ServiceMnlAssignment, ServicePackageAssignment, ServicePackageCombination, StageRequest, WorkPackageDef } from '../shared/types';
 
 /** Wrap a handler so the renderer always gets {ok,data} | {ok,error} instead of a rejection. */
 function handle<T>(channel: string, fn: (...args: any[]) => T | Promise<T>): void {
@@ -46,7 +50,7 @@ function loadCostTypeCombinations(): CostTypeCombination[] {
 
 function loadCostTypeDefs(): CostTypeDef[] {
   return getDb().prepare(
-    `SELECT code, label, icon, color, sort_order, is_system FROM dim_cost_type ORDER BY sort_order, code`,
+    `SELECT code, label, icon, color, sort_order, is_system, COALESCE(mnl, 'OTHER') AS mnl FROM dim_cost_type ORDER BY sort_order, code`,
   ).all() as CostTypeDef[];
 }
 
@@ -65,14 +69,20 @@ function slugifyCostType(label: string): string {
  * excluded entirely rather than shown as a dead-end bucket.
  */
 const MATERIAL_COMBINATIONS_SQL = `
-    SELECT a.material_code, a.material_name, SUBSTR(a.material_code, 1, 2) AS prefix,
+    WITH ${MATERIAL_TREE_CTE}
+    SELECT a.material_code, m.material_name, SUBSTR(a.material_code, 1, 2) AS prefix,
            COUNT(*) AS postings, SUM(a.amount) AS amount,
            a.work_package AS resolved_work_package,
-           (SELECT m.work_package FROM material_work_package m
-             WHERE m.project_key = @project_key AND m.material_code = a.material_code) AS assigned_work_package
-    FROM v_actual a
+           (SELECT w.work_package FROM material_work_package w
+             WHERE w.project_key = @project_key AND w.material_code = a.material_code) AS assigned_work_package,
+           mt.family, mt.family_label, mt.fam_sort AS family_sort,
+           mt.division_key, mt.division_label,
+           COALESCE(mt.grp_code, '(no group)') AS group_code, mt.grp_label AS group_label, mt.grp_sort AS group_sort
+    FROM v_actual_cost a
+    JOIN dim_material m ON m.material_code = a.material_code
+    JOIN mt ON mt.material_key = m.material_key
     WHERE a.cost_type = 'MATERIAL' AND a.material_code IS NOT NULL AND a.project_key = @project_key
-    GROUP BY a.material_code, a.material_name, a.work_package
+    GROUP BY a.material_code, m.material_name, a.work_package
     ORDER BY ABS(SUM(a.amount)) DESC`;
 
 function loadMaterialPackageCombinations(projectKey: number): MaterialPackageCombination[] {
@@ -133,13 +143,14 @@ function loadServicePackageCombinations(projectKey: number): ServicePackageCombi
            COALESCE(s.service_code,'') AS service_code, COALESCE(s.service_text,'') AS service_text,
            COUNT(*) AS postings, SUM(s.amount_net) AS amount,
            s.work_package AS resolved_work_package,
+           s.mnl AS mnl,
            (SELECT m.work_package FROM service_work_package m
              WHERE m.project_key = @project_key
                AND m.service_code = COALESCE(s.service_code,'')
                AND m.service_text = COALESCE(s.service_text,'')) AS assigned_work_package
     FROM v_service_line s
     WHERE s.project_key = @project_key
-    GROUP BY COALESCE(s.po_no,''), COALESCE(s.service_code,''), COALESCE(s.service_text,''), s.work_package
+    GROUP BY COALESCE(s.po_no,''), COALESCE(s.service_code,''), COALESCE(s.service_text,''), s.work_package, s.mnl
     ORDER BY ABS(SUM(s.amount_net)) DESC`).all({ project_key: projectKey }) as ServicePackageCombination[];
 }
 
@@ -202,6 +213,54 @@ export function registerIpc(): void {
     return { project_key: Number(info.lastInsertRowid) };
   });
 
+  handle('projects:footprint', (projectKey: number) => projectFootprint(projectKey));
+  handle('projects:clearData', (projectKey: number) => clearProjectData(projectKey));
+  handle('projects:delete', (projectKey: number) => deleteProject(projectKey));
+
+  // --- cut-off ---------------------------------------------------------------
+  // The numbers come from the CUTOFF_STATUS stored query, not from here.
+  handle('cutoff:get', (projectKey: number): CutoffStatus => {
+    const row = runStoredQuery('CUTOFF_STATUS', { project_key: projectKey }).rows[0] ?? {};
+    return {
+      cutoff_date: (row.cutoff_date as string | null) ?? null,
+      latest_posting_date: (row.latest_posting_date as string | null) ?? null,
+      earliest_posting_date: (row.earliest_posting_date as string | null) ?? null,
+      lines_after_cutoff: Number(row.lines_after_cutoff ?? 0),
+      amount_after_cutoff: Number(row.amount_after_cutoff ?? 0),
+    };
+  });
+
+  handle('cutoff:set', (projectKey: number, cutoffDate: string | null) => {
+    if (!Number.isInteger(projectKey)) throw new Error('A project is required to set a cut-off.');
+    const db = getDb();
+    if (cutoffDate === null || cutoffDate === undefined || cutoffDate === '') {
+      db.prepare('DELETE FROM project_cutoff WHERE project_key = ?').run(projectKey);
+      return { ok: true as const };
+    }
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(cutoffDate));
+    const d = m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])) : null;
+    if (!m || !d || d.getUTCFullYear() !== +m[1] || d.getUTCMonth() !== +m[2] - 1 || d.getUTCDate() !== +m[3]) {
+      throw new Error(`Cut-off must be a date as YYYY-MM-DD, got "${cutoffDate}".`);
+    }
+    db.prepare(`INSERT INTO project_cutoff (project_key, cutoff_date) VALUES (?, ?)
+                ON CONFLICT(project_key) DO UPDATE SET cutoff_date = excluded.cutoff_date,
+                                                       updated_at = datetime('now')`)
+      .run(projectKey, cutoffDate);
+    return { ok: true as const };
+  });
+
+  // --- build workspace ---------------------------------------------------------
+  // Status, checks and readiness are the BUILD_STATUS / BUILD_CHECKS / REPORT_READINESS
+  // stored queries; the bridge only narrows the rows' types.
+  handle('build:status', (projectKey: number): BuildStepStatus[] =>
+    runStoredQuery('BUILD_STATUS', { project_key: projectKey }).rows as unknown as BuildStepStatus[]);
+  handle('build:timeline', (projectKey: number): BuildTimelineBar[] =>
+    runStoredQuery('BUILD_TIMELINE', { project_key: projectKey }).rows as unknown as BuildTimelineBar[]);
+  handle('build:checks', (projectKey: number): BuildCheck[] =>
+    runStoredQuery('BUILD_CHECKS', { project_key: projectKey }).rows as unknown as BuildCheck[]);
+  handle('build:readiness', (projectKey: number): ReportReadiness[] =>
+    runStoredQuery('REPORT_READINESS', { project_key: projectKey }).rows as unknown as ReportReadiness[]);
+
   handle('settings:list', () =>
     getDb().prepare('SELECT key, value FROM app_setting ORDER BY key').all());
 
@@ -261,21 +320,23 @@ export function registerIpc(): void {
       throw new Error(`A cost type named "${label}" already exists.`);
     }
     const { m } = db.prepare('SELECT COALESCE(MAX(sort_order),0) AS m FROM dim_cost_type').get() as { m: number };
-    db.prepare(`INSERT INTO dim_cost_type (code, label, icon, color, sort_order, is_system)
-                VALUES (?, ?, ?, ?, ?, 0)`)
+    db.prepare(`INSERT INTO dim_cost_type (code, label, icon, color, sort_order, is_system, mnl)
+                VALUES (?, ?, ?, ?, ?, 0, 'OTHER')`)
       .run(code, label, input.icon || '❓', input.color || '#9aa5b1', m + 10);
     return loadCostTypeDefs();
   });
 
   /** Rename a cost type or change its icon/colour — the code never changes. */
-  handle('costTypes:typeUpdate', (input: { code: string; label: string; icon: string; color: string }) => {
+  handle('costTypes:typeUpdate', (input: { code: string; label: string; icon: string; color: string; mnl?: string }) => {
     const db = getDb();
-    const row = db.prepare('SELECT code FROM dim_cost_type WHERE code = ?').get(input.code);
+    const row = db.prepare('SELECT code, mnl FROM dim_cost_type WHERE code = ?').get(input.code) as { code: string; mnl: string | null } | undefined;
     if (!row) throw new Error('That cost type no longer exists.');
     const label = (input.label ?? '').trim();
     if (!label) throw new Error('A cost type needs a name.');
-    db.prepare('UPDATE dim_cost_type SET label = ?, icon = ?, color = ? WHERE code = ?')
-      .run(label, input.icon || '❓', input.color || '#9aa5b1', input.code);
+    const mnl = input.mnl ?? row.mnl ?? 'OTHER';
+    if (!['MAT', 'SUB', 'EQU', 'LAB', 'OTHER'].includes(mnl)) throw new Error('MNL must be MAT, SUB, EQU, LAB or OTHER.');
+    db.prepare('UPDATE dim_cost_type SET label = ?, icon = ?, color = ?, mnl = ? WHERE code = ?')
+      .run(label, input.icon || '❓', input.color || '#9aa5b1', mnl, input.code);
     return loadCostTypeDefs();
   });
 
@@ -467,10 +528,11 @@ export function registerIpc(): void {
     if (res.canceled || !res.filePath) return null;
     const rows = getDb().prepare(MATERIAL_COMBINATIONS_SQL).all({ project_key: projectKey }) as MaterialPackageCombination[];
     const result: QueryResult = {
-      columns: ['material_code', 'material_name', 'prefix', 'postings', 'amount', 'work_package'],
+      columns: ['material_code', 'material_name', 'prefix', 'family', 'division', 'material_group', 'postings', 'amount', 'work_package'],
       rows: rows.map((r) => ({
         material_code: r.material_code, material_name: r.material_name,
-        prefix: r.prefix, postings: r.postings, amount: r.amount,
+        prefix: r.prefix, family: r.family_label, division: r.division_label, material_group: r.group_label,
+        postings: r.postings, amount: r.amount,
         work_package: r.assigned_work_package ?? r.resolved_work_package ?? '',
       })),
       rowCount: rows.length, ms: 0, truncated: false,
@@ -545,6 +607,30 @@ export function registerIpc(): void {
       }
     });
     run();
+    return { assigned, cleared };
+  });
+
+  /**
+   * Code subcontract services as Subcontract (null / 'SUB'), Labor ('LAB') or Equipment ('EQU') — a row in
+   * service_mnl. It moves the service's counted certificate lines between cost types in v_actual_cost
+   * (the Subcontractors report still lists them). Keyed like service_work_package: project + code + text.
+   */
+  handle('workPackages:assignServiceMnl', (projectKey: number, items: ServiceMnlAssignment[], mnl: ServiceMnl | null) => {
+    if (mnl !== null && mnl !== 'SUB' && mnl !== 'LAB' && mnl !== 'EQU') {
+      throw new Error(`"${String(mnl)}" is not an MNL code (SUB, LAB or EQU).`);
+    }
+    const db = getDb();
+    const del = db.prepare(`DELETE FROM service_mnl WHERE project_key = ? AND service_code = ? AND service_text = ?`);
+    const ins = db.prepare(`INSERT INTO service_mnl (project_key, service_code, service_text, mnl) VALUES (?, ?, ?, ?)`);
+    let assigned = 0, cleared = 0;
+    db.transaction(() => {
+      for (const it of items) {
+        del.run(projectKey, it.service_code, it.service_text);
+        if (mnl === null || mnl === 'SUB') { cleared++; continue; }
+        ins.run(projectKey, it.service_code, it.service_text, mnl);
+        assigned++;
+      }
+    })();
     return { assigned, cleared };
   });
 
@@ -697,6 +783,33 @@ export function registerIpc(): void {
     writeFileSync(res.filePath, report.buffer);
     return res.filePath;
   });
+
+  /** The monthly Material Cost Report workbook (live formulas, hidden _Meta/_Cal/_Codes) for one project. */
+  handle('material:exportReport', async (projectKey: number): Promise<string | null> => {
+    const report = await buildMaterialReport(projectKey);
+    const res = await dialog.showSaveDialog({
+      title: 'Export material cost report',
+      defaultPath: join(app.getPath('documents'), report.fileName),
+      filters: [{ name: 'Excel workbook', extensions: ['xlsx'] }],
+    });
+    if (res.canceled || !res.filePath) return null;
+    writeFileSync(res.filePath, report.buffer);
+    return res.filePath;
+  });
+
+  handle('register:export', async (projectKey: number, rowsBy: string | null, source: string | null): Promise<string | null> => {
+    const report = await buildRegisterWorkbook(projectKey, rowsBy, source);
+    const res = await dialog.showSaveDialog({
+      title: 'Export actual cost register',
+      defaultPath: join(app.getPath('documents'), report.fileName),
+      filters: [{ name: 'Excel workbook', extensions: ['xlsx'] }],
+    });
+    if (res.canceled || !res.filePath) return null;
+    writeFileSync(res.filePath, report.buffer);
+    return res.filePath;
+  });
+
+  /** The same two workbooks, serialised for the Subcontractor / Material pages (rebuilt on every call). */
 
   handle('shell:showItem', (filePath: string) => { shell.showItemInFolder(filePath); });
 

@@ -4,7 +4,7 @@ import { useApp } from '../App';
 import { SheetTabs } from '../components/SheetTabs';
 import type {
   ElementPackageAssignment, MaterialImportResult, MaterialPackageAssignment, MaterialPackageCombination,
-  OtherPackageCombination, ServicePackageAssignment, ServicePackageCombination, WorkPackage, WorkPackageDef,
+  OtherPackageCombination, ServiceMnl, ServiceMnlAssignment, ServicePackageAssignment, ServicePackageCombination, WorkPackage, WorkPackageDef,
 } from '@shared/types';
 
 const money = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 0 });
@@ -38,7 +38,9 @@ function PackagePicker({ types, value, onChange, clearLabel = 'clear' }: {
                     display: 'inline-flex', alignItems: 'center', gap: 4,
                     fontSize: 12, lineHeight: 1, padding: '4px 7px', borderRadius: 6,
                     cursor: 'pointer', fontFamily: 'inherit',
-                    background: selected ? t.color : 'var(--surface-3)',
+                    // Package colour (user data) tints the selected button; its
+                    // label inherits the theme's text token, readable in every theme.
+                    background: selected ? `color-mix(in srgb, ${t.color} 28%, var(--surface))` : 'var(--surface-3)',
                     border: `1px solid ${selected ? t.color : 'var(--border)'}`,
                     filter: selected ? 'none' : 'grayscale(0.4) opacity(0.75)',
                   }}>
@@ -63,7 +65,7 @@ function UnallocatedBadge() {
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center', fontSize: 11, fontWeight: 600,
-      color: 'var(--warning)', background: '#fab21922', border: '1px solid #fab21955',
+      color: 'var(--badge-warn-ink)', background: 'var(--badge-warn-bg)', border: '1px solid var(--badge-warn-line)',
       borderRadius: 5, padding: '2px 8px', whiteSpace: 'nowrap',
     }}>
       UNALLOCATED
@@ -72,15 +74,15 @@ function UnallocatedBadge() {
 }
 
 /** Small coded/uncoded fill — a scanning aid next to a group's own count, not a chart: one fill (severity color), track is the same color at low alpha rather than a second hue. Shared by every grouped-picker table on this page. */
-function CoverageMeter({ coded, total }: { coded: number; total: number }) {
+export function CoverageMeter({ coded, total }: { coded: number; total: number }) {
   const donePct = total > 0 ? (coded / total) * 100 : 0;
-  // Actual hex, not var(--good)/var(--warning) — a CSS variable can't be
-  // alpha-suffixed the way PackageBadge tints a data-driven hex color.
-  const color = coded === total ? '#0ca30c' : '#fab219';
+  // Status token for the fill; the track is the same token at low alpha via
+  // color-mix, so it follows the active theme without a second hue.
+  const color = coded === total ? 'var(--good)' : 'var(--warning)';
   return (
     <span title={`${coded} of ${total} coded`}
           style={{ display: 'inline-block', width: 44, height: 6, borderRadius: 3,
-                   background: `${color}33`, verticalAlign: 'middle', marginLeft: 8, overflow: 'hidden' }}>
+                   background: `color-mix(in srgb, ${color} 20%, transparent)`, verticalAlign: 'middle', marginLeft: 8, overflow: 'hidden' }}>
       <span style={{ display: 'block', width: `${donePct}%`, height: '100%', background: color, borderRadius: 3 }} />
     </span>
   );
@@ -92,7 +94,10 @@ function PackageBadge({ types, code }: { types: WorkPackageDef[]; code: string }
   return (
     <span title={meta.label} style={{
       display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 600,
-      color: meta.color, background: `${meta.color}22`, border: `1px solid ${meta.color}55`,
+      // The package's own colour (user data) tints the pill and its border;
+      // the label stays a text token so a pale colour is readable on light themes.
+      color: 'var(--text)', background: `color-mix(in srgb, ${meta.color} 14%, transparent)`,
+      border: `1px solid color-mix(in srgb, ${meta.color} 45%, transparent)`,
       borderRadius: 5, padding: '2px 8px', whiteSpace: 'nowrap',
     }}>
       <span style={{ fontSize: 9 }}>{meta.icon}</span>{meta.code}
@@ -157,7 +162,7 @@ function buildGenericGroups<T extends { resolved_work_package: string | null; am
  */
 function GroupedPackageTable<T extends { resolved_work_package: string | null; assigned_work_package: string | null; amount: number; postings: number }>({
   combos, types, savingKeys, onAllocate, rowKey, sortKey, codeLabel, renderCode, descLabel, renderDescription,
-  unitNoun, groupKey, groupKeyLabel, poColumn,
+  unitNoun, groupKey, groupKeyLabel, poColumn, mnlControl,
 }: {
   combos: T[];
   types: WorkPackageDef[];
@@ -174,6 +179,8 @@ function GroupedPackageTable<T extends { resolved_work_package: string | null; a
   groupKeyLabel?: string;
   /** An optional always-visible context column (e.g. PO number) that doubles as a third grouping dimension. */
   poColumn?: { label: string; value: (c: T) => string };
+  /** Optional MNL column + a second control on the sticky selection bar, applied to every checked row. */
+  mnlControl?: { value: (c: T) => 'SUB' | 'LAB' | 'EQU'; onAssign: (rows: T[], mnl: 'SUB' | 'LAB' | 'EQU') => void };
 }) {
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState<{ col: PkgSortCol; dir: 1 | -1 }>({ col: 'amount', dir: -1 });
@@ -182,7 +189,7 @@ function GroupedPackageTable<T extends { resolved_work_package: string | null; a
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [allCollapsed, setAllCollapsed] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const columnCount = poColumn ? 7 : 6;
+  const columnCount = 6 + (poColumn ? 1 : 0) + (mnlControl ? 1 : 0);
 
   const selBarRef = useRef<HTMLDivElement>(null);
   const [selBarHeight, setSelBarHeight] = useState(0);
@@ -265,6 +272,13 @@ function GroupedPackageTable<T extends { resolved_work_package: string | null; a
         <td className="mono" style={{ paddingLeft: depth ? depth * 20 : undefined }}>{renderCode(c)}</td>
         <td>{renderDescription(c)}</td>
         {poColumn && <td className="mono faint">{poColumn.value(c) || '—'}</td>}
+        {mnlControl && (
+          <td>
+            {mnlControl.value(c) === 'SUB'
+              ? <span className="faint">SUB</span>
+              : <span className="badge info plain">{mnlControl.value(c)}</span>}
+          </td>
+        )}
         <td className="mono" style={{ textAlign: 'right' }}>{c.postings.toLocaleString()}</td>
         <td className="mono" style={{ textAlign: 'right' }}>{money(c.amount)}</td>
         <td>
@@ -307,7 +321,7 @@ function GroupedPackageTable<T extends { resolved_work_package: string | null; a
           <span className="faint" style={{ fontSize: 11, marginLeft: 8 }}>
             {g.rows.length} {unitNoun}{g.rows.length === 1 ? '' : 's'}
             {groupUnallocated > 0 && (
-              <span style={{ color: 'var(--warning)' }}> · {groupUnallocated} unallocated</span>
+              <span style={{ color: 'var(--badge-warn-ink)' }}> · {groupUnallocated} unallocated</span>
             )}
             {' · '}{pct(g.amount)}% of total
           </span>
@@ -315,6 +329,7 @@ function GroupedPackageTable<T extends { resolved_work_package: string | null; a
           {groupSaving && <span className="faint" style={{ fontSize: 10, marginLeft: 8 }}>saving…</span>}
         </td>
         {poColumn && <td style={{ verticalAlign: 'top' }}></td>}
+        {mnlControl && <td style={{ verticalAlign: 'top' }}></td>}
         <td className="mono" style={{ textAlign: 'right', verticalAlign: 'top' }}>{g.postings.toLocaleString()}</td>
         <td className="mono" style={{ textAlign: 'right', verticalAlign: 'top' }}>{money(g.amount)}</td>
         <td style={{ verticalAlign: 'top' }}></td>
@@ -353,7 +368,7 @@ function GroupedPackageTable<T extends { resolved_work_package: string | null; a
           {filtered.length} of {combos.length} {unitNoun}{combos.length === 1 ? '' : 's'}
           {groups && ` across ${groups.length} group${groups.length === 1 ? '' : 's'}`}
           {' · '}
-          <span style={{ color: 'var(--warning)' }}>
+          <span style={{ color: 'var(--badge-warn-ink)' }}>
             {unallocated.length} unallocated ({pct(unallocated.reduce((s, c) => s + c.amount, 0))}% of total)
           </span>
         </span>
@@ -369,11 +384,24 @@ function GroupedPackageTable<T extends { resolved_work_package: string | null; a
                 onAllocate(rows, v);
                 setSelected(new Set());
               }} />
+            {mnlControl && (
+              <span className="row" style={{ gap: 4, alignItems: 'center' }}>
+                <span className="faint" style={{ fontSize: 12 }}>MNL:</span>
+                {(['SUB', 'LAB', 'EQU'] as const).map((m) => (
+                  <button key={m} className="btn sm" title={`Report the selected service items as ${m}`}
+                          onClick={() => {
+                            const rows = filtered.filter((r) => selected.has(rowKey(r)));
+                            mnlControl.onAssign(rows, m);
+                            setSelected(new Set());
+                          }}>{m}</button>
+                ))}
+              </span>
+            )}
             <button className="btn sm ghost" onClick={() => setSelected(new Set())}>Clear selection</button>
           </>
         ) : (
           <span className="faint" style={{ fontSize: 12 }}>
-            Select rows to assign a package to several at once.
+            Select rows to assign a package{mnlControl ? ' or MNL' : ''} to several at once.
           </span>
         )}
       </div>
@@ -387,6 +415,7 @@ function GroupedPackageTable<T extends { resolved_work_package: string | null; a
             <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('key')}>{codeLabel}{sortArrow('key')}</th>
             <th>{descLabel}</th>
             {poColumn && <th style={{ width: 110 }}>{poColumn.label}</th>}
+            {mnlControl && <th style={{ width: 60 }} title="Resource category the service reports under">MNL</th>}
             <th style={{ textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('postings')}>
               Postings{sortArrow('postings')}
             </th>
@@ -429,11 +458,17 @@ function GroupedPackageTable<T extends { resolved_work_package: string | null; a
 }
 
 type MaterialSortCol = 'material_code' | 'material_name' | 'prefix' | 'postings' | 'amount';
-type MaterialGroupKind = 'prefix' | 'package';
+// family / division / group are SAP's material-group tree (dim_material_group), a read-only classification of what a
+// material is; prefix and package are the older stand-ins. The tree levels compose: Family then Division then Group.
+type MaterialGroupKind = 'prefix' | 'package' | 'family' | 'division' | 'group';
 type MaterialGroupBy = MaterialGroupKind | 'none';
 
 interface MaterialGroup {
   key: string;
+  /** Display text for a tree group (family / division / group); '' for prefix and package. */
+  label: string;
+  /** Tree order of the group (SAP's order, not alphabetical). */
+  ord: string;
   rows: MaterialPackageCombination[];
   postings: number;
   amount: number;
@@ -447,8 +482,17 @@ function buildMaterialGroups(
 ): MaterialGroup[] {
   const map = new Map<string, MaterialGroup>();
   for (const r of rows) {
-    const key = groupBy === 'prefix' ? r.prefix : (r.resolved_work_package ?? 'UNALLOCATED');
-    const g = map.get(key) ?? { key, rows: [], postings: 0, amount: 0, uniformPackage: '' as WorkPackage | '' };
+    const key = groupBy === 'prefix' ? r.prefix
+      : groupBy === 'family' ? r.family
+      : groupBy === 'division' ? r.division_key
+      : groupBy === 'group' ? r.group_code
+      : (r.resolved_work_package ?? 'UNALLOCATED');
+    const label = groupBy === 'family' ? r.family_label : groupBy === 'division' ? r.division_label
+      : groupBy === 'group' ? r.group_label : '';
+    const ord = groupBy === 'family' ? String(r.family_sort).padStart(4, '0')
+      : groupBy === 'division' ? `${String(r.family_sort).padStart(4, '0')}|${r.division_key}`
+      : groupBy === 'group' ? `${String(r.group_sort).padStart(7, '0')}|${r.group_code}` : key;
+    const g = map.get(key) ?? { key, label, ord, rows: [], postings: 0, amount: 0, uniformPackage: '' as WorkPackage | '' };
     g.rows.push(r);
     g.postings += r.postings;
     g.amount += r.amount;
@@ -472,7 +516,7 @@ function buildMaterialGroups(
     const order = ['UNALLOCATED', ...types.map((t) => t.code)];
     return [...map.values()].sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key));
   }
-  return [...map.values()].sort((a, b) => a.key.localeCompare(b.key, undefined, { numeric: true }));
+  return [...map.values()].sort((a, b) => a.ord.localeCompare(b.ord, undefined, { numeric: true }));
 }
 
 /**
@@ -578,10 +622,12 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
   const toggleRow = (code: string, checked: boolean) =>
     setSelected((s) => { const next = new Set(s); checked ? next.add(code) : next.delete(code); return next; });
 
-  const groupLabel = (kind: MaterialGroupKind, key: string) =>
+  const groupLabel = (kind: MaterialGroupKind, key: string, label: string) =>
     kind === 'package'
       ? (key === 'UNALLOCATED' ? <UnallocatedBadge /> : <PackageBadge types={types} code={key} />)
-      : <span className="mono" style={{ fontWeight: 700 }}>{key}xxxxx</span>;
+      : kind === 'prefix'
+        ? <span className="mono" style={{ fontWeight: 700 }}>{key}xxxxx</span>
+        : <span style={{ fontWeight: 700 }}>{label}</span>;
 
   const renderRow = (c: MaterialPackageCombination, depth: number) => {
     const key = c.material_code;
@@ -633,11 +679,11 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
         </td>
         <td colSpan={2} style={{ paddingLeft: depth ? depth * 20 : undefined, verticalAlign: 'top' }}>
           <span style={{ marginRight: 6 }}>{open ? '▾' : '▸'}</span>
-          {groupLabel(kind, g.key)}
+          {groupLabel(kind, g.key, g.label)}
           <span className="faint" style={{ fontSize: 11, marginLeft: 8 }}>
             {g.rows.length} material{g.rows.length === 1 ? '' : 's'}
             {groupUnallocated > 0 && (
-              <span style={{ color: 'var(--warning)' }}> · {groupUnallocated} unallocated</span>
+              <span style={{ color: 'var(--badge-warn-ink)' }}> · {groupUnallocated} unallocated</span>
             )}
             {' · '}{pct(g.amount)}% of total
           </span>
@@ -657,10 +703,11 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
   );
 
   const groupByOptionLabels: Record<MaterialGroupBy, string> = {
-    prefix: 'Code prefix (first 2 digits)', package: 'Current work package', none: 'None',
+    prefix: 'Code prefix (first 2 digits)', package: 'Current work package',
+    family: 'SAP family', division: 'SAP division', group: 'SAP material group', none: 'None',
   };
   const groupByOptions = (exclude?: MaterialGroupBy) =>
-    (['prefix', 'package', 'none'] as MaterialGroupBy[])
+    (['family', 'division', 'group', 'prefix', 'package', 'none'] as MaterialGroupBy[])
       .filter((v) => v !== exclude)
       .map((v) => <option key={v} value={v}>{groupByOptionLabels[v]}</option>);
 
@@ -693,7 +740,7 @@ function MaterialCodingTable({ combos, types, savingKeys, onAllocate }: {
           {sorted.length.toLocaleString()} of {combos.length.toLocaleString()} materials
           {groups && ` across ${groups.length} group${groups.length === 1 ? '' : 's'}`}
           {' · '}
-          <span style={{ color: 'var(--warning)' }}>
+          <span style={{ color: 'var(--badge-warn-ink)' }}>
             {unallocated.length.toLocaleString()} unallocated ({pct(unallocatedAmount)}% of total spend)
           </span>
         </span>
@@ -901,7 +948,13 @@ function PackageManager({ types, onCreate, onUpdate, onDelete, busy }: {
  * subcontractor service items into them — everything else defaults to
  * Indirect but stays visible here for review.
  */
-export function PackageMapping() {
+export type PackageTab = 'packages' | 'materials' | 'subcontractors' | 'other';
+
+/**
+ * Work-package coding. On the Coding page each part is its own tab (`tab`), rendered without this page's own
+ * sheet strip; onlyUncoded keeps materials and services to the ones with no package yet.
+ */
+export function PackageMapping({ tab, onlyUncoded = false }: { tab?: PackageTab; onlyUncoded?: boolean } = {}) {
   const { projectKey, dataVersion } = useApp();
   const [types, setTypes] = useState<WorkPackageDef[]>([]);
   const [materials, setMaterials] = useState<MaterialPackageCombination[]>([]);
@@ -1019,6 +1072,24 @@ export function PackageMapping() {
     })();
   };
 
+  const allocateServiceMnl = (rows: ServicePackageCombination[], mnl: ServiceMnl) => {
+    if (!projectKey) return;
+    const keys = rows.map((r) => `${r.po_no} ${r.service_code} ${r.service_text}`);
+    setSavingService((s) => new Set([...s, ...keys]));
+    setError(null);
+    (async () => {
+      try {
+        const items: ServiceMnlAssignment[] = rows.map((r) => ({ service_code: r.service_code, service_text: r.service_text }));
+        await call(api.workPackages.assignServiceMnl(projectKey, items, mnl));
+        await loadServices();
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setSavingService((s) => { const n = new Set(s); keys.forEach((k) => n.delete(k)); return n; });
+      }
+    })();
+  };
+
   const createType = (input: { code: string; label: string; group_label: string; icon: string; color: string }) => guard(async () => {
     setTypes(await call(api.workPackages.typeCreate(input)));
     setNote(`Added "${input.code} — ${input.label}" as a work package.`);
@@ -1032,12 +1103,13 @@ export function PackageMapping() {
     setNote('Work package removed.');
   });
 
-  return (
-    <>
-      {error && <div className="banner err">{error}</div>}
-      {note && <div className="banner ok">{note}</div>}
+  const shownMaterials = onlyUncoded ? materials.filter((m) => !m.resolved_work_package) : materials;
+  const shownServices = onlyUncoded ? services.filter((m) => !m.resolved_work_package) : services;
+  const allCoded = (n: number, total: number, noun: string) => onlyUncoded && total > 0 && n === 0
+    ? <div className="empty">Every {noun} has a work package. Switch off “only what still needs coding” to review them all.</div>
+    : null;
 
-      <SheetTabs sheets={[
+  const sheets = [
         {
           id: 'packages', label: 'Packages', content: (
             <div className="card">
@@ -1074,7 +1146,8 @@ export function PackageMapping() {
                   <button className="btn sm" onClick={importMaterials} disabled={busy}>⤒ Import mapping…</button>
                 </div>
               </div>
-              <MaterialCodingTable combos={materials} types={types} savingKeys={savingMaterial} onAllocate={allocateMaterial} />
+              {allCoded(shownMaterials.length, materials.length, 'material') ??
+                <MaterialCodingTable combos={shownMaterials} types={types} savingKeys={savingMaterial} onAllocate={allocateMaterial} />}
             </div>
           ),
         },
@@ -1093,7 +1166,8 @@ export function PackageMapping() {
                 can't be coded here — it shows up as (unallocated) on the Cost Report until its
                 detail is uploaded.
               </p>
-              <GroupedPackageTable combos={services} types={types} savingKeys={savingService}
+              {allCoded(shownServices.length, services.length, 'service item') ??
+              <GroupedPackageTable combos={shownServices} types={types} savingKeys={savingService}
                 onAllocate={allocateService}
                 rowKey={(c) => `${c.po_no}\u0000${c.service_code}\u0000${c.service_text}`}
                 sortKey={(c) => c.service_text || c.service_code}
@@ -1102,7 +1176,8 @@ export function PackageMapping() {
                 groupKey={(c) => (c.service_code || '').slice(0, 3) || '(no code)'}
                 groupKeyLabel="Service code prefix (first 3 chars)"
                 poColumn={{ label: 'PO', value: (c) => c.po_no }}
-                unitNoun="service item" />
+                mnlControl={{ value: (c) => c.mnl ?? 'SUB', onAssign: allocateServiceMnl }}
+                unitNoun="service item" />}
             </div>
           ),
         },
@@ -1125,7 +1200,13 @@ export function PackageMapping() {
             </div>
           ),
         },
-      ]} />
+  ];
+  const one = tab ? sheets.find((x) => x.id === tab) : null;
+  return (
+    <>
+      {error && <div className="banner err">{error}</div>}
+      {note && <div className="banner ok">{note}</div>}
+      {one ? one.content : <SheetTabs sheets={sheets} />}
     </>
   );
 }

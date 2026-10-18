@@ -21,6 +21,16 @@ import materialSql from './migrations/014_material.sql?raw';
 import csiPackagesSql from './migrations/015_csi_packages.sql?raw';
 import projectScopedMappingSql from './migrations/016_project_scoped_mapping.sql?raw';
 import subcontractReportSql from './migrations/017_subcontract_report.sql?raw';
+import cutoffSql from './migrations/018_cutoff.sql?raw';
+import scPortSql from './migrations/019_sc_port.sql?raw';
+import materialGroupsSql from './migrations/020_material_groups.sql?raw';
+import materialIssueSql from './migrations/021_material_issue.sql?raw';
+import mnlSql from './migrations/022_mnl.sql?raw';
+import mnlCodesSql from './migrations/023_mnl_codes.sql?raw';
+import costSourcesSql from './migrations/024_cost_sources.sql?raw';
+import buildStepsSql from './migrations/025_build_steps.sql?raw';
+import taggedJoinsSql from './migrations/026_tagged_joins.sql?raw';
+import registerItemSql from './migrations/027_register_item.sql?raw';
 import { SYSTEM_QUERIES } from './systemQueries';
 
 interface Migration {
@@ -52,6 +62,16 @@ const MIGRATIONS: Migration[] = [
   { version: 15, name: '015_csi_packages', sql: csiPackagesSql },
   { version: 16, name: '016_project_scoped_mapping', sql: projectScopedMappingSql, selfTransacting: true },
   { version: 17, name: '017_subcontract_report', sql: subcontractReportSql, selfTransacting: true },
+  { version: 18, name: '018_cutoff', sql: cutoffSql },
+  { version: 19, name: '019_sc_port', sql: scPortSql },
+  { version: 20, name: '020_material_groups', sql: materialGroupsSql },
+  { version: 21, name: '021_material_issue', sql: materialIssueSql },
+  { version: 22, name: '022_mnl', sql: mnlSql },
+  { version: 23, name: '023_mnl_codes', sql: mnlCodesSql },
+  { version: 24, name: '024_cost_sources', sql: costSourcesSql },
+  { version: 25, name: '025_build_steps', sql: buildStepsSql },
+  { version: 26, name: '026_tagged_joins', sql: taggedJoinsSql },
+  { version: 27, name: '027_register_item', sql: registerItemSql },
 ];
 
 let db: DB | null = null;
