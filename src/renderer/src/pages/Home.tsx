@@ -6,7 +6,7 @@ import { Upload } from './Upload';
 import { SapConnect } from './SapConnect';
 import type { BuildCheck, BuildStatus, BuildStepStatus, BuildTimelineBar, Module, QueryResult, ReportReadiness } from '@shared/types';
 
-type Target = 'register' | 'packages' | 'reports' | 'costtypes' | 'settings'
+type Target = 'register' | 'register_cost' | 'coding' | 'packages' | 'reports' | 'costtypes' | 'settings'
   | 'costreport' | 'subcontractor' | 'material' | 'dashboard';
 
 const STATUS_DOT: Record<BuildStatus, string> = {
@@ -107,6 +107,50 @@ export function Home({ onNavigate }: { onNavigate: (page: Target) => void }) {
   }, [timeline]);
   const pctOf = (pos: number) => axis ? ((pos - axis.start) / axis.count) * 100 : 0;
 
+  // The month-close checklist, read off what Home already loaded (build status + checks), no extra query.
+  const [pack, setPack] = useState<{ folder: string; files: string[]; skipped: { report: string; reason: string }[] } | null>(null);
+  const [packBusy, setPackBusy] = useState(false);
+  const generatePack = async () => {
+    if (!projectKey) return;
+    setPackBusy(true); setError(null); setPack(null);
+    try { const r = await call(api.pack.generate(projectKey)); if (r) setPack(r); }
+    catch (e) { setError((e as Error).message); } finally { setPackBusy(false); }
+  };
+  const closeItems = useMemo(() => {
+    const ups = steps.filter((r) => r.kind === 'upload' && !r.is_optional && r.status !== 'Not available');
+    const done = ups.filter((r) => r.status === 'Complete' || r.status === 'Needs action').length;
+    const behind = ups.filter((r) => r.status === 'Behind cut-off');
+    const missing = ups.filter((r) => r.status === 'Ready to load' || r.status === 'Waiting');
+    const coding = steps.filter((r) => ['B11', 'B12', 'B18'].includes(r.step_code) && r.status === 'Needs action');
+    const recon = checks.filter((c) => c.level === 'warn' && /set aside/.test(c.message));
+    type Item = { key: string; state: 'ok' | 'warn' | 'todo'; label: string; hint: string; onClick?: () => void };
+    const items: Item[] = [
+      cutoffDate
+        ? { key: 'cut', state: 'ok', label: `Cut-off ${cutoffDate}`, hint: 'Change it in the top bar' }
+        : { key: 'cut', state: 'todo', label: 'Set the cut-off', hint: 'Pick the month end in the top bar' },
+      {
+        key: 'files', state: missing.length ? 'todo' : behind.length ? 'warn' : 'ok',
+        label: `Files ${done + behind.length}/${ups.length}${behind.length ? ` · ${behind.length} behind cut-off` : ''}`,
+        hint: [...missing.map((r) => `${r.step_code} ${r.name}: not loaded`), ...behind.map((r) => `${r.step_code} ${r.name}: behind the cut-off`)].join('\n') || 'Every required file is loaded',
+        onClick: missing[0] || behind[0] ? () => { setSelectedCode((missing[0] ?? behind[0]).step_code); pickView('map'); } : undefined,
+      },
+      {
+        key: 'coding', state: coding.length ? 'todo' : 'ok',
+        label: coding.length ? `Coding · ${coding.length} to do` : 'Coding done',
+        hint: coding.map((r) => `${r.step_code} ${r.name}: ${r.summary}`).join('\n') || 'Every GL, material and service is coded',
+        onClick: () => onNavigate('coding'),
+      },
+      {
+        key: 'recon', state: recon.length ? 'warn' : 'ok',
+        label: recon.length ? `Sources check · ${recon.length} difference${recon.length === 1 ? '' : 's'}` : 'Sources check OK',
+        hint: recon.map((c) => c.message).join('\n') || 'Each detail source equals the CJI3 cost it replaces',
+        onClick: () => onNavigate('register_cost'),
+      },
+    ];
+    return items;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [steps, checks, cutoffDate]);
+
   const requiredRows = steps.filter((r) => !r.is_optional);
   const completeReq = requiredRows.filter((r) => r.status === 'Complete').length;
   const needAction = steps.filter((r) => r.status === 'Needs action' || r.status === 'Behind cut-off').length;
@@ -155,12 +199,38 @@ export function Home({ onNavigate }: { onNavigate: (page: Target) => void }) {
             {view === 'map' ? 'Timeline view' : 'Map view'}
           </button>
           <button className="btn sm" onClick={() => openUpload(null)}>Add file</button>
-          <button className="btn sm primary"
+          <button className="btn sm"
                   onClick={() => readinessRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
             Open reports
           </button>
         </div>
       </div>
+
+      {/* ---------------- month close: what is left, then one click for the pack ---------------- */}
+      {projectKey != null && steps.length > 0 && (
+        <div className="close-strip">
+          <span className="close-title">Close {cutoffDate ? cutoffDate.slice(0, 7) : 'the month'}</span>
+          {closeItems.map((c) => (
+            <button key={c.key} className={`close-item ${c.state}`} onClick={c.onClick} title={c.hint} disabled={!c.onClick}>
+              <span className="close-icon">{c.state === 'ok' ? '✓' : c.state === 'warn' ? '!' : '○'}</span>{c.label}
+            </button>
+          ))}
+          <div className="spacer" style={{ flex: 1 }} />
+          <button className="btn sm primary" onClick={generatePack} disabled={packBusy}
+                  title="The Actual cost register, plus the Subcontract and Material workbooks when their sources are loaded, into one folder">
+            {packBusy ? <span className="spinner" /> : '⤓'} Generate monthly pack
+          </button>
+        </div>
+      )}
+      {pack && (
+        <div className="banner ok">
+          <div>
+            Monthly pack saved: {pack.files.length} workbook{pack.files.length === 1 ? '' : 's'} in <span className="mono">{pack.folder}</span>
+            {pack.skipped.length > 0 && <span className="faint"> · not included: {pack.skipped.map((s) => `${s.report} (${s.reason})`).join(', ')}</span>}
+            {' '}<button className="btn sm" onClick={() => api.showItem(pack.files[0] ?? pack.folder)}>Show</button>
+          </div>
+        </div>
+      )}
 
       {sapOpen ? (
         <div className="upload-panel">

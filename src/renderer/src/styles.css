@@ -1113,6 +1113,19 @@ td.pos { color: var(--ink-good); }
 .arch-meta { font-size: 11px; }
 .arch-drop { color: var(--accent); }
 .pivot-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 7px; vertical-align: 0; }
+.close-strip { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 14px; margin-bottom: var(--gutter);
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.close-title { font-weight: 600; font-size: 13px; margin-right: 4px; }
+.close-item { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font: inherit; font-size: 12px;
+  border: 1px solid var(--border); background: transparent; color: var(--text-2); cursor: pointer; }
+.close-item:disabled { cursor: default; }
+.close-item.ok { border-color: var(--good); color: var(--text); }
+.close-item.ok .close-icon { color: var(--good); }
+.close-item.warn { border-color: var(--warning); color: var(--text); }
+.close-item.warn .close-icon { color: var(--badge-warn-ink); }
+.close-item.todo { border-style: dashed; border-color: var(--accent); color: var(--text); }
+.close-item.todo .close-icon { color: var(--accent); }
+.close-icon { font-weight: 700; }
 .coding-head { display: flex; align-items: center; justify-content: space-between; gap: var(--gutter); flex-wrap: wrap; font-size: 13.5px; }
 .arch-note { font-size: 11px; color: var(--text-3); align-self: center; font-style: italic; padding: 2px 4px; }
 .link-btn { background: none; border: 0; padding: 0 4px; color: var(--accent); font: inherit; font-size: 12.5px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }

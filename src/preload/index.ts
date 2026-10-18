@@ -125,6 +125,9 @@ const api = {
   material: {
     exportReport: (projectKey: number) => invoke<string | null>('material:exportReport', projectKey),
   },
+  pack: {
+    generate: (projectKey: number) => invoke<any>('pack:generate', projectKey),
+  },
   register: {
     exportReport: (projectKey: number, rowsBy: string | null, source: string | null) =>
       invoke<string | null>('register:export', projectKey, rowsBy, source),

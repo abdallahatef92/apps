@@ -9,6 +9,7 @@ import { exportCostTypeMapping, exportResult } from './services/exportExcel';
 import { buildSubcontractReport } from './services/subcontractReport';
 import { buildMaterialReport } from './services/materialReport';
 import { buildRegisterWorkbook } from './services/registerReport';
+import { writeMonthlyPack } from './services/monthlyPack';
 import { buildPivotSql, pivotMeta, type PivotRequest } from './services/pivot';
 import { buildLineage } from './services/lineage';
 import { MATERIAL_TREE_CTE } from './db/materialQueries';
@@ -859,6 +860,17 @@ export function registerIpc(): void {
     if (res.canceled || !res.filePath) return null;
     writeFileSync(res.filePath, report.buffer);
     return res.filePath;
+  });
+
+  /** The monthly pack: the register plus the SC / Material workbooks that apply, into one folder the user picks. */
+  handle('pack:generate', async (projectKey: number) => {
+    const res = await dialog.showOpenDialog({
+      title: 'Choose where to save the monthly pack',
+      defaultPath: app.getPath('documents'),
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (res.canceled || !res.filePaths[0]) return null;
+    return writeMonthlyPack(projectKey, res.filePaths[0]);
   });
 
   handle('register:export', async (projectKey: number, rowsBy: string | null, source: string | null): Promise<string | null> => {

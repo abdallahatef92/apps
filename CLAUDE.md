@@ -572,7 +572,14 @@ ORDER = 'Order <no>'), plus `quantity` / `unit` per line (CERT = `report_qty`) �
 the e2e asserts every view adds up to `v_actual_cost`. ⤓ Excel (`register:export` → `services/registerReport.ts`) writes
 Per month (Unit, Qty to date, Cumulative, months; SUBTOTAL formulas) and Lines. It replaced Project dashboard, Actual cost (GL pivot) and the Cost
 Report in the menu: those pages are in developer tools, and `navigate()` sends links to them to the register when the
-tools are off. Next: a close checklist and a monthly pack export on Home.
+tools are off.
+
+**Month close on Home** (simplification step 4): a strip under the header lists what is left — cut-off set, required
+files loaded (and behind the cut-off), coding to do (B11 / B12 / B18), sources-check differences — read off the build
+status and checks Home already loaded (no extra query), each linking to where it is fixed. **Generate monthly pack**
+(`pack:generate` → `services/monthlyPack.ts`) writes `<project>_Monthly_Pack_<month>/` in a folder the user picks: the
+register always, the SC workbook when certificates are loaded, the Material workbook when MB51 is — the same workbooks
+their pages export.
 
 Pages live in `src/renderer/src/pages/` and are wired in exactly two places in `App.tsx`:
 the `PAGES` array (nav entry, glyph, subtitle) and the `page === '...'` switch in the

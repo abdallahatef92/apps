@@ -101,6 +101,9 @@ type Bridge = {
   material: {
     exportReport(projectKey: number): Promise<IpcResult<string | null>>;
   };
+  pack: {
+    generate(projectKey: number): Promise<IpcResult<{ folder: string; files: string[]; skipped: { report: string; reason: string }[] } | null>>;
+  };
   register: {
     exportReport(projectKey: number, rowsBy: string | null, source: string | null): Promise<IpcResult<string | null>>;
   };

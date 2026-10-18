@@ -15,6 +15,7 @@ import { postBatch, stageFile } from '../src/main/ingest/importer';
 import { runStoredQuery } from '../src/main/services/queryRunner';
 import { clearProjectData, deleteProject, projectFootprint } from '../src/main/services/projectAdmin';
 import { buildRegisterWorkbook } from '../src/main/services/registerReport';
+import { writeMonthlyPack } from '../src/main/services/monthlyPack';
 import { pullAndStage } from '../src/main/sap/pull';
 import { DEFAULT_EXTRACT } from '../src/main/sap/odata';
 import { scNorm } from '../src/main/db/systemQueries';
@@ -1315,6 +1316,17 @@ async function costSources(dir: string): Promise<void> {
   check('register workbook sheets: Per month, Lines', wbk.worksheets.map((w) => w.name).join(',') === 'Per month,Lines',
     wbk.worksheets.map((w) => w.name).join(','));
   { const bad = await sheetPrOrderOk(book.buffer); check('register workbook: sheetPr children in schema order (Excel opens without repair)', bad.length === 0, bad.join(',')); }
+
+  // ---- the monthly pack: one folder, the register always, SC / Material only when their source is loaded
+  const pack = await writeMonthlyPack(pk, dir);
+  const names = pack.files.map((f) => f.split(/[\/]/).pop()!);
+  check('monthly pack: one folder per project and month', /_Monthly_Pack_/.test(pack.folder) && existsSync(pack.folder), pack.folder);
+  check('monthly pack: the register is always in it', names.some((n) => /Actual_Cost_Register/.test(n)), names.join(','));
+  const hasCert = num(`SELECT COUNT(*) FROM fact_service_line WHERE project_key = ${pk}`) > 0;
+  check('monthly pack: the SC workbook is in it exactly when certificates are loaded',
+    names.some((n) => /_SC_Report_/.test(n)) === hasCert && pack.skipped.some((x) => /Subcontract/.test(x.report)) === !hasCert,
+    `${names.join(',')} | skipped ${pack.skipped.map((x) => x.report).join(',')}`);
+  check('monthly pack: every file it names was written', pack.files.every((f) => existsSync(f)));
 }
 
 /**
