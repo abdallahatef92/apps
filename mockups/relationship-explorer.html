@@ -1,0 +1,327 @@
+<title>Cost Relationship Explorer</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one header, three tabs (WBS roll-up, vendor/PO/WBS network, exceptions); each tab shows the result set and the SQL behind it. Tokens copied from the app's styles.css. */
+:root {
+  --plane:#0b0f14; --surface:#121822; --surface-2:#172030; --surface-3:#1e2938;
+  --border:#223047; --border-soft:#1a2433;
+  --text:#eef3f8; --text-2:#a9b7c7; --text-3:#6f8195;
+  --accent:#3987e5; --accent-soft:rgba(57,135,229,.14); --accent-line:rgba(57,135,229,.35);
+  --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70;
+  --good:#0ca30c; --warning:#fab219; --critical:#d03b3b;
+  --div-neg:#d03b3b; --div-pos:#3987e5; --div-mid:#2b3648;
+  --grid:#1b2635; --axis:#2a3a4f;
+  --sans:"Inter","Segoe UI",-apple-system,BlinkMacSystemFont,Roboto,sans-serif;
+  --mono:"JetBrains Mono","Cascadia Mono",Consolas,monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--plane); color: var(--text); font-family: var(--sans); font-size: 14px; line-height: 1.5;
+  padding-block: 20px 48px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 16px; }
+h1 { font-size: 20px; margin: 0; font-weight: 600; letter-spacing: -.01em; text-wrap: balance; }
+h2 { font-size: 13px; margin: 0; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--text-2); }
+p { margin: 0; color: var(--text-2); max-width: 70ch; }
+header { display: grid; gap: 6px; }
+.badge { display: inline-block; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--warning); border: 1px solid var(--warning); border-radius: 999px; padding: 1px 9px; width: fit-content; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.tab { background: none; border: 0; color: var(--text-2); font: inherit; font-weight: 500; padding: 9px 14px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tab:hover { color: var(--text); }
+.tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; display: grid; gap: 14px; min-width: 0; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.kpi { background: var(--surface-2); border-radius: 6px; padding: 10px 12px; }
+.kpi .l { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .06em; }
+.kpi .v { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.kpi .s { font-size: 12px; color: var(--text-2); }
+.scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; min-width: 640px; }
+th { text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+th.n, td.n { text-align: right; }
+td { padding: 7px 10px; border-bottom: 1px solid var(--border-soft); white-space: nowrap; }
+tr.parent td { font-weight: 600; background: var(--surface-2); }
+.code { font-family: var(--mono); font-size: 12px; color: var(--text-2); }
+.tw { background: none; border: 0; color: var(--text-2); cursor: pointer; width: 20px; font: inherit; padding: 0; }
+.vbar { position: relative; width: 150px; height: 10px; }
+.vbar::before { content:""; position:absolute; left:50%; top:-2px; bottom:-2px; width:1px; background: var(--axis); }
+.vbar i { position:absolute; top:1px; height:8px; border-radius: 0 3px 3px 0; }
+.vbar i.over { left:50%; background: var(--div-neg); }
+.vbar i.under { right:50%; background: var(--div-pos); border-radius: 3px 0 0 3px; }
+.vcell { display:flex; align-items:center; gap:10px; justify-content:flex-end; }
+.nobud { font-size: 11px; color: var(--text-3); border: 1px dashed var(--axis); border-radius: 4px; padding: 0 6px; }
+.net { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 14px; }
+@media (max-width: 820px) { .net { grid-template-columns: minmax(0, 1fr); } }
+.svgbox { background: var(--plane); border: 1px solid var(--border-soft); border-radius: 6px; overflow-x: auto; }
+svg { display: block; min-width: 760px; width: 100%; height: auto; }
+svg text { font-family: var(--sans); fill: var(--text-2); font-size: 11px; }
+svg text.col { fill: var(--text-3); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.node { cursor: pointer; transition: opacity .12s; }
+.edge { fill: none; transition: opacity .12s; }
+.dim { opacity: .12; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--text-2); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.sw.ring { background: none; border: 2px dashed var(--warning); }
+.detail { background: var(--surface-2); border-radius: 6px; padding: 12px; display: grid; gap: 8px; align-content: start; font-size: 13px; }
+.detail b { font-weight: 600; }
+.detail dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; }
+.detail dt { color: var(--text-3); } .detail dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.pill { display:inline-flex; align-items:center; gap:5px; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; border: 1px solid; }
+.pill.warn { color: var(--warning); border-color: var(--warning); }
+.pill.crit { color: var(--critical); border-color: var(--critical); }
+.pill.ok { color: var(--good); border-color: var(--good); }
+details { border: 1px solid var(--border-soft); border-radius: 6px; }
+summary { cursor: pointer; padding: 8px 12px; color: var(--text-2); font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+pre { margin: 0; padding: 12px; overflow-x: auto; font-family: var(--mono); font-size: 12px; line-height: 1.65; color: var(--text-2); background: var(--plane); border-radius: 0 0 6px 6px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.xc { background: var(--surface-2); border-radius: 6px; padding: 12px; display: grid; gap: 6px; }
+.xc .t { display:flex; justify-content: space-between; gap: 8px; align-items: center; }
+.xc .amt { font-variant-numeric: tabular-nums; font-weight: 600; }
+.note { font-size: 12px; color: var(--text-3); }
+.bar { height: 8px; background: var(--div-mid); border-radius: 4px; overflow: hidden; }
+.bar i { display:block; height:100%; background: var(--series-1); }
+[hidden] { display: none !important; }
+</style>
+
+<div class="wrap">
+  <header>
+    <span class="badge">Mockup · example data</span>
+    <h1>Cost relationship explorer</h1>
+    <p>Three views of the links already in the warehouse: how cost rolls up the WBS, which vendors and purchase orders sit behind it, and where a link is missing. Every figure below would be the output of a stored query; the SQL for each view is under it.</p>
+  </header>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" id="t-wbs" aria-selected="true" aria-controls="p-wbs">WBS roll-up</button>
+    <button class="tab" role="tab" id="t-net" aria-selected="false" aria-controls="p-net">Vendor · PO · WBS network</button>
+    <button class="tab" role="tab" id="t-exc" aria-selected="false" aria-controls="p-exc">Missing links</button>
+  </div>
+
+  <section class="panel" id="p-wbs" role="tabpanel" aria-labelledby="t-wbs">
+    <div class="kpis" id="wbs-kpis"></div>
+    <div class="scroll"><table>
+      <thead><tr><th>WBS element</th><th class="n">Budget</th><th class="n">Actual</th><th class="n">Variance</th><th>Over / under budget</th></tr></thead>
+      <tbody id="wbs-body"></tbody>
+    </table></div>
+    <p class="note">Blue bars are under budget, red bars are over. An element with no budget is shown as “No budget”, never as an overrun the size of its spend. Amounts in thousands.</p>
+    <details><summary>SQL · wbs_rollup</summary><pre>WITH RECURSIVE tree(wbs_id, root_id, depth) AS (
+  SELECT wbs_id, wbs_id, 0 FROM dim_wbs
+  UNION ALL
+  SELECT c.wbs_id, t.root_id, t.depth + 1
+  FROM dim_wbs c JOIN tree t ON c.parent_wbs_id = t.wbs_id
+)
+SELECT w.wbs_code, w.description,
+       SUM(b.amount) AS budget,           -- NULL when no budget row exists
+       SUM(a.amount) AS actual,
+       SUM(a.amount) - SUM(b.amount) AS variance
+FROM tree
+JOIN dim_wbs w ON w.wbs_id = tree.root_id
+LEFT JOIN v_actual a ON a.wbs_id = tree.wbs_id   -- cost only, POSTED batches
+LEFT JOIN v_budget b ON b.wbs_id = tree.wbs_id
+GROUP BY w.wbs_id;</pre></details>
+  </section>
+
+  <section class="panel" id="p-net" role="tabpanel" aria-labelledby="t-net" hidden>
+    <div class="kpis" id="net-kpis"></div>
+    <div class="net">
+      <div style="display:grid; gap:10px; min-width:0">
+        <div class="legend">
+          <span><i class="sw" style="background:var(--series-1)"></i>Vendor</span>
+          <span><i class="sw" style="background:var(--series-2)"></i>Purchase order</span>
+          <span><i class="sw" style="background:var(--series-3)"></i>WBS element</span>
+          <span><i class="sw ring"></i>Link missing</span>
+          <span class="note">Node area and line width follow amount. Click a node to follow its links.</span>
+        </div>
+        <div class="svgbox"><svg id="net" viewBox="0 0 900 540" role="img" aria-label="Network of vendors, purchase orders and WBS elements"></svg></div>
+      </div>
+      <aside class="detail" id="net-detail" aria-live="polite"></aside>
+    </div>
+    <details><summary>SQL · vendor_po_wbs_edges</summary><pre>-- vendor → PO : the detail behind the PO (never added to actuals)
+SELECT vendor AS source, po_no AS target, SUM(amount) AS weight
+FROM v_service_line GROUP BY vendor, po_no;
+
+-- PO → WBS : where the PO's money was actually posted
+SELECT po_no AS source, wbs_code AS target, SUM(amount) AS weight
+FROM v_actual WHERE po_no IS NOT NULL GROUP BY po_no, wbs_code;</pre></details>
+  </section>
+
+  <section class="panel" id="p-exc" role="tabpanel" aria-labelledby="t-exc" hidden>
+    <div class="cards" id="exc-cards"></div>
+    <div style="display:grid; gap:8px">
+      <h2>Vendor concentration</h2>
+      <div id="conc" style="display:grid; gap:8px"></div>
+    </div>
+    <details><summary>SQL · po_reconciliation_gaps</summary><pre>WITH act AS (SELECT po_no, SUM(amount) AS actual FROM v_actual WHERE po_no IS NOT NULL GROUP BY po_no),
+     det AS (SELECT po_no, SUM(amount) AS detail FROM v_service_line GROUP BY po_no)
+SELECT COALESCE(act.po_no, det.po_no) AS po_no, act.actual, det.detail,
+       CASE WHEN det.po_no IS NULL THEN 'Posted, no detail'
+            WHEN act.po_no IS NULL THEN 'Detail, nothing posted'
+            WHEN ABS(act.actual - det.detail) > 1 THEN 'Amounts differ' END AS gap
+FROM act LEFT JOIN det USING (po_no)
+UNION
+SELECT det.po_no, NULL, det.detail, 'Detail, nothing posted'
+FROM det LEFT JOIN act USING (po_no) WHERE act.po_no IS NULL;</pre></details>
+  </section>
+</div>
+
+<script>
+// Example data. In the app these rows come from the queries shown under each view.
+const WBS = [
+  { id:'P-1000',       name:'Tower A',                 parent:null },
+  { id:'P-1000.01',    name:'Civil works',             parent:'P-1000' },
+  { id:'P-1000.01.01', name:'Foundations',             parent:'P-1000.01', budget:3800 },
+  { id:'P-1000.01.02', name:'Superstructure',          parent:'P-1000.01', budget:2000 },
+  { id:'P-1000.02',    name:'MEP',                     parent:'P-1000' },
+  { id:'P-1000.02.01', name:'Electrical',              parent:'P-1000.02', budget:2600 },
+  { id:'P-1000.02.02', name:'HVAC',                    parent:'P-1000.02', budget:1500 },
+  { id:'P-1000.03',    name:'Preliminaries',           parent:'P-1000' },
+  { id:'P-1000.03.01', name:'Temporary works',         parent:'P-1000.03', budget:1000 },
+  { id:'P-1000.03.02', name:'Scaffolding and access',  parent:'P-1000.03', budget:null },
+];
+const VENDORS = ['Al-Noor Contracting','Gulf Steel','Nile Electro','Delta Rentals','Orbit Scaffolding'];
+// PO → vendor detail (service lines) and PO → WBS actuals, thousands
+const POS = [
+  { po:'4500101', vendor:'Al-Noor Contracting', detail:2400, wbs:{ 'P-1000.01.01':1400, 'P-1000.01.02':1000 } },
+  { po:'4500102', vendor:'Al-Noor Contracting', detail:1800, wbs:{ 'P-1000.01.02':800,  'P-1000.02.01':1000 } },
+  { po:'4500110', vendor:'Gulf Steel',          detail:2600, wbs:{ 'P-1000.01.01':2600 } },
+  { po:'4500130', vendor:'Nile Electro',        detail:1900, wbs:{ 'P-1000.02.01':900,  'P-1000.02.02':1000 } },
+  { po:'4500160', vendor:'Nile Electro',        detail:300,  wbs:{} },                                   // detail, nothing posted
+  { po:'4500150', vendor:null,                  detail:0,    wbs:{ 'P-1000.02.01':500 } },               // posted, no detail
+  { po:'4500120', vendor:'Delta Rentals',       detail:700,  wbs:{ 'P-1000.03.01':700 } },
+  { po:'4500121', vendor:'Delta Rentals',       detail:400,  wbs:{ 'P-1000.03.01':200, 'P-1000.02.02':200 } },
+  { po:'4500140', vendor:'Orbit Scaffolding',   detail:600,  wbs:{ 'P-1000.03.02':600 } },
+];
+const fmt = n => n == null ? '–' : n.toLocaleString('en-US');
+const sum = o => Object.values(o).reduce((a,b)=>a+b,0);
+
+// actual per leaf WBS from PO postings
+const leafActual = {};
+POS.forEach(p => Object.entries(p.wbs).forEach(([w,a]) => leafActual[w] = (leafActual[w]||0) + a));
+
+/* ---------- Tab 1: WBS roll-up ---------- */
+const kids = id => WBS.filter(w => w.parent === id);
+function roll(id) {
+  const k = kids(id), w = WBS.find(x => x.id === id);
+  if (!k.length) return { budget: w.budget ?? null, actual: leafActual[id] || 0 };
+  const r = k.map(c => roll(c.id));
+  const bs = r.filter(x => x.budget != null);
+  return { budget: bs.length ? bs.reduce((a,x)=>a+x.budget,0) : null, actual: r.reduce((a,x)=>a+x.actual,0) };
+}
+const open = new Set(['P-1000','P-1000.01','P-1000.02','P-1000.03']);
+function renderWbs() {
+  const rows = [];
+  const maxVar = Math.max(...WBS.map(w => { const r = roll(w.id); return r.budget == null ? 0 : Math.abs(r.actual - r.budget); }), 1);
+  (function walk(id, depth) {
+    const w = WBS.find(x => x.id === id), k = kids(id), r = roll(id);
+    const v = r.budget == null ? null : r.actual - r.budget;
+    const tw = k.length ? `<button class="tw" data-id="${id}" aria-label="Toggle ${w.name}" aria-expanded="${open.has(id)}">${open.has(id) ? '▾' : '▸'}</button>` : '<span style="display:inline-block;width:20px"></span>';
+    const pct = v == null ? 0 : Math.min(50, Math.abs(v) / maxVar * 50);
+    const bar = v == null ? '<span class="nobud">No budget</span>'
+      : `<div class="vcell"><span class="n" style="min-width:56px;text-align:right;color:${v>0?'var(--text)':'var(--text-2)'}">${v>0?'+':''}${fmt(v)}</span><div class="vbar"><i class="${v>0?'over':'under'}" style="width:${pct}%"></i></div></div>`;
+    rows.push(`<tr class="${k.length?'parent':''}"><td style="padding-left:${10+depth*18}px">${tw}<span class="code">${id}</span> &nbsp;${w.name}</td><td class="n">${fmt(r.budget)}</td><td class="n">${fmt(r.actual)}</td><td class="n">${v==null?'–':(v>0?'+':'')+fmt(v)}</td><td>${v==null?bar:bar}</td></tr>`);
+    if (k.length && open.has(id)) k.forEach(c => walk(c.id, depth+1));
+  })('P-1000', 0);
+  document.getElementById('wbs-body').innerHTML = rows.join('');
+  const tot = roll('P-1000');
+  const noBud = WBS.filter(w => !kids(w.id).length && w.budget == null).length;
+  document.getElementById('wbs-kpis').innerHTML = `
+    <div class="kpi"><div class="l">Budget</div><div class="v">${fmt(tot.budget)}</div><div class="s">excludes ${noBud} element with no budget</div></div>
+    <div class="kpi"><div class="l">Actual cost</div><div class="v">${fmt(tot.actual)}</div><div class="s">cost only, income excluded</div></div>
+    <div class="kpi"><div class="l">Elements over budget</div><div class="v">${WBS.filter(w=>!kids(w.id).length).filter(w=>{const r=roll(w.id);return r.budget!=null&&r.actual>r.budget}).length}</div><div class="s">of ${WBS.filter(w=>!kids(w.id).length).length} leaf elements</div></div>`;
+}
+document.getElementById('wbs-body').addEventListener('click', e => {
+  const b = e.target.closest('.tw'); if (!b) return;
+  open.has(b.dataset.id) ? open.delete(b.dataset.id) : open.add(b.dataset.id);
+  renderWbs();
+});
+
+/* ---------- Tab 2: network ---------- */
+const NS = 'http://www.w3.org/2000/svg';
+const leaves = WBS.filter(w => !kids(w.id).length);
+const vendorTotal = v => POS.filter(p => p.vendor === v).reduce((a,p)=>a+p.detail,0);
+const poAmt = p => Math.max(p.detail, sum(p.wbs));
+const wbsAmt = id => leafActual[id] || 0;
+// column order chosen to keep crossings low
+const colV = [...VENDORS], colP = POS.map(p=>p.po), colW = leaves.map(w=>w.id);
+const X = { v:130, p:450, w:770 };
+const spread = (n, top=60, bot=510) => i => top + (n===1 ? (bot-top)/2 : i*(bot-top)/(n-1));
+const rad = a => 5 + Math.sqrt(a) * .26;
+const nodes = {};
+colV.forEach((v,i)=> nodes['v:'+v] = { kind:'v', id:v, x:X.v, y:spread(colV.length)(i), r:rad(vendorTotal(v)), label:v, amt:vendorTotal(v) });
+colP.forEach((po,i)=> { const p = POS.find(x=>x.po===po); nodes['p:'+po] = { kind:'p', id:po, x:X.p, y:spread(colP.length)(i), r:rad(poAmt(p)), label:po, amt:poAmt(p), gap: !p.vendor ? 'Posted to the WBS, no vendor detail' : !sum(p.wbs) ? 'Vendor detail, nothing posted to the WBS' : null }; });
+colW.forEach((w,i)=> nodes['w:'+w] = { kind:'w', id:w, x:X.w, y:spread(colW.length)(i), r:rad(wbsAmt(w)), label:WBS.find(x=>x.id===w).name, amt:wbsAmt(w) });
+const edges = [];
+POS.forEach(p => {
+  if (p.vendor) edges.push({ a:'v:'+p.vendor, b:'p:'+p.po, w:p.detail });
+  Object.entries(p.wbs).forEach(([w,a]) => edges.push({ a:'p:'+p.po, b:'w:'+w, w:a }));
+});
+const colorOf = k => k==='v' ? 'var(--series-1)' : k==='p' ? 'var(--series-2)' : 'var(--series-3)';
+function mk(tag, attrs, parent) { const el = document.createElementNS(NS, tag); Object.entries(attrs).forEach(([k,v])=>el.setAttribute(k,v)); parent && parent.appendChild(el); return el; }
+const svg = document.getElementById('net');
+[['Vendor',X.v],['Purchase order',X.p],['WBS element',X.w]].forEach(([t,x]) => { const el = mk('text',{x,y:22,'text-anchor':'middle',class:'col'},svg); el.textContent = t; });
+const edgeEls = edges.map(e => {
+  const A = nodes[e.a], B = nodes[e.b], mx = (A.x + B.x)/2;
+  const el = mk('path',{ d:`M${A.x},${A.y} C${mx},${A.y} ${mx},${B.y} ${B.x},${B.y}`, class:'edge', stroke:colorOf(A.kind), 'stroke-opacity':.5, 'stroke-width':Math.max(1.2, e.w/450) }, svg);
+  return { ...e, el };
+});
+const nodeEls = {};
+Object.entries(nodes).forEach(([key,n]) => {
+  const g = mk('g',{ class:'node', tabindex:0, role:'button', 'aria-label':`${n.label}, ${fmt(n.amt)}` }, svg);
+  mk('circle',{ cx:n.x, cy:n.y, r:n.r, fill:colorOf(n.kind), stroke:'var(--plane)', 'stroke-width':2 }, g);
+  if (n.gap) mk('circle',{ cx:n.x, cy:n.y, r:n.r+5, fill:'none', stroke:'var(--warning)', 'stroke-width':2, 'stroke-dasharray':'3 3' }, g);
+  const left = n.kind === 'v', right = n.kind === 'w';
+  const t = mk('text',{ x: left ? n.x - n.r - 8 : right ? n.x + n.r + 8 : n.x, y: n.kind==='p' ? n.y - n.r - 8 : n.y + 4, 'text-anchor': left ? 'end' : right ? 'start' : 'middle' }, g);
+  t.textContent = n.label;
+  g.addEventListener('click', () => select(key));
+  g.addEventListener('keydown', e => { if (e.key==='Enter'||e.key===' ') { e.preventDefault(); select(key); } });
+  nodeEls[key] = g;
+});
+function select(key) {
+  const touch = new Set([key]);
+  const direct = edgeEls.filter(e => e.a===key || e.b===key);
+  direct.forEach(e => { touch.add(e.a); touch.add(e.b); });
+  // a vendor or WBS element also reaches the far side of each PO it touches
+  const poKeys = [...touch].filter(k => nodes[k].kind==='p');
+  if (nodes[key].kind !== 'p') edgeEls.forEach(e => { if (poKeys.includes(e.a) || poKeys.includes(e.b)) { touch.add(e.a); touch.add(e.b); } });
+  const on = e => nodes[key].kind==='p' ? (e.a===key||e.b===key) : (poKeys.includes(e.a)||poKeys.includes(e.b));
+  edgeEls.forEach(e => e.el.classList.toggle('dim', !on(e)));
+  Object.entries(nodeEls).forEach(([k,g]) => g.classList.toggle('dim', !touch.has(k)));
+  const n = nodes[key], rel = edgeEls.filter(e => e.a===key || e.b===key);
+  const kindName = { v:'Vendor', p:'Purchase order', w:'WBS element' }[n.kind];
+  const lines = rel.map(e => { const o = nodes[e.a===key ? e.b : e.a]; return `<dt>${o.label}</dt><dd>${fmt(e.w)}</dd>`; }).join('');
+  let extra = '';
+  if (n.kind==='p') { const p = POS.find(x=>x.po===n.id); extra = `<dl><dt>Vendor detail</dt><dd>${fmt(p.detail)}</dd><dt>Posted to WBS</dt><dd>${fmt(sum(p.wbs))}</dd></dl>`; }
+  if (n.kind==='w') { const w = WBS.find(x=>x.id===n.id), r = roll(n.id); extra = `<dl><dt>Budget</dt><dd>${fmt(r.budget)}</dd><dt>Actual</dt><dd>${fmt(r.actual)}</dd></dl>`; }
+  if (n.kind==='v') { extra = `<dl><dt>Purchase orders</dt><dd>${new Set(rel.map(e=>e.b)).size}</dd><dt>Detail total</dt><dd>${fmt(n.amt)}</dd></dl>`; }
+  document.getElementById('net-detail').innerHTML = `<div class="l note" style="text-transform:uppercase;letter-spacing:.06em">${kindName}</div><b style="font-size:15px">${n.label}</b>${n.gap ? `<span class="pill warn">⚠ ${n.gap}</span>` : ''}${extra}<div class="note">Linked to</div><dl>${lines || '<dt>Nothing</dt><dd></dd>'}</dl><button class="tab" id="clr" style="border:1px solid var(--border);border-radius:6px;padding:4px 10px">Clear selection</button>`;
+  document.getElementById('clr').onclick = clear;
+}
+function clear() {
+  edgeEls.forEach(e => e.el.classList.remove('dim')); Object.values(nodeEls).forEach(g => g.classList.remove('dim'));
+  document.getElementById('net-detail').innerHTML = `<b>Select a node</b><p class="note">Pick a vendor, a purchase order or a WBS element to see what it connects to and how much money runs along each link.</p><p class="note">Dashed amber rings mark a purchase order whose link is missing on one side.</p>`;
+}
+document.getElementById('net-kpis').innerHTML = `
+  <div class="kpi"><div class="l">Vendors</div><div class="v">${VENDORS.length}</div><div class="s">${POS.length} purchase orders</div></div>
+  <div class="kpi"><div class="l">Linked end to end</div><div class="v">${POS.filter(p=>p.vendor&&sum(p.wbs)).length} of ${POS.length}</div><div class="s">vendor → PO → WBS</div></div>
+  <div class="kpi"><div class="l">Spread across WBS</div><div class="v">${Math.max(...POS.map(p=>Object.keys(p.wbs).length))}</div><div class="s">most elements one PO feeds</div></div>`;
+clear();
+
+/* ---------- Tab 3: missing links ---------- */
+const posted = POS.filter(p => !p.vendor), orphan = POS.filter(p => p.vendor && !sum(p.wbs));
+const diff = POS.filter(p => p.vendor && sum(p.wbs) && Math.abs(sum(p.wbs) - p.detail) > 1);
+const card = (p, cls, tag, text, amt) => `<div class="xc"><div class="t"><span class="pill ${cls}">${tag}</span><span class="amt">${fmt(amt)}</span></div><div><span class="code">PO ${p.po}</span> ${p.vendor ? '· ' + p.vendor : ''}</div><div class="note">${text}</div></div>`;
+document.getElementById('exc-cards').innerHTML =
+  posted.map(p => card(p,'crit','Posted, no detail','Money is in actuals but no vendor report explains it. Load the matching detail report or check the PO number.', sum(p.wbs))).join('') +
+  orphan.map(p => card(p,'warn','Detail, nothing posted','The vendor report lists this PO but no cost has reached the WBS. It may be uncommitted or in an unposted batch.', p.detail)).join('') +
+  (diff.length ? diff.map(p => card(p,'warn','Amounts differ','', p.detail)).join('') : `<div class="xc"><div class="t"><span class="pill ok">✓ Reconciled</span><span class="amt">${POS.length - posted.length - orphan.length}</span></div><div>Other purchase orders</div><div class="note">Detail and posted amounts agree, so nothing is added twice.</div></div>`);
+const total = VENDORS.map(v => ({ v, amt: vendorTotal(v), wbs: new Set(POS.filter(p=>p.vendor===v).flatMap(p=>Object.keys(p.wbs))).size }));
+const all = total.reduce((a,x)=>a+x.amt,0);
+document.getElementById('conc').innerHTML = total.sort((a,b)=>b.amt-a.amt).map(x => `<div style="display:grid;grid-template-columns:minmax(120px,170px) minmax(0,1fr) 150px;gap:12px;align-items:center"><span>${x.v}</span><div class="bar"><i style="width:${x.amt/all*100}%"></i></div><span class="note" style="text-align:right;font-variant-numeric:tabular-nums">${fmt(x.amt)} · ${Math.round(x.amt/all*100)}% · ${x.wbs} WBS</span></div>`).join('');
+
+/* ---------- tabs ---------- */
+document.querySelectorAll('.tab[role=tab]').forEach(t => t.addEventListener('click', () => {
+  document.querySelectorAll('.tab[role=tab]').forEach(o => { o.setAttribute('aria-selected', o === t); document.getElementById(o.getAttribute('aria-controls')).hidden = o !== t; });
+}));
+renderWbs();
+</script>
